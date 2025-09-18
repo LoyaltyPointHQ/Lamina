@@ -2,6 +2,8 @@ using System.Text;
 using S3Test.Models;
 using S3Test.Services;
 using System.Xml.Serialization;
+using S3Test.Tests.Helpers;
+using System.IO.Pipelines;
 
 namespace S3Test.Tests.Services;
 
@@ -55,7 +57,7 @@ public class MultipartUploadServiceTests
         var partData = Encoding.UTF8.GetBytes("Part 1 content");
 
         var result = await _multipartUploadService.UploadPartAsync(
-            "part-bucket", "multipart.bin", initResult.UploadId, 1, partData);
+            "part-bucket", "multipart.bin", initResult.UploadId, 1, PipeHelpers.CreatePipeReader(partData));
 
         Assert.NotNull(result);
         Assert.NotEmpty(result.ETag);
@@ -69,7 +71,7 @@ public class MultipartUploadServiceTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => _multipartUploadService.UploadPartAsync(
-                "invalid-bucket", "file.bin", "invalid-upload-id", 1, new byte[100]));
+                "invalid-bucket", "file.bin", "invalid-upload-id", 1, PipeHelpers.CreatePipeReader(new byte[100])));
     }
 
     [Fact]
@@ -82,9 +84,9 @@ public class MultipartUploadServiceTests
         var part1Data = Encoding.UTF8.GetBytes("Part 1 ");
         var part2Data = Encoding.UTF8.GetBytes("Part 2");
         var part1 = await _multipartUploadService.UploadPartAsync(
-            "complete-bucket", "complete-file.bin", initResult.UploadId, 1, part1Data);
+            "complete-bucket", "complete-file.bin", initResult.UploadId, 1, PipeHelpers.CreatePipeReader(part1Data));
         var part2 = await _multipartUploadService.UploadPartAsync(
-            "complete-bucket", "complete-file.bin", initResult.UploadId, 2, part2Data);
+            "complete-bucket", "complete-file.bin", initResult.UploadId, 2, PipeHelpers.CreatePipeReader(part2Data));
 
         var completeRequest = new CompleteMultipartUploadRequest
         {
@@ -118,7 +120,7 @@ public class MultipartUploadServiceTests
         var initResult = await _multipartUploadService.InitiateMultipartUploadAsync("missing-bucket", initRequest);
 
         var part1 = await _multipartUploadService.UploadPartAsync(
-            "missing-bucket", "missing.bin", initResult.UploadId, 1, new byte[100]);
+            "missing-bucket", "missing.bin", initResult.UploadId, 1, PipeHelpers.CreatePipeReader(new byte[100]));
 
         var completeRequest = new CompleteMultipartUploadRequest
         {
@@ -169,9 +171,9 @@ public class MultipartUploadServiceTests
         var initResult = await _multipartUploadService.InitiateMultipartUploadAsync("list-parts-bucket", initRequest);
 
         await _multipartUploadService.UploadPartAsync(
-            "list-parts-bucket", "list-parts.bin", initResult.UploadId, 1, new byte[100]);
+            "list-parts-bucket", "list-parts.bin", initResult.UploadId, 1, PipeHelpers.CreatePipeReader(new byte[100]));
         await _multipartUploadService.UploadPartAsync(
-            "list-parts-bucket", "list-parts.bin", initResult.UploadId, 2, new byte[200]);
+            "list-parts-bucket", "list-parts.bin", initResult.UploadId, 2, PipeHelpers.CreatePipeReader(new byte[200]));
 
         var parts = await _multipartUploadService.ListPartsAsync(
             "list-parts-bucket", "list-parts.bin", initResult.UploadId);
@@ -224,9 +226,9 @@ public class MultipartUploadServiceTests
         var updatedData = Encoding.UTF8.GetBytes("Updated");
 
         await _multipartUploadService.UploadPartAsync(
-            "overwrite-bucket", "overwrite.bin", initResult.UploadId, 1, originalData);
+            "overwrite-bucket", "overwrite.bin", initResult.UploadId, 1, PipeHelpers.CreatePipeReader(originalData));
         var updatedPart = await _multipartUploadService.UploadPartAsync(
-            "overwrite-bucket", "overwrite.bin", initResult.UploadId, 1, updatedData);
+            "overwrite-bucket", "overwrite.bin", initResult.UploadId, 1, PipeHelpers.CreatePipeReader(updatedData));
 
         var parts = await _multipartUploadService.ListPartsAsync(
             "overwrite-bucket", "overwrite.bin", initResult.UploadId);

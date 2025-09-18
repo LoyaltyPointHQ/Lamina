@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Collections.Concurrent;
+using System.IO.Pipelines;
 using System.Security.Cryptography;
 using S3Test.Models;
 
@@ -14,7 +16,7 @@ public class InMemoryObjectService : IObjectService
         _bucketService = bucketService;
     }
 
-    public async Task<S3Object?> PutObjectAsync(string bucketName, string key, byte[] data, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
+    public async Task<S3Object?> PutObjectAsync(string bucketName, string key, PipeReader dataReader, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
     {
         if (!await _bucketService.BucketExistsAsync(bucketName, cancellationToken))
         {
@@ -23,20 +25,61 @@ public class InMemoryObjectService : IObjectService
 
         var bucketObjects = _objects.GetOrAdd(bucketName, _ => new ConcurrentDictionary<string, S3Object>());
 
-        var s3Object = new S3Object
-        {
-            Key = key,
-            BucketName = bucketName,
-            Size = data.Length,
-            LastModified = DateTime.UtcNow,
-            ETag = ComputeETag(data),
-            ContentType = request?.ContentType ?? "application/octet-stream",
-            Metadata = request?.Metadata ?? new Dictionary<string, string>(),
-            Data = data
-        };
+        // Read data from PipeReader
+        var dataSegments = new List<byte[]>();
+        long totalSize = 0;
 
-        bucketObjects[key] = s3Object;
-        return s3Object;
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var result = await dataReader.ReadAsync(cancellationToken);
+                var buffer = result.Buffer;
+
+                if (buffer.Length > 0)
+                {
+                    // Copy data from buffer
+                    var data = buffer.ToArray();
+                    dataSegments.Add(data);
+                    totalSize += data.Length;
+                }
+
+                dataReader.AdvanceTo(buffer.End);
+
+                if (result.IsCompleted)
+                {
+                    break;
+                }
+            }
+
+            // Combine all segments
+            var combinedData = new byte[totalSize];
+            int offset = 0;
+            foreach (var segment in dataSegments)
+            {
+                Buffer.BlockCopy(segment, 0, combinedData, offset, segment.Length);
+                offset += segment.Length;
+            }
+
+            var s3Object = new S3Object
+            {
+                Key = key,
+                BucketName = bucketName,
+                Size = combinedData.Length,
+                LastModified = DateTime.UtcNow,
+                ETag = ComputeETag(combinedData),
+                ContentType = request?.ContentType ?? "application/octet-stream",
+                Metadata = request?.Metadata ?? new Dictionary<string, string>(),
+                Data = combinedData
+            };
+
+            bucketObjects[key] = s3Object;
+            return s3Object;
+        }
+        finally
+        {
+            await dataReader.CompleteAsync();
+        }
     }
 
     public async Task<GetObjectResponse?> GetObjectAsync(string bucketName, string key, CancellationToken cancellationToken = default)
@@ -61,6 +104,47 @@ public class InMemoryObjectService : IObjectService
         }
 
         return null;
+    }
+
+    public async Task<bool> WriteObjectToPipeAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default)
+    {
+        if (!await _bucketService.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return false;
+        }
+
+        if (_objects.TryGetValue(bucketName, out var bucketObjects) &&
+            bucketObjects.TryGetValue(key, out var s3Object))
+        {
+            // Write data to PipeWriter in chunks
+            const int chunkSize = 4096;
+            var data = s3Object.Data;
+            int offset = 0;
+
+            while (offset < data.Length && !cancellationToken.IsCancellationRequested)
+            {
+                var remaining = data.Length - offset;
+                var bytesToWrite = Math.Min(chunkSize, remaining);
+
+                var memory = writer.GetMemory(bytesToWrite);
+                data.AsMemory(offset, bytesToWrite).CopyTo(memory);
+                writer.Advance(bytesToWrite);
+
+                offset += bytesToWrite;
+
+                // Flush periodically
+                var flushResult = await writer.FlushAsync(cancellationToken);
+                if (flushResult.IsCanceled || flushResult.IsCompleted)
+                {
+                    break;
+                }
+            }
+
+            await writer.CompleteAsync();
+            return true;
+        }
+
+        return false;
     }
 
     public async Task<bool> DeleteObjectAsync(string bucketName, string key, CancellationToken cancellationToken = default)

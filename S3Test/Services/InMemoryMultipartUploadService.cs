@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Collections.Concurrent;
+using System.IO.Pipelines;
 using System.Security.Cryptography;
 using S3Test.Models;
 
@@ -53,7 +55,7 @@ public class InMemoryMultipartUploadService : IMultipartUploadService
         string key,
         string uploadId,
         int partNumber,
-        byte[] data,
+        PipeReader dataReader,
         CancellationToken cancellationToken = default)
     {
         if (!await _bucketService.BucketExistsAsync(bucketName, cancellationToken))
@@ -71,28 +73,69 @@ public class InMemoryMultipartUploadService : IMultipartUploadService
             throw new InvalidOperationException("Upload ID does not match bucket and key");
         }
 
-        var etag = ComputeETag(data);
-        var part = new UploadPart
-        {
-            PartNumber = partNumber,
-            ETag = etag,
-            Size = data.Length,
-            LastModified = DateTime.UtcNow,
-            Data = data
-        };
+        // Read data from PipeReader
+        var dataSegments = new List<byte[]>();
+        long totalSize = 0;
 
-        lock (upload.Parts)
+        try
         {
-            upload.Parts.RemoveAll(p => p.PartNumber == partNumber);
-            upload.Parts.Add(part);
-            upload.Parts.Sort((a, b) => a.PartNumber.CompareTo(b.PartNumber));
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var result = await dataReader.ReadAsync(cancellationToken);
+                var buffer = result.Buffer;
+
+                if (buffer.Length > 0)
+                {
+                    // Copy data from buffer
+                    var data = buffer.ToArray();
+                    dataSegments.Add(data);
+                    totalSize += data.Length;
+                }
+
+                dataReader.AdvanceTo(buffer.End);
+
+                if (result.IsCompleted)
+                {
+                    break;
+                }
+            }
+
+            // Combine all segments
+            var partData = new byte[totalSize];
+            int offset = 0;
+            foreach (var segment in dataSegments)
+            {
+                Buffer.BlockCopy(segment, 0, partData, offset, segment.Length);
+                offset += segment.Length;
+            }
+
+            var etag = ComputeETag(partData);
+            var part = new UploadPart
+            {
+                PartNumber = partNumber,
+                ETag = etag,
+                Size = partData.Length,
+                LastModified = DateTime.UtcNow,
+                Data = partData
+            };
+
+            lock (upload.Parts)
+            {
+                upload.Parts.RemoveAll(p => p.PartNumber == partNumber);
+                upload.Parts.Add(part);
+                upload.Parts.Sort((a, b) => a.PartNumber.CompareTo(b.PartNumber));
+            }
+
+            return new UploadPartResponse
+            {
+                ETag = etag,
+                PartNumber = partNumber
+            };
         }
-
-        return new UploadPartResponse
+        finally
         {
-            ETag = etag,
-            PartNumber = partNumber
-        };
+            await dataReader.CompleteAsync();
+        }
     }
 
     public async Task<CompleteMultipartUploadResponse?> CompleteMultipartUploadAsync(
@@ -146,6 +189,31 @@ public class InMemoryMultipartUploadService : IMultipartUploadService
             }
         }
 
+        // Create a pipe to transfer combined data
+        var pipe = new Pipe();
+        var writer = pipe.Writer;
+        var reader = pipe.Reader;
+
+        // Start writing combined data in background
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                foreach (var part in uploadedParts)
+                {
+                    var memory = writer.GetMemory(part.Data.Length);
+                    part.Data.CopyTo(memory);
+                    writer.Advance(part.Data.Length);
+                    await writer.FlushAsync();
+                }
+            }
+            finally
+            {
+                await writer.CompleteAsync();
+            }
+        });
+
+        // Compute final ETag from combined data (we still need this for the response)
         var combinedData = uploadedParts.SelectMany(p => p.Data).ToArray();
         var finalETag = ComputeETag(combinedData);
 
@@ -156,7 +224,7 @@ public class InMemoryMultipartUploadService : IMultipartUploadService
             Metadata = upload.Metadata
         };
 
-        await _objectService.PutObjectAsync(bucketName, key, combinedData, putRequest, cancellationToken);
+        await _objectService.PutObjectAsync(bucketName, key, reader, putRequest, cancellationToken);
 
         _uploads.TryRemove(request.UploadId, out _);
 

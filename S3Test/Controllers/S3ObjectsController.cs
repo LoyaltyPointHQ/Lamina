@@ -3,6 +3,7 @@ using S3Test.Models;
 using S3Test.Services;
 using System.Xml.Serialization;
 using System.IO;
+using System.IO.Pipelines;
 
 namespace S3Test.Controllers;
 
@@ -57,9 +58,6 @@ public class S3ObjectsController : ControllerBase
             return new ObjectResult(error);
         }
 
-        using var memoryStream = new MemoryStream();
-        await Request.Body.CopyToAsync(memoryStream, cancellationToken);
-        var data = memoryStream.ToArray();
         var contentType = Request.ContentType ?? "application/octet-stream";
 
         var putRequest = new PutObjectRequest
@@ -71,15 +69,18 @@ public class S3ObjectsController : ControllerBase
                 .ToDictionary(h => h.Key.Substring(11), h => h.Value.ToString())
         };
 
-        _logger.LogInformation("Putting object {Key} in bucket {BucketName}, size: {Size} bytes", key, bucketName, data.Length);
-        var s3Object = await _objectService.PutObjectAsync(bucketName, key, data, putRequest, cancellationToken);
+        // Use PipeReader from the request body
+        var reader = Request.BodyReader;
+
+        _logger.LogInformation("Putting object {Key} in bucket {BucketName}", key, bucketName);
+        var s3Object = await _objectService.PutObjectAsync(bucketName, key, reader, putRequest, cancellationToken);
         if (s3Object == null)
         {
             _logger.LogError("Failed to put object {Key} in bucket {BucketName}", key, bucketName);
             return StatusCode(500);
         }
 
-        _logger.LogInformation("Object {Key} stored successfully in bucket {BucketName}, ETag: {ETag}", key, bucketName, s3Object.ETag);
+        _logger.LogInformation("Object {Key} stored successfully in bucket {BucketName}, ETag: {ETag}, Size: {Size}", key, bucketName, s3Object.ETag, s3Object.Size);
         Response.Headers.Append("ETag", $"\"{s3Object.ETag}\"");
         Response.Headers.Append("x-amz-version-id", "null");
         return Ok();
@@ -124,7 +125,24 @@ public class S3ObjectsController : ControllerBase
             Response.Headers.Append($"x-amz-meta-{metadata.Key}", metadata.Value);
         }
 
-        return File(response.Data, response.ContentType);
+        // Create a pipe to stream data back
+        var pipe = new Pipe();
+        var writer = pipe.Writer;
+
+        // Start writing to pipe in background
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _objectService.WriteObjectToPipeAsync(bucketName, key, writer, cancellationToken);
+            }
+            catch
+            {
+                await writer.CompleteAsync();
+            }
+        });
+
+        return new FileStreamResult(pipe.Reader.AsStream(), response.ContentType);
     }
 
     [HttpDelete("{*key}")]
@@ -240,13 +258,11 @@ public class S3ObjectsController : ControllerBase
         string uploadId,
         CancellationToken cancellationToken)
     {
-        using var memoryStream = new MemoryStream();
-        await Request.Body.CopyToAsync(memoryStream, cancellationToken);
-        var data = memoryStream.ToArray();
-
         try
         {
-            var response = await _multipartUploadService.UploadPartAsync(bucketName, key, uploadId, partNumber, data, cancellationToken);
+            // Use PipeReader from the request body
+            var reader = Request.BodyReader;
+            var response = await _multipartUploadService.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, cancellationToken);
             Response.Headers.Append("ETag", $"\"{response.ETag}\"");
             return Ok();
         }

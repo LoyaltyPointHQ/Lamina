@@ -2,6 +2,8 @@ using System.Text;
 using S3Test.Models;
 using S3Test.Services;
 using System.Xml.Serialization;
+using S3Test.Tests.Helpers;
+using System.IO.Pipelines;
 
 namespace S3Test.Tests.Services;
 
@@ -30,7 +32,8 @@ public class ObjectServiceTests
             Metadata = new Dictionary<string, string> { { "Author", "Test" } }
         };
 
-        var result = await _objectService.PutObjectAsync("test-bucket", "test-object.txt", data, request);
+        var reader = PipeHelpers.CreatePipeReader(data);
+        var result = await _objectService.PutObjectAsync("test-bucket", "test-object.txt", reader, request);
 
         Assert.NotNull(result);
         Assert.Equal("test-object.txt", result.Key);
@@ -46,7 +49,8 @@ public class ObjectServiceTests
     {
         var data = Encoding.UTF8.GetBytes("Test content");
 
-        var result = await _objectService.PutObjectAsync("non-existing-bucket", "object.txt", data);
+        var reader = PipeHelpers.CreatePipeReader(data);
+        var result = await _objectService.PutObjectAsync("non-existing-bucket", "object.txt", reader);
 
         Assert.Null(result);
     }
@@ -56,7 +60,8 @@ public class ObjectServiceTests
     {
         await _bucketService.CreateBucketAsync("get-bucket");
         var data = Encoding.UTF8.GetBytes("Get test content");
-        await _objectService.PutObjectAsync("get-bucket", "get-object.txt", data);
+        var reader = PipeHelpers.CreatePipeReader(data);
+        await _objectService.PutObjectAsync("get-bucket", "get-object.txt", reader);
 
         var result = await _objectService.GetObjectAsync("get-bucket", "get-object.txt");
 
@@ -81,7 +86,8 @@ public class ObjectServiceTests
     {
         await _bucketService.CreateBucketAsync("delete-bucket");
         var data = Encoding.UTF8.GetBytes("Delete test");
-        await _objectService.PutObjectAsync("delete-bucket", "delete-object.txt", data);
+        var reader = PipeHelpers.CreatePipeReader(data);
+        await _objectService.PutObjectAsync("delete-bucket", "delete-object.txt", reader);
 
         var deleteResult = await _objectService.DeleteObjectAsync("delete-bucket", "delete-object.txt");
         var getResult = await _objectService.GetObjectAsync("delete-bucket", "delete-object.txt");
@@ -104,9 +110,9 @@ public class ObjectServiceTests
     public async Task ListObjectsAsync_ReturnsObjects()
     {
         await _bucketService.CreateBucketAsync("list-bucket");
-        await _objectService.PutObjectAsync("list-bucket", "file1.txt", Encoding.UTF8.GetBytes("Content 1"));
-        await _objectService.PutObjectAsync("list-bucket", "file2.txt", Encoding.UTF8.GetBytes("Content 2"));
-        await _objectService.PutObjectAsync("list-bucket", "folder/file3.txt", Encoding.UTF8.GetBytes("Content 3"));
+        await _objectService.PutObjectAsync("list-bucket", "file1.txt", PipeHelpers.CreatePipeReader(Encoding.UTF8.GetBytes("Content 1")));
+        await _objectService.PutObjectAsync("list-bucket", "file2.txt", PipeHelpers.CreatePipeReader(Encoding.UTF8.GetBytes("Content 2")));
+        await _objectService.PutObjectAsync("list-bucket", "folder/file3.txt", PipeHelpers.CreatePipeReader(Encoding.UTF8.GetBytes("Content 3")));
 
         var result = await _objectService.ListObjectsAsync("list-bucket");
 
@@ -128,9 +134,9 @@ public class ObjectServiceTests
     public async Task ListObjectsAsync_WithPrefix_FiltersObjects()
     {
         await _bucketService.CreateBucketAsync("prefix-bucket");
-        await _objectService.PutObjectAsync("prefix-bucket", "doc1.txt", Encoding.UTF8.GetBytes("Doc 1"));
-        await _objectService.PutObjectAsync("prefix-bucket", "doc2.txt", Encoding.UTF8.GetBytes("Doc 2"));
-        await _objectService.PutObjectAsync("prefix-bucket", "image.png", Encoding.UTF8.GetBytes("Image"));
+        await _objectService.PutObjectAsync("prefix-bucket", "doc1.txt", PipeHelpers.CreatePipeReader(Encoding.UTF8.GetBytes("Doc 1")));
+        await _objectService.PutObjectAsync("prefix-bucket", "doc2.txt", PipeHelpers.CreatePipeReader(Encoding.UTF8.GetBytes("Doc 2")));
+        await _objectService.PutObjectAsync("prefix-bucket", "image.png", PipeHelpers.CreatePipeReader(Encoding.UTF8.GetBytes("Image")));
 
         var request = new ListObjectsRequest { Prefix = "doc" };
         var result = await _objectService.ListObjectsAsync("prefix-bucket", request);
@@ -148,7 +154,7 @@ public class ObjectServiceTests
         await _bucketService.CreateBucketAsync("max-keys-bucket");
         for (int i = 1; i <= 5; i++)
         {
-            await _objectService.PutObjectAsync("max-keys-bucket", $"file{i}.txt", Encoding.UTF8.GetBytes($"Content {i}"));
+            await _objectService.PutObjectAsync("max-keys-bucket", $"file{i}.txt", PipeHelpers.CreatePipeReader(Encoding.UTF8.GetBytes($"Content {i}")));
         }
 
         var request = new ListObjectsRequest { MaxKeys = 2 };
@@ -164,7 +170,7 @@ public class ObjectServiceTests
     public async Task ObjectExistsAsync_ExistingObject_ReturnsTrue()
     {
         await _bucketService.CreateBucketAsync("exists-bucket");
-        await _objectService.PutObjectAsync("exists-bucket", "exists.txt", Encoding.UTF8.GetBytes("Exists"));
+        await _objectService.PutObjectAsync("exists-bucket", "exists.txt", PipeHelpers.CreatePipeReader(Encoding.UTF8.GetBytes("Exists")));
 
         var result = await _objectService.ObjectExistsAsync("exists-bucket", "exists.txt");
 
@@ -186,7 +192,8 @@ public class ObjectServiceTests
     {
         await _bucketService.CreateBucketAsync("info-bucket");
         var data = Encoding.UTF8.GetBytes("Info content");
-        await _objectService.PutObjectAsync("info-bucket", "info.txt", data);
+        var reader = PipeHelpers.CreatePipeReader(data);
+        await _objectService.PutObjectAsync("info-bucket", "info.txt", reader);
 
         var result = await _objectService.GetObjectInfoAsync("info-bucket", "info.txt");
 
@@ -214,7 +221,7 @@ public class ObjectServiceTests
 
         // Add a regular object
         await _objectService.PutObjectAsync("multipart-list-bucket", "regular.txt",
-            Encoding.UTF8.GetBytes("Regular upload"));
+            PipeHelpers.CreatePipeReader(Encoding.UTF8.GetBytes("Regular upload")));
 
         // Add a multipart uploaded object
         var initRequest = new InitiateMultipartUploadRequest { Key = "multipart.bin" };
@@ -224,9 +231,9 @@ public class ObjectServiceTests
         var part2Data = Encoding.UTF8.GetBytes("Part 2 data");
 
         var part1 = await _multipartUploadService.UploadPartAsync(
-            "multipart-list-bucket", "multipart.bin", initResult.UploadId, 1, part1Data);
+            "multipart-list-bucket", "multipart.bin", initResult.UploadId, 1, PipeHelpers.CreatePipeReader(part1Data));
         var part2 = await _multipartUploadService.UploadPartAsync(
-            "multipart-list-bucket", "multipart.bin", initResult.UploadId, 2, part2Data);
+            "multipart-list-bucket", "multipart.bin", initResult.UploadId, 2, PipeHelpers.CreatePipeReader(part2Data));
 
         var completeRequest = new CompleteMultipartUploadRequest
         {
@@ -273,9 +280,9 @@ public class ObjectServiceTests
 
         // Add regular objects
         await _objectService.PutObjectAsync("prefix-multipart-bucket", "docs/regular.txt",
-            Encoding.UTF8.GetBytes("Regular"));
+            PipeHelpers.CreatePipeReader(Encoding.UTF8.GetBytes("Regular")));
         await _objectService.PutObjectAsync("prefix-multipart-bucket", "images/photo.jpg",
-            Encoding.UTF8.GetBytes("Photo"));
+            PipeHelpers.CreatePipeReader(Encoding.UTF8.GetBytes("Photo")));
 
         // Add multipart uploaded object with prefix
         var initRequest = new InitiateMultipartUploadRequest { Key = "docs/multipart.bin" };
@@ -283,7 +290,7 @@ public class ObjectServiceTests
 
         var partData = Encoding.UTF8.GetBytes("Multipart data");
         var part = await _multipartUploadService.UploadPartAsync(
-            "prefix-multipart-bucket", "docs/multipart.bin", initResult.UploadId, 1, partData);
+            "prefix-multipart-bucket", "docs/multipart.bin", initResult.UploadId, 1, PipeHelpers.CreatePipeReader(partData));
 
         var completeRequest = new CompleteMultipartUploadRequest
         {

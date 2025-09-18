@@ -1,3 +1,4 @@
+using System.IO.Pipelines;
 using S3Test.Models;
 
 namespace S3Test.Services;
@@ -14,7 +15,7 @@ public interface IMultipartUploadService
         string key,
         string uploadId,
         int partNumber,
-        byte[] data,
+        PipeReader dataReader,
         CancellationToken cancellationToken = default);
 
     Task<CompleteMultipartUploadResponse?> CompleteMultipartUploadAsync(
