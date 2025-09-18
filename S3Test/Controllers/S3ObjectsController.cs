@@ -180,7 +180,14 @@ public class S3ObjectsController : ControllerBase
 
         Response.Headers.Append("ETag", $"\"{objectInfo.ETag}\"");
         Response.Headers.Append("Content-Length", objectInfo.Size.ToString());
+        Response.Headers.Append("Content-Type", objectInfo.ContentType);
         Response.Headers.Append("Last-Modified", objectInfo.LastModified.ToString("R"));
+
+        // Add custom metadata headers with x-amz-meta- prefix
+        foreach (var metadata in objectInfo.Metadata)
+        {
+            Response.Headers.Append($"x-amz-meta-{metadata.Key}", metadata.Value);
+        }
 
         return Ok();
     }

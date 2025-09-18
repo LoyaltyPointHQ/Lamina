@@ -291,7 +291,9 @@ public class FilesystemObjectService : IObjectService
             Key = metadata.Key,
             Size = fileInfo.Exists ? fileInfo.Length : 0,
             LastModified = metadata.LastModified,
-            ETag = metadata.ETag
+            ETag = metadata.ETag,
+            ContentType = metadata.ContentType,
+            Metadata = metadata.UserMetadata ?? new Dictionary<string, string>()
         };
     }
 

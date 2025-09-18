@@ -206,7 +206,9 @@ public class InMemoryObjectService : IObjectService
                 Key = o.Key,
                 Size = o.Size,
                 LastModified = o.LastModified,
-                ETag = o.ETag
+                ETag = o.ETag,
+                ContentType = o.ContentType,
+                Metadata = o.Metadata
             }).ToList();
 
             if (startIndex + objectsToReturn.Count < orderedObjects.Count)
@@ -245,7 +247,9 @@ public class InMemoryObjectService : IObjectService
                 Key = s3Object.Key,
                 Size = s3Object.Size,
                 LastModified = s3Object.LastModified,
-                ETag = s3Object.ETag
+                ETag = s3Object.ETag,
+                ContentType = s3Object.ContentType,
+                Metadata = s3Object.Metadata
             };
         }
 
