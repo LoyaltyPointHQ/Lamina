@@ -197,7 +197,7 @@ namespace S3Test.Services
             return string.Join("&", parameters.Select(p => $"{p.Key}={p.Value}"));
         }
 
-        private Task<string> CalculateSignatureV4(SignatureV4Request request, string secretAccessKey)
+        public Task<string> CalculateSignatureV4(SignatureV4Request request, string secretAccessKey)
         {
             var dateStamp = request.RequestDateTime.ToUniversalTime().ToString("yyyyMMdd");
             var amzDate = request.RequestDateTime.ToUniversalTime().ToString("yyyyMMdd'T'HHmmss'Z'");
@@ -210,7 +210,10 @@ namespace S3Test.Services
                 ? "UNSIGNED-PAYLOAD"
                 : GetHash(request.Payload);
 
-            var canonicalRequest = $"{request.Method}\n{request.CanonicalUri}\n{request.CanonicalQueryString}\n{canonicalHeaders}\n{request.SignedHeaders}\n{payloadHash}";
+            // Encode the URI path segments for the canonical request
+            var encodedUri = EncodeUri(request.CanonicalUri);
+
+            var canonicalRequest = $"{request.Method}\n{encodedUri}\n{request.CanonicalQueryString}\n{canonicalHeaders}\n{request.SignedHeaders}\n{payloadHash}";
 
             var algorithm = "AWS4-HMAC-SHA256";
             var credentialScope = $"{dateStamp}/{request.Region}/s3/aws4_request";
@@ -270,6 +273,28 @@ namespace S3Test.Services
             using var sha256 = SHA256.Create();
             var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(text));
             return BitConverter.ToString(hash).Replace("-", "").ToLower();
+        }
+
+        private string EncodeUri(string uri)
+        {
+            // For AWS Signature V4, we need to encode each path segment separately
+            // Empty path becomes "/"
+            if (string.IsNullOrEmpty(uri))
+                return "/";
+
+            // Split the path into segments
+            var segments = uri.TrimStart('/').Split('/');
+            var encodedSegments = new string[segments.Length];
+
+            for (int i = 0; i < segments.Length; i++)
+            {
+                // Encode each segment using Uri.EscapeDataString
+                // This handles special characters and spaces correctly
+                encodedSegments[i] = Uri.EscapeDataString(segments[i]);
+            }
+
+            // Rejoin with "/" and ensure it starts with "/"
+            return "/" + string.Join("/", encodedSegments);
         }
     }
 }
