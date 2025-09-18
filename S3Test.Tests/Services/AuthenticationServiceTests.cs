@@ -172,12 +172,12 @@ namespace S3Test.Tests.Services
         }
 
         [Theory]
-        [InlineData("GET", "read")]
-        [InlineData("HEAD", "read")]
-        [InlineData("PUT", "write")]
-        [InlineData("POST", "write")]
-        [InlineData("DELETE", "delete")]
-        public async Task ValidateRequest_MapsOperationsToPermissions(string httpMethod, string expectedPermission)
+        [InlineData("GET", "write")]  // GET needs read but user only has write
+        [InlineData("HEAD", "write")] // HEAD needs read but user only has write
+        [InlineData("PUT", "read")]   // PUT needs write but user only has read
+        [InlineData("POST", "read")]  // POST needs write but user only has read
+        [InlineData("DELETE", "read")] // DELETE needs delete but user only has read
+        public async Task ValidateRequest_RejectsWrongPermissions(string httpMethod, string userPermission)
         {
             var testUser = new S3User
             {
@@ -189,7 +189,7 @@ namespace S3Test.Tests.Services
                     new BucketPermission
                     {
                         BucketName = "test-bucket",
-                        Permissions = new List<string> { expectedPermission }
+                        Permissions = new List<string> { userPermission }
                     }
                 }
             };
@@ -207,7 +207,7 @@ namespace S3Test.Tests.Services
             var dateStamp = dateTime.ToString("yyyyMMdd");
             var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
 
-            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=test";
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcd1234";
             context.Request.Headers["x-amz-date"] = amzDate;
             context.Request.Headers["Host"] = "localhost";
             context.Request.Method = httpMethod;
@@ -215,7 +215,307 @@ namespace S3Test.Tests.Services
 
             var (isValid, user, error) = await service.ValidateRequestAsync(context.Request, "test-bucket", "file.txt", httpMethod);
 
+            Assert.False(isValid);
             Assert.NotNull(user);
+            Assert.Equal("Access denied", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_RejectsInvalidAuthHeaderFormat()
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Headers["Authorization"] = "AWS4-HMAC-SHA256 Credential=invalid-format";
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(context.Request, "test-bucket");
+
+            Assert.False(isValid);
+            Assert.Null(user);
+            Assert.Equal("Invalid authorization header format", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_RejectsMissingXAmzDate()
+        {
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTACCESSKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=abcd1234";
+            context.Request.Headers["Host"] = "localhost";
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(context.Request, "test-bucket");
+
+            Assert.False(isValid);
+            Assert.Null(user);
+            Assert.Equal("Invalid authorization header format", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_HandlesEmptyPayload()
+        {
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTACCESSKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcd1234";
+            context.Request.Headers["x-amz-date"] = amzDate;
+            context.Request.Headers["Host"] = "localhost";
+            context.Request.Method = "GET";
+            context.Request.Path = "/test-bucket";
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(context.Request, "test-bucket");
+
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Invalid signature", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_AcceptsWildcardBucketPermissions()
+        {
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTACCESSKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcd1234";
+            context.Request.Headers["x-amz-date"] = amzDate;
+            context.Request.Headers["Host"] = "localhost";
+            context.Request.Method = "GET";
+            context.Request.Path = "/any-bucket";
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(context.Request, "any-bucket", null, "GET");
+
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Invalid signature", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_RejectsUserWithNoBucketPermissions()
+        {
+            var userWithNoPerms = new S3User
+            {
+                AccessKeyId = "NOPERMSKEY",
+                SecretAccessKey = "secret",
+                Name = "noperms",
+                BucketPermissions = new List<BucketPermission>()
+            };
+
+            var settings = new AuthenticationSettings
+            {
+                Enabled = true,
+                Users = new List<S3User> { userWithNoPerms }
+            };
+
+            var service = new AuthenticationService(_loggerMock.Object, Options.Create(settings));
+
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=NOPERMSKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcd1234";
+            context.Request.Headers["x-amz-date"] = amzDate;
+            context.Request.Headers["Host"] = "localhost";
+            context.Request.Method = "GET";
+            context.Request.Path = "/test-bucket";
+
+            var (isValid, user, error) = await service.ValidateRequestAsync(context.Request, "test-bucket", null, "GET");
+
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Access denied", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_RejectsUserWithNullBucketPermissions()
+        {
+            var userWithNullPerms = new S3User
+            {
+                AccessKeyId = "NULLPERMSKEY",
+                SecretAccessKey = "secret",
+                Name = "nullperms",
+                BucketPermissions = null!
+            };
+
+            var settings = new AuthenticationSettings
+            {
+                Enabled = true,
+                Users = new List<S3User> { userWithNullPerms }
+            };
+
+            var service = new AuthenticationService(_loggerMock.Object, Options.Create(settings));
+
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=NULLPERMSKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcd1234";
+            context.Request.Headers["x-amz-date"] = amzDate;
+            context.Request.Headers["Host"] = "localhost";
+            context.Request.Method = "GET";
+            context.Request.Path = "/test-bucket";
+
+            var (isValid, user, error) = await service.ValidateRequestAsync(context.Request, "test-bucket", null, "GET");
+
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Access denied", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_HandlesUnknownOperation()
+        {
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTACCESSKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcd1234";
+            context.Request.Headers["x-amz-date"] = amzDate;
+            context.Request.Headers["Host"] = "localhost";
+            context.Request.Method = "PATCH";
+            context.Request.Path = "/test-bucket";
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(context.Request, "test-bucket", null, "UNKNOWN");
+
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Invalid signature", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_HandlesCaseInsensitivePermissions()
+        {
+            var userWithMixedCasePerms = new S3User
+            {
+                AccessKeyId = "MIXEDCASEKEY",
+                SecretAccessKey = "secret",
+                Name = "mixedcase",
+                BucketPermissions = new List<BucketPermission>
+                {
+                    new BucketPermission
+                    {
+                        BucketName = "test-bucket",
+                        Permissions = new List<string> { "READ", "Write" }
+                    }
+                }
+            };
+
+            var settings = new AuthenticationSettings
+            {
+                Enabled = true,
+                Users = new List<S3User> { userWithMixedCasePerms }
+            };
+
+            var service = new AuthenticationService(_loggerMock.Object, Options.Create(settings));
+
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=MIXEDCASEKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcd1234";
+            context.Request.Headers["x-amz-date"] = amzDate;
+            context.Request.Headers["Host"] = "localhost";
+            context.Request.Method = "GET";
+            context.Request.Path = "/test-bucket";
+
+            var (isValid, user, error) = await service.ValidateRequestAsync(context.Request, "test-bucket", null, "GET");
+
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Invalid signature", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_HandlesCaseInsensitiveBucketName()
+        {
+            var userWithSpecificBucket = new S3User
+            {
+                AccessKeyId = "BUCKETKEY",
+                SecretAccessKey = "secret",
+                Name = "bucketuser",
+                BucketPermissions = new List<BucketPermission>
+                {
+                    new BucketPermission
+                    {
+                        BucketName = "Test-Bucket",
+                        Permissions = new List<string> { "read" }
+                    }
+                }
+            };
+
+            var settings = new AuthenticationSettings
+            {
+                Enabled = true,
+                Users = new List<S3User> { userWithSpecificBucket }
+            };
+
+            var service = new AuthenticationService(_loggerMock.Object, Options.Create(settings));
+
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=BUCKETKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcd1234";
+            context.Request.Headers["x-amz-date"] = amzDate;
+            context.Request.Headers["Host"] = "localhost";
+            context.Request.Method = "GET";
+            context.Request.Path = "/test-bucket";
+
+            var (isValid, user, error) = await service.ValidateRequestAsync(context.Request, "test-bucket", null, "GET");
+
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Invalid signature", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_HandlesNullOperation()
+        {
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTACCESSKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcd1234";
+            context.Request.Headers["x-amz-date"] = amzDate;
+            context.Request.Headers["Host"] = "localhost";
+            context.Request.Method = "GET";
+            context.Request.Path = "/test-bucket";
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(context.Request, "test-bucket", null, null);
+
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Invalid signature", error);
+        }
+
+        [Theory]
+        [InlineData("list")]
+        public async Task ValidateRequestAsync_SupportsListOperation(string operation)
+        {
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=LIMITEDUSER/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcd1234";
+            context.Request.Headers["x-amz-date"] = amzDate;
+            context.Request.Headers["Host"] = "localhost";
+            context.Request.Method = "GET";
+            context.Request.Path = "/test-bucket";
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(context.Request, "test-bucket", null, operation);
+
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Invalid signature", error);
         }
     }
 }
