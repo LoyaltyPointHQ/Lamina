@@ -98,23 +98,17 @@ public class FilesystemObjectService : IObjectService
     public async Task<GetObjectResponse?> GetObjectAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         var dataPath = GetDataPath(bucketName, key);
-        var metadataPath = GetMetadataPath(bucketName, key);
 
-        if (!File.Exists(dataPath) || !File.Exists(metadataPath))
+        if (!File.Exists(dataPath))
         {
             return null;
         }
 
         var data = await File.ReadAllBytesAsync(dataPath, cancellationToken);
-        var metadataJson = await File.ReadAllTextAsync(metadataPath, cancellationToken);
-        var metadata = JsonSerializer.Deserialize<ObjectMetadata>(metadataJson);
-
-        if (metadata == null)
-        {
-            return null;
-        }
-
         var fileInfo = new FileInfo(dataPath);
+
+        // Try to load metadata, or create it lazily
+        var metadata = await LoadOrCreateMetadataAsync(bucketName, key, data, fileInfo, cancellationToken);
 
         return new GetObjectResponse
         {
@@ -203,42 +197,43 @@ public class FilesystemObjectService : IObjectService
             MaxKeys = request?.MaxKeys ?? 1000
         };
 
-        var bucketMetadataPath = Path.Combine(_metadataDirectory, bucketName);
-        if (!Directory.Exists(bucketMetadataPath))
+        var bucketDataPath = Path.Combine(_dataDirectory, bucketName);
+        if (!Directory.Exists(bucketDataPath))
         {
             return response;
         }
 
-        var allMetadataFiles = Directory.GetFiles(bucketMetadataPath, "*.json", SearchOption.AllDirectories);
+        // List all files in the data directory as the source of truth
+        var allDataFiles = Directory.GetFiles(bucketDataPath, "*", SearchOption.AllDirectories);
         var objects = new List<S3ObjectInfo>();
 
-        foreach (var metadataFile in allMetadataFiles)
+        foreach (var dataFile in allDataFiles)
         {
             try
             {
-                var metadataJson = await File.ReadAllTextAsync(metadataFile, cancellationToken);
-                var metadata = JsonSerializer.Deserialize<ObjectMetadata>(metadataJson);
+                // Convert file path back to object key
+                var relativePath = Path.GetRelativePath(bucketDataPath, dataFile);
+                var key = relativePath.Replace(Path.DirectorySeparatorChar, '/');
 
-                if (metadata != null)
+                if (string.IsNullOrEmpty(request?.Prefix) || key.StartsWith(request.Prefix))
                 {
-                    if (string.IsNullOrEmpty(request?.Prefix) || metadata.Key.StartsWith(request.Prefix))
-                    {
-                        var dataPath = GetDataPath(bucketName, metadata.Key);
-                        var fileInfo = new FileInfo(dataPath);
+                    var fileInfo = new FileInfo(dataFile);
 
-                        objects.Add(new S3ObjectInfo
-                        {
-                            Key = metadata.Key,
-                            Size = fileInfo.Exists ? fileInfo.Length : 0,
-                            LastModified = metadata.LastModified,
-                            ETag = metadata.ETag
-                        });
-                    }
+                    // Try to load metadata, or create it lazily
+                    var metadata = await LoadOrCreateMetadataAsync(bucketName, key, null, fileInfo, cancellationToken);
+
+                    objects.Add(new S3ObjectInfo
+                    {
+                        Key = key,
+                        Size = fileInfo.Length,
+                        LastModified = metadata.LastModified,
+                        ETag = metadata.ETag
+                    });
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error reading metadata file {File}", metadataFile);
+                _logger.LogError(ex, "Error processing data file {File}", dataFile);
             }
         }
 
@@ -268,28 +263,22 @@ public class FilesystemObjectService : IObjectService
 
     public async Task<S3ObjectInfo?> GetObjectInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        var metadataPath = GetMetadataPath(bucketName, key);
-
-        if (!File.Exists(metadataPath))
-        {
-            return null;
-        }
-
-        var metadataJson = await File.ReadAllTextAsync(metadataPath, cancellationToken);
-        var metadata = JsonSerializer.Deserialize<ObjectMetadata>(metadataJson);
-
-        if (metadata == null)
-        {
-            return null;
-        }
-
         var dataPath = GetDataPath(bucketName, key);
+
+        if (!File.Exists(dataPath))
+        {
+            return null;
+        }
+
         var fileInfo = new FileInfo(dataPath);
+
+        // Try to load metadata, or create it lazily (without reading full file)
+        var metadata = await LoadOrCreateMetadataAsync(bucketName, key, null, fileInfo, cancellationToken);
 
         return new S3ObjectInfo
         {
             Key = metadata.Key,
-            Size = fileInfo.Exists ? fileInfo.Length : 0,
+            Size = fileInfo.Length,
             LastModified = metadata.LastModified,
             ETag = metadata.ETag,
             ContentType = metadata.ContentType,
@@ -314,6 +303,94 @@ public class FilesystemObjectService : IObjectService
         using var md5 = MD5.Create();
         var hash = md5.ComputeHash(data);
         return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+    }
+
+    private async Task<ObjectMetadata> LoadOrCreateMetadataAsync(string bucketName, string key, byte[]? data, FileInfo fileInfo, CancellationToken cancellationToken)
+    {
+        var metadataPath = GetMetadataPath(bucketName, key);
+
+        // Try to load existing metadata
+        if (File.Exists(metadataPath))
+        {
+            try
+            {
+                var metadataJson = await File.ReadAllTextAsync(metadataPath, cancellationToken);
+                var existingMetadata = JsonSerializer.Deserialize<ObjectMetadata>(metadataJson);
+                if (existingMetadata != null)
+                {
+                    return existingMetadata;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to load metadata for {Key} in bucket {BucketName}, will recreate", key, bucketName);
+            }
+        }
+
+        // Create metadata lazily
+        string etag;
+        if (data != null)
+        {
+            etag = ComputeETag(data);
+        }
+        else
+        {
+            // Compute ETag from file if data wasn't provided
+            using var stream = fileInfo.OpenRead();
+            using var md5 = MD5.Create();
+            var hash = await md5.ComputeHashAsync(stream, cancellationToken);
+            etag = BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+        }
+
+        var metadata = new ObjectMetadata
+        {
+            Key = key,
+            BucketName = bucketName,
+            LastModified = fileInfo.LastWriteTimeUtc,
+            ETag = etag,
+            ContentType = GuessContentType(key),
+            UserMetadata = new Dictionary<string, string>()
+        };
+
+        // Try to save metadata (best effort)
+        try
+        {
+            var metadataDir = Path.GetDirectoryName(metadataPath)!;
+            Directory.CreateDirectory(metadataDir);
+
+            var metadataJson = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
+            await File.WriteAllTextAsync(metadataPath, metadataJson, cancellationToken);
+            _logger.LogInformation("Created metadata for {Key} in bucket {BucketName}", key, bucketName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to save metadata for {Key} in bucket {BucketName}, continuing with generated metadata", key, bucketName);
+        }
+
+        return metadata;
+    }
+
+    private static string GuessContentType(string key)
+    {
+        var extension = Path.GetExtension(key).ToLowerInvariant();
+        return extension switch
+        {
+            ".txt" => "text/plain",
+            ".html" or ".htm" => "text/html",
+            ".css" => "text/css",
+            ".js" => "application/javascript",
+            ".json" => "application/json",
+            ".xml" => "application/xml",
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".svg" => "image/svg+xml",
+            ".mp3" => "audio/mpeg",
+            ".mp4" => "video/mp4",
+            ".zip" => "application/zip",
+            _ => "application/octet-stream"
+        };
     }
 
     private class ObjectMetadata
