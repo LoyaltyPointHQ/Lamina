@@ -10,14 +10,19 @@ public class FilesystemBucketService : IBucketService
     private readonly string _dataDirectory;
     private readonly string _metadataDirectory;
     private readonly ILogger<FilesystemBucketService> _logger;
+    private readonly IFileSystemLockManager _lockManager;
     private static readonly Regex BucketNameRegex = new(@"^[a-z0-9][a-z0-9.-]*[a-z0-9]$", RegexOptions.Compiled);
     private static readonly Regex IpAddressRegex = new(@"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", RegexOptions.Compiled);
 
-    public FilesystemBucketService(IConfiguration configuration, ILogger<FilesystemBucketService> logger)
+    public FilesystemBucketService(
+        IConfiguration configuration,
+        ILogger<FilesystemBucketService> logger,
+        IFileSystemLockManager lockManager)
     {
         _dataDirectory = configuration["FilesystemStorage:DataDirectory"] ?? "/var/s3test/data";
         _metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"] ?? "/var/s3test/metadata";
         _logger = logger;
+        _lockManager = lockManager;
 
         Directory.CreateDirectory(_dataDirectory);
         Directory.CreateDirectory(_metadataDirectory);
@@ -29,7 +34,7 @@ public class FilesystemBucketService : IBucketService
         public Dictionary<string, string>? Tags { get; set; }
     }
 
-    private Bucket? LoadBucketFromDirectory(string bucketName)
+    private async Task<Bucket?> LoadBucketFromDirectoryAsync(string bucketName, CancellationToken cancellationToken = default)
     {
         var bucketDataPath = Path.Combine(_dataDirectory, bucketName);
         if (!Directory.Exists(bucketDataPath))
@@ -46,14 +51,17 @@ public class FilesystemBucketService : IBucketService
             Tags = new Dictionary<string, string>()
         };
 
-        // Try to load metadata if it exists
+        // Try to load metadata if it exists with lock
         var metadataFile = Path.Combine(_metadataDirectory, "_buckets", $"{bucketName}.json");
         if (File.Exists(metadataFile))
         {
             try
             {
-                var json = File.ReadAllText(metadataFile);
-                var metadata = JsonSerializer.Deserialize<BucketMetadata>(json);
+                var metadata = await _lockManager.ReadFileAsync<BucketMetadata>(metadataFile, json =>
+                {
+                    return Task.FromResult(JsonSerializer.Deserialize<BucketMetadata>(json));
+                }, cancellationToken);
+
                 if (metadata != null)
                 {
                     bucket.Region = metadata.Region ?? "us-east-1";
@@ -83,8 +91,11 @@ public class FilesystemBucketService : IBucketService
                 Tags = bucket.Tags
             };
 
-            var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
-            await File.WriteAllTextAsync(metadataFile, json, cancellationToken);
+            // Write bucket metadata with lock
+            await _lockManager.WriteFileAsync(metadataFile, _ =>
+            {
+                return Task.FromResult(JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true }));
+            }, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -117,7 +128,7 @@ public class FilesystemBucketService : IBucketService
             Directory.CreateDirectory(bucketMetadataPath);
 
             // Load the bucket info from the newly created directory
-            var bucket = LoadBucketFromDirectory(bucketName);
+            var bucket = await LoadBucketFromDirectoryAsync(bucketName, cancellationToken);
             if (bucket != null && request != null)
             {
                 bucket.Region = request.Region ?? "us-east-1";
@@ -143,13 +154,13 @@ public class FilesystemBucketService : IBucketService
         }
     }
 
-    public Task<Bucket?> GetBucketAsync(string bucketName, CancellationToken cancellationToken = default)
+    public async Task<Bucket?> GetBucketAsync(string bucketName, CancellationToken cancellationToken = default)
     {
-        var bucket = LoadBucketFromDirectory(bucketName);
-        return Task.FromResult(bucket);
+        var bucket = await LoadBucketFromDirectoryAsync(bucketName, cancellationToken);
+        return bucket;
     }
 
-    public Task<ListBucketsResponse> ListBucketsAsync(CancellationToken cancellationToken = default)
+    public async Task<ListBucketsResponse> ListBucketsAsync(CancellationToken cancellationToken = default)
     {
         var buckets = new List<Bucket>();
 
@@ -159,7 +170,7 @@ public class FilesystemBucketService : IBucketService
             foreach (var directory in Directory.GetDirectories(_dataDirectory))
             {
                 var bucketName = Path.GetFileName(directory);
-                var bucket = LoadBucketFromDirectory(bucketName);
+                var bucket = await LoadBucketFromDirectoryAsync(bucketName, cancellationToken);
                 if (bucket != null)
                 {
                     buckets.Add(bucket);
@@ -175,7 +186,7 @@ public class FilesystemBucketService : IBucketService
         {
             Buckets = buckets.OrderBy(b => b.Name).ToList()
         };
-        return Task.FromResult(response);
+        return response;
     }
 
     public async Task<bool> DeleteBucketAsync(string bucketName, bool force = false, CancellationToken cancellationToken = default)
@@ -231,7 +242,7 @@ public class FilesystemBucketService : IBucketService
 
             if (File.Exists(bucketMetadataFile))
             {
-                File.Delete(bucketMetadataFile);
+                await _lockManager.DeleteFileAsync(bucketMetadataFile, cancellationToken);
             }
 
             _logger.LogInformation("Deleted bucket {BucketName} and its directories (force: {Force})", bucketName, force);
@@ -252,7 +263,7 @@ public class FilesystemBucketService : IBucketService
 
     public async Task<Bucket?> UpdateBucketTagsAsync(string bucketName, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
     {
-        var bucket = LoadBucketFromDirectory(bucketName);
+        var bucket = await LoadBucketFromDirectoryAsync(bucketName, cancellationToken);
         if (bucket == null)
         {
             _logger.LogWarning("Bucket {BucketName} not found for tag update", bucketName);

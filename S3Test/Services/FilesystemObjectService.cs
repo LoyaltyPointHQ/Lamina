@@ -10,12 +10,17 @@ public class FilesystemObjectService : IObjectService
     private readonly string _dataDirectory;
     private readonly string _metadataDirectory;
     private readonly ILogger<FilesystemObjectService> _logger;
+    private readonly IFileSystemLockManager _lockManager;
 
-    public FilesystemObjectService(IConfiguration configuration, ILogger<FilesystemObjectService> logger)
+    public FilesystemObjectService(
+        IConfiguration configuration,
+        ILogger<FilesystemObjectService> logger,
+        IFileSystemLockManager lockManager)
     {
         _dataDirectory = configuration["FilesystemStorage:DataDirectory"] ?? "/var/s3test/data";
         _metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"] ?? "/var/s3test/metadata";
         _logger = logger;
+        _lockManager = lockManager;
 
         Directory.CreateDirectory(_dataDirectory);
         Directory.CreateDirectory(_metadataDirectory);
@@ -58,6 +63,7 @@ public class FilesystemObjectService : IObjectService
             }
 
             var data = memoryStream.ToArray();
+            // Write data file directly (no lock needed for new files)
             await File.WriteAllBytesAsync(dataPath, data, cancellationToken);
 
             var etag = ComputeETag(data);
@@ -82,8 +88,11 @@ public class FilesystemObjectService : IObjectService
                 UserMetadata = s3Object.Metadata
             };
 
-            var metadataJson = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
-            await File.WriteAllTextAsync(metadataPath, metadataJson, cancellationToken);
+            // Write metadata with lock
+            await _lockManager.WriteFileAsync(metadataPath, _ =>
+            {
+                return Task.FromResult(JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true }));
+            }, cancellationToken);
 
             _logger.LogInformation("Stored object {Key} in bucket {BucketName} to filesystem", key, bucketName);
             return s3Object;
@@ -104,10 +113,11 @@ public class FilesystemObjectService : IObjectService
             return null;
         }
 
+        // Read data directly
         var data = await File.ReadAllBytesAsync(dataPath, cancellationToken);
         var fileInfo = new FileInfo(dataPath);
 
-        // Try to load metadata, or create it lazily
+        // Load or create metadata without locks (it's thread-safe on its own)
         var metadata = await LoadOrCreateMetadataAsync(bucketName, key, data, fileInfo, cancellationToken);
 
         return new GetObjectResponse
@@ -163,22 +173,24 @@ public class FilesystemObjectService : IObjectService
         }
     }
 
-    public Task<bool> DeleteObjectAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteObjectAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         var dataPath = GetDataPath(bucketName, key);
         var metadataPath = GetMetadataPath(bucketName, key);
 
         var exists = File.Exists(dataPath);
 
-        if (File.Exists(dataPath))
+        if (exists)
         {
+            // Delete data file
             File.Delete(dataPath);
             CleanupEmptyDirectories(Path.GetDirectoryName(dataPath)!, Path.Combine(_dataDirectory, bucketName));
         }
 
         if (File.Exists(metadataPath))
         {
-            File.Delete(metadataPath);
+            // Delete metadata file with lock
+            await _lockManager.DeleteFileAsync(metadataPath, cancellationToken);
             CleanupEmptyDirectories(Path.GetDirectoryName(metadataPath)!, Path.Combine(_metadataDirectory, bucketName));
         }
 
@@ -187,7 +199,7 @@ public class FilesystemObjectService : IObjectService
             _logger.LogInformation("Deleted object {Key} from bucket {BucketName}", key, bucketName);
         }
 
-        return Task.FromResult(exists);
+        return exists;
     }
 
     public async Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)
@@ -220,8 +232,7 @@ public class FilesystemObjectService : IObjectService
                 if (string.IsNullOrEmpty(request?.Prefix) || key.StartsWith(request.Prefix))
                 {
                     var fileInfo = new FileInfo(dataFile);
-
-                    // Try to load metadata, or create it lazily
+                    // Load or create metadata without locks
                     var metadata = await LoadOrCreateMetadataAsync(bucketName, key, null, fileInfo, cancellationToken);
 
                     objects.Add(new S3ObjectInfo
@@ -313,7 +324,7 @@ public class FilesystemObjectService : IObjectService
 
         var fileInfo = new FileInfo(dataPath);
 
-        // Try to load metadata, or create it lazily (without reading full file)
+        // Load or create metadata without locks
         var metadata = await LoadOrCreateMetadataAsync(bucketName, key, null, fileInfo, cancellationToken);
 
         return new S3ObjectInfo
@@ -350,13 +361,13 @@ public class FilesystemObjectService : IObjectService
     {
         var metadataPath = GetMetadataPath(bucketName, key);
 
-        // Try to load existing metadata
+        // Try to load existing metadata WITHOUT lock (caller should handle locking if needed)
         if (File.Exists(metadataPath))
         {
             try
             {
-                var metadataJson = await File.ReadAllTextAsync(metadataPath, cancellationToken);
-                var existingMetadata = JsonSerializer.Deserialize<ObjectMetadata>(metadataJson);
+                var json = await File.ReadAllTextAsync(metadataPath, cancellationToken);
+                var existingMetadata = JsonSerializer.Deserialize<ObjectMetadata>(json);
                 if (existingMetadata != null)
                 {
                     return existingMetadata;
@@ -393,7 +404,7 @@ public class FilesystemObjectService : IObjectService
             UserMetadata = new Dictionary<string, string>()
         };
 
-        // Try to save metadata (best effort)
+        // Try to save metadata WITHOUT lock (best effort - caller handles locking)
         try
         {
             var metadataDir = Path.GetDirectoryName(metadataPath)!;

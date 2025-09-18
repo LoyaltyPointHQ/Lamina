@@ -11,16 +11,19 @@ public class FilesystemMultipartUploadService : IMultipartUploadService
     private readonly string _tempDirectory;
     private readonly IObjectService _objectService;
     private readonly ILogger<FilesystemMultipartUploadService> _logger;
+    private readonly IFileSystemLockManager _lockManager;
 
     public FilesystemMultipartUploadService(
         IConfiguration configuration,
         IObjectService objectService,
-        ILogger<FilesystemMultipartUploadService> logger)
+        ILogger<FilesystemMultipartUploadService> logger,
+        IFileSystemLockManager lockManager)
     {
         _metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"] ?? "/var/s3test/metadata";
         _tempDirectory = Path.Combine(_metadataDirectory, "_multipart_uploads");
         _objectService = objectService;
         _logger = logger;
+        _lockManager = lockManager;
 
         Directory.CreateDirectory(_tempDirectory);
     }
@@ -46,8 +49,12 @@ public class FilesystemMultipartUploadService : IMultipartUploadService
 
         Directory.CreateDirectory(uploadPath);
         var metadataPath = Path.Combine(uploadPath, "metadata.json");
-        var json = JsonSerializer.Serialize(upload, new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(metadataPath, json, cancellationToken);
+
+        // Write upload metadata with lock
+        await _lockManager.WriteFileAsync(metadataPath, _ =>
+        {
+            return Task.FromResult(JsonSerializer.Serialize(upload, new JsonSerializerOptions { WriteIndented = true }));
+        }, cancellationToken);
 
         _logger.LogInformation("Initiated multipart upload {UploadId} for {Key} in bucket {BucketName}", uploadId, request.Key, bucketName);
 
@@ -101,24 +108,42 @@ public class FilesystemMultipartUploadService : IMultipartUploadService
 
         var data = memoryStream.ToArray();
         var partPath = Path.Combine(uploadPath, $"part_{partNumber}");
+
+        // Write part data directly
         await File.WriteAllBytesAsync(partPath, data, cancellationToken);
 
         var etag = ComputeETag(data);
 
-        var json = await File.ReadAllTextAsync(metadataPath, cancellationToken);
-        var upload = JsonSerializer.Deserialize<MultipartUploadState>(json)!;
-
-        upload.Parts.RemoveAll(p => p.PartNumber == partNumber);
-        upload.Parts.Add(new MultipartUploadPart
+        // Use optimistic concurrency with retries to handle concurrent part uploads
+        const int maxRetries = 10;
+        for (int retry = 0; retry < maxRetries; retry++)
         {
-            PartNumber = partNumber,
-            ETag = etag,
-            Size = data.Length,
-            LastModified = DateTime.UtcNow
-        });
+            try
+            {
+                // Try to update metadata with a shorter timeout to detect contention quickly
+                var success = await TryUpdatePartMetadataAsync(metadataPath, uploadId, partNumber, etag, data.Length, cancellationToken);
+                if (success)
+                {
+                    break;
+                }
 
-        json = JsonSerializer.Serialize(upload, new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(metadataPath, json, cancellationToken);
+                // If we're on the last retry, throw
+                if (retry == maxRetries - 1)
+                {
+                    throw new InvalidOperationException($"Failed to update metadata for upload {uploadId} after {maxRetries} retries");
+                }
+
+                // Exponential backoff with jitter
+                var delay = TimeSpan.FromMilliseconds(Math.Min(100 * Math.Pow(2, retry), 1000) + Random.Shared.Next(0, 100));
+                await Task.Delay(delay, cancellationToken);
+            }
+            catch (TimeoutException) when (retry < maxRetries - 1)
+            {
+                // On timeout, retry with backoff
+                var delay = TimeSpan.FromMilliseconds(Math.Min(100 * Math.Pow(2, retry), 1000) + Random.Shared.Next(0, 100));
+                await Task.Delay(delay, cancellationToken);
+            }
+        }
 
         _logger.LogInformation("Uploaded part {PartNumber} of upload {UploadId}", partNumber, uploadId);
 
@@ -143,8 +168,11 @@ public class FilesystemMultipartUploadService : IMultipartUploadService
             return null;
         }
 
-        var json = await File.ReadAllTextAsync(metadataPath, cancellationToken);
-        var upload = JsonSerializer.Deserialize<MultipartUploadState>(json)!;
+        // Read upload metadata with lock
+        var upload = await _lockManager.ReadFileAsync<MultipartUploadState>(metadataPath, json =>
+        {
+            return Task.FromResult(JsonSerializer.Deserialize<MultipartUploadState>(json) ?? throw new InvalidOperationException("Failed to deserialize upload metadata"));
+        }, cancellationToken);
 
         using var combinedStream = new MemoryStream();
         var sortedParts = request.Parts.OrderBy(p => p.PartNumber).ToList();
@@ -158,6 +186,7 @@ public class FilesystemMultipartUploadService : IMultipartUploadService
                 return null;
             }
 
+            // Read part data directly
             var partData = await File.ReadAllBytesAsync(partPath, cancellationToken);
             await combinedStream.WriteAsync(partData, cancellationToken);
         }
@@ -176,9 +205,13 @@ public class FilesystemMultipartUploadService : IMultipartUploadService
 
         if (s3Object != null)
         {
+            // Delete upload directory
             try
             {
-                Directory.Delete(uploadPath, recursive: true);
+                if (Directory.Exists(uploadPath))
+                {
+                    Directory.Delete(uploadPath, recursive: true);
+                }
             }
             catch (Exception ex)
             {
@@ -199,7 +232,7 @@ public class FilesystemMultipartUploadService : IMultipartUploadService
         return null;
     }
 
-    public Task<bool> AbortMultipartUploadAsync(
+    public async Task<bool> AbortMultipartUploadAsync(
         string bucketName,
         string key,
         string uploadId,
@@ -209,19 +242,24 @@ public class FilesystemMultipartUploadService : IMultipartUploadService
 
         if (!Directory.Exists(uploadPath))
         {
-            return Task.FromResult(false);
+            return false;
         }
 
+        // Delete upload directory
         try
         {
-            Directory.Delete(uploadPath, recursive: true);
-            _logger.LogInformation("Aborted multipart upload {UploadId}", uploadId);
-            return Task.FromResult(true);
+            if (Directory.Exists(uploadPath))
+            {
+                Directory.Delete(uploadPath, recursive: true);
+                _logger.LogInformation("Aborted multipart upload {UploadId}", uploadId);
+                return true;
+            }
+            return false;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error aborting upload {UploadId}", uploadId);
-            return Task.FromResult(false);
+            return false;
         }
     }
 
@@ -239,8 +277,11 @@ public class FilesystemMultipartUploadService : IMultipartUploadService
             return new List<UploadPart>();
         }
 
-        var json = await File.ReadAllTextAsync(metadataPath, cancellationToken);
-        var upload = JsonSerializer.Deserialize<MultipartUploadState>(json)!;
+        // Read upload metadata with lock
+        var upload = await _lockManager.ReadFileAsync<MultipartUploadState>(metadataPath, json =>
+        {
+            return Task.FromResult(JsonSerializer.Deserialize<MultipartUploadState>(json) ?? throw new InvalidOperationException("Failed to deserialize upload metadata"));
+        }, cancellationToken);
 
         return upload.Parts
             .OrderBy(p => p.PartNumber)
@@ -274,10 +315,13 @@ public class FilesystemMultipartUploadService : IMultipartUploadService
             {
                 try
                 {
-                    var json = await File.ReadAllTextAsync(metadataPath, cancellationToken);
-                    var upload = JsonSerializer.Deserialize<MultipartUploadState>(json)!;
+                    // Read upload metadata with lock
+                    var upload = await _lockManager.ReadFileAsync<MultipartUploadState>(metadataPath, json =>
+                    {
+                        return Task.FromResult(JsonSerializer.Deserialize<MultipartUploadState>(json));
+                    }, cancellationToken);
 
-                    if (upload.BucketName == bucketName)
+                    if (upload != null && upload.BucketName == bucketName)
                     {
                         uploads.Add(new MultipartUpload
                         {
@@ -326,5 +370,74 @@ public class FilesystemMultipartUploadService : IMultipartUploadService
         public string ETag { get; set; } = string.Empty;
         public long Size { get; set; }
         public DateTime LastModified { get; set; }
+    }
+
+    private async Task<bool> TryUpdatePartMetadataAsync(
+        string metadataPath,
+        string uploadId,
+        int partNumber,
+        string etag,
+        long size,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Use ExecuteWithLockAsync with a shorter timeout for better concurrency detection
+            var shortTimeout = TimeSpan.FromSeconds(2); // Short timeout to detect contention quickly
+            return await _lockManager.ExecuteWithLockAsync(metadataPath, async () =>
+            {
+                // Read current metadata
+                if (!File.Exists(metadataPath))
+                {
+                    throw new InvalidOperationException($"Upload {uploadId} metadata not found");
+                }
+
+                var json = await File.ReadAllTextAsync(metadataPath, cancellationToken);
+                var upload = JsonSerializer.Deserialize<MultipartUploadState>(json);
+                if (upload == null)
+                {
+                    throw new InvalidOperationException($"Failed to deserialize upload {uploadId} metadata");
+                }
+
+                // Update parts list
+                upload.Parts.RemoveAll(p => p.PartNumber == partNumber);
+                upload.Parts.Add(new MultipartUploadPart
+                {
+                    PartNumber = partNumber,
+                    ETag = etag,
+                    Size = size,
+                    LastModified = DateTime.UtcNow
+                });
+
+                // Write back atomically
+                var updatedJson = JsonSerializer.Serialize(upload, new JsonSerializerOptions { WriteIndented = true });
+                var tempFile = $"{metadataPath}.tmp.{Guid.NewGuid():N}";
+                try
+                {
+                    await File.WriteAllTextAsync(tempFile, updatedJson, cancellationToken);
+                    File.Move(tempFile, metadataPath, overwrite: true);
+                }
+                finally
+                {
+                    // Cleanup temp file if it exists
+                    if (File.Exists(tempFile))
+                    {
+                        try { File.Delete(tempFile); } catch { }
+                    }
+                }
+
+                return true;
+            }, isWrite: true, cancellationToken, timeout: shortTimeout);
+        }
+        catch (TimeoutException)
+        {
+            // Let the caller handle timeout with retry
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to update part metadata for upload {UploadId}, part {PartNumber}", uploadId, partNumber);
+            return false;
+        }
     }
 }

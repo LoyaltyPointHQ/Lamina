@@ -30,6 +30,9 @@ builder.Services.Configure<AuthenticationSettings>(
 // Register authentication service
 builder.Services.AddSingleton<IAuthenticationService, AuthenticationService>();
 
+// Register FileSystemLockManager for thread-safe file operations
+builder.Services.AddSingleton<IFileSystemLockManager, FileSystemLockManager>();
+
 // Register S3 services based on configuration
 var storageType = builder.Configuration["StorageType"] ?? "InMemory";
 

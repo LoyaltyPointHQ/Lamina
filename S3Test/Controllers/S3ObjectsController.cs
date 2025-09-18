@@ -135,10 +135,11 @@ public class S3ObjectsController : ControllerBase
             try
             {
                 await _objectService.WriteObjectToPipeAsync(bucketName, key, writer, cancellationToken);
-            }
-            catch
-            {
                 await writer.CompleteAsync();
+            }
+            catch (Exception ex)
+            {
+                await writer.CompleteAsync(ex);
             }
         });
 
