@@ -21,10 +21,24 @@ builder.Services.AddOpenApi();
 builder.Services.Configure<StorageLimits>(
     builder.Configuration.GetSection("StorageLimits"));
 
-// Register S3 services
-builder.Services.AddSingleton<IBucketService, InMemoryBucketService>();
-builder.Services.AddSingleton<IObjectService, InMemoryObjectService>();
-builder.Services.AddSingleton<IMultipartUploadService, InMemoryMultipartUploadService>();
+// Register S3 services based on configuration
+var storageType = builder.Configuration["StorageType"] ?? "InMemory";
+
+if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<IBucketService, InMemoryBucketService>();
+    builder.Services.AddSingleton<IObjectService, FilesystemObjectService>();
+    builder.Services.AddSingleton<IMultipartUploadService, FilesystemMultipartUploadService>();
+    builder.Logging.AddConsole().SetMinimumLevel(LogLevel.Information);
+    Console.WriteLine("Using Filesystem storage for objects");
+}
+else
+{
+    builder.Services.AddSingleton<IBucketService, InMemoryBucketService>();
+    builder.Services.AddSingleton<IObjectService, InMemoryObjectService>();
+    builder.Services.AddSingleton<IMultipartUploadService, InMemoryMultipartUploadService>();
+    Console.WriteLine("Using In-Memory storage");
+}
 
 var app = builder.Build();
 

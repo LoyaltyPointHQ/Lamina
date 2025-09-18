@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a .NET 9.0 ASP.NET Core Web API project called "S3Test" that implements an S3-compatible storage API. The application provides in-memory storage with full support for:
+This is a .NET 9.0 ASP.NET Core Web API project called "S3Test" that implements an S3-compatible storage API. The application provides two storage backends (configurable via appsettings.json):
+
+1. **In-Memory Storage**: Default option, stores all data in memory using ConcurrentDictionary
+2. **Filesystem Storage**: Stores objects on disk with separate data and metadata directories
+
+Features supported:
 - Bucket operations (create, list, delete)
 - Object operations (put, get, delete, head, list)
 - Multipart uploads (initiate, upload parts, complete, abort, list parts)
@@ -64,7 +69,12 @@ docker run -p 8080:8080 s3test
 ### Services
 - **S3Test/Services/**:
   - `IBucketService.cs` / `InMemoryBucketService.cs`: Bucket storage operations
-  - `IObjectService.cs` / `InMemoryObjectService.cs`: Object storage operations including multipart
+  - `IObjectService.cs`: Object storage interface
+    - `InMemoryObjectService.cs`: In-memory implementation
+    - `FilesystemObjectService.cs`: Filesystem-based implementation
+  - `IMultipartUploadService.cs`: Multipart upload interface
+    - `InMemoryMultipartUploadService.cs`: In-memory implementation
+    - `FilesystemMultipartUploadService.cs`: Filesystem-based implementation
 
 ### Tests
 - **S3Test.Tests/**:
@@ -113,10 +123,29 @@ docker run -p 8080:8080 s3test
 
 3. **Error Responses**: Return S3-compliant error XML with appropriate HTTP status codes
 
-4. **In-Memory Storage**:
+4. **Storage Backends**:
+
+   **In-Memory Storage**:
    - Uses `ConcurrentDictionary` for thread-safety
    - Multipart uploads store parts temporarily until completion
    - Combined data is created on CompleteMultipartUpload
+
+   **Filesystem Storage**:
+   - Data stored in: `{DataDirectory}/{bucketName}/{key}`
+   - Metadata stored in: `{MetadataDirectory}/{bucketName}/{key}.json`
+   - Multipart uploads: `{MetadataDirectory}/_multipart_uploads/{uploadId}/`
+   - File size is ALWAYS read from filesystem (not stored in metadata)
+   - Metadata format (JSON):
+     ```json
+     {
+       "Key": "object-key",
+       "BucketName": "bucket-name",
+       "LastModified": "2025-09-18T12:23:54.7926647Z",
+       "ETag": "md5-hash",
+       "ContentType": "text/plain",
+       "UserMetadata": {}
+     }
+     ```
 
 ## Testing Strategy
 
@@ -124,6 +153,35 @@ docker run -p 8080:8080 s3test
 - **Unit Tests**: Test service logic in isolation
 - **XML Validation**: Tests verify both request and response XML formats
 - **Multipart Flow**: Comprehensive tests for complete upload lifecycle
+
+## Configuration
+
+### Storage Backend Selection
+Configure in `appsettings.json` or `appsettings.Development.json`:
+
+```json
+{
+  "StorageType": "InMemory",  // or "Filesystem"
+  "FilesystemStorage": {
+    "DataDirectory": "/tmp/s3tests/data",
+    "MetadataDirectory": "/tmp/s3tests/metadata"
+  }
+}
+```
+
+### Storage Limits
+```json
+{
+  "StorageLimits": {
+    "MaxBuckets": 100,
+    "MaxObjectSizeBytes": 5368709120,
+    "MaxTotalStorageBytes": 107374182400,
+    "MaxObjectsPerBucket": 100000,
+    "MaxConcurrentMultipartUploads": 1000,
+    "MaxPartsPerUpload": 10000
+  }
+}
+```
 
 ## Common Development Tasks
 
@@ -146,3 +204,33 @@ The API is compatible with standard S3 clients. Test with:
 - AWS CLI: `aws s3 --endpoint-url http://localhost:5214`
 - MinIO Client: `mc alias set local http://localhost:5214`
 - AWS SDKs with custom endpoint configuration
+
+### Working with Filesystem Storage
+
+**Important Implementation Details:**
+- File size is **never** stored in metadata; it's always read from the filesystem
+- This ensures size is always accurate even if files are modified directly on disk
+- Object keys with '/' are stored as nested directories on filesystem
+- Metadata files have `.json` extension appended to the object key
+- Both data and metadata directories are created automatically on startup
+- Bucket operations still use in-memory storage (InMemoryBucketService)
+
+**Testing Filesystem Storage:**
+```bash
+# Switch to filesystem storage
+# Edit appsettings.json: "StorageType": "Filesystem"
+
+# Run the application
+dotnet run --project S3Test/S3Test.csproj
+
+# Create bucket and upload object
+curl -X PUT http://localhost:5214/test-bucket
+echo "test content" | curl -X PUT -H "Content-Type: text/plain" --data-binary @- http://localhost:5214/test-bucket/test.txt
+
+# Check filesystem
+ls -la /tmp/s3tests/data/test-bucket/
+ls -la /tmp/s3tests/metadata/test-bucket/
+
+# Verify metadata doesn't contain size
+cat /tmp/s3tests/metadata/test-bucket/test.txt.json | jq .
+```
