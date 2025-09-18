@@ -173,11 +173,13 @@ public class FilesystemObjectService : IObjectService
         if (File.Exists(dataPath))
         {
             File.Delete(dataPath);
+            CleanupEmptyDirectories(Path.GetDirectoryName(dataPath)!, Path.Combine(_dataDirectory, bucketName));
         }
 
         if (File.Exists(metadataPath))
         {
             File.Delete(metadataPath);
+            CleanupEmptyDirectories(Path.GetDirectoryName(metadataPath)!, Path.Combine(_metadataDirectory, bucketName));
         }
 
         if (exists)
@@ -259,6 +261,45 @@ public class FilesystemObjectService : IObjectService
     {
         var dataPath = GetDataPath(bucketName, key);
         return Task.FromResult(File.Exists(dataPath));
+    }
+
+    public void CleanupBucketDirectories(string bucketName)
+    {
+        try
+        {
+            var bucketDataPath = Path.Combine(_dataDirectory, bucketName);
+            var bucketMetadataPath = Path.Combine(_metadataDirectory, bucketName);
+
+            if (Directory.Exists(bucketDataPath))
+            {
+                try
+                {
+                    Directory.Delete(bucketDataPath, recursive: true);
+                    _logger.LogInformation("Deleted bucket data directory: {Directory}", bucketDataPath);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete bucket data directory: {Directory}", bucketDataPath);
+                }
+            }
+
+            if (Directory.Exists(bucketMetadataPath))
+            {
+                try
+                {
+                    Directory.Delete(bucketMetadataPath, recursive: true);
+                    _logger.LogInformation("Deleted bucket metadata directory: {Directory}", bucketMetadataPath);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete bucket metadata directory: {Directory}", bucketMetadataPath);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error cleaning up bucket directories for {BucketName}", bucketName);
+        }
     }
 
     public async Task<S3ObjectInfo?> GetObjectInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default)
@@ -368,6 +409,63 @@ public class FilesystemObjectService : IObjectService
         }
 
         return metadata;
+    }
+
+    private void CleanupEmptyDirectories(string startPath, string stopPath)
+    {
+        try
+        {
+            // Normalize paths to avoid issues with path comparison
+            startPath = Path.GetFullPath(startPath);
+            stopPath = Path.GetFullPath(stopPath);
+
+            var currentPath = startPath;
+
+            // Walk up the directory tree until we reach the stopPath or can't go further
+            while (!string.IsNullOrEmpty(currentPath) &&
+                   !string.Equals(currentPath, stopPath, StringComparison.OrdinalIgnoreCase) &&
+                   currentPath.StartsWith(stopPath, StringComparison.OrdinalIgnoreCase))
+            {
+                if (Directory.Exists(currentPath))
+                {
+                    // Check if directory is empty (no files and no directories)
+                    var files = Directory.GetFiles(currentPath);
+                    var directories = Directory.GetDirectories(currentPath);
+
+                    if (files.Length == 0 && directories.Length == 0)
+                    {
+                        try
+                        {
+                            Directory.Delete(currentPath);
+                            _logger.LogDebug("Cleaned up empty directory: {Directory}", currentPath);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to delete empty directory: {Directory}", currentPath);
+                            break; // Stop trying to delete parent directories
+                        }
+                    }
+                    else
+                    {
+                        // Directory is not empty, stop cleanup
+                        break;
+                    }
+                }
+
+                // Move to parent directory
+                var parentPath = Path.GetDirectoryName(currentPath);
+                if (string.Equals(currentPath, parentPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Reached root or no more parent directories
+                    break;
+                }
+                currentPath = parentPath;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error during directory cleanup starting from {StartPath}", startPath);
+        }
     }
 
     private static string GuessContentType(string key)

@@ -101,9 +101,29 @@ public class BucketServiceTests
     }
 
     [Fact]
+    public async Task DeleteBucketAsync_ExistingBucketWithForce_ReturnsTrue()
+    {
+        await _bucketService.CreateBucketAsync("delete-bucket-force");
+
+        var deleteResult = await _bucketService.DeleteBucketAsync("delete-bucket-force", force: true);
+        var getResult = await _bucketService.GetBucketAsync("delete-bucket-force");
+
+        Assert.True(deleteResult);
+        Assert.Null(getResult);
+    }
+
+    [Fact]
     public async Task DeleteBucketAsync_NonExistingBucket_ReturnsFalse()
     {
         var result = await _bucketService.DeleteBucketAsync("non-existing-bucket-delete");
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public async Task DeleteBucketAsync_NonExistingBucketWithForce_ReturnsFalse()
+    {
+        var result = await _bucketService.DeleteBucketAsync("non-existing-bucket-delete-force", force: true);
 
         Assert.False(result);
     }

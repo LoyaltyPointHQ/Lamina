@@ -7,7 +7,6 @@ namespace S3Test.Services;
 
 public class FilesystemMultipartUploadService : IMultipartUploadService
 {
-    private readonly string _dataDirectory;
     private readonly string _metadataDirectory;
     private readonly string _tempDirectory;
     private readonly IObjectService _objectService;
@@ -18,7 +17,6 @@ public class FilesystemMultipartUploadService : IMultipartUploadService
         IObjectService objectService,
         ILogger<FilesystemMultipartUploadService> logger)
     {
-        _dataDirectory = configuration["FilesystemStorage:DataDirectory"] ?? "/var/s3test/data";
         _metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"] ?? "/var/s3test/metadata";
         _tempDirectory = Path.Combine(_metadataDirectory, "_multipart_uploads");
         _objectService = objectService;

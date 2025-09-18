@@ -48,7 +48,7 @@ public class InMemoryBucketService : IBucketService
         return Task.FromResult(response);
     }
 
-    public Task<bool> DeleteBucketAsync(string bucketName, CancellationToken cancellationToken = default)
+    public Task<bool> DeleteBucketAsync(string bucketName, bool force = false, CancellationToken cancellationToken = default)
     {
         return Task.FromResult(_buckets.TryRemove(bucketName, out _));
     }

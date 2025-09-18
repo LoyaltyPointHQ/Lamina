@@ -202,7 +202,8 @@ public class S3BucketsController : ControllerBase
     public async Task<IActionResult> DeleteBucket(string bucketName, CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Deleting bucket: {BucketName}", bucketName);
-        var deleted = await _bucketService.DeleteBucketAsync(bucketName, cancellationToken);
+
+        var deleted = await _bucketService.DeleteBucketAsync(bucketName, force: true, cancellationToken);
         if (!deleted)
         {
             _logger.LogWarning("Bucket not found for deletion: {BucketName}", bucketName);
@@ -263,4 +264,6 @@ public class S3BucketsController : ControllerBase
         Response.ContentType = "application/xml";
         return Ok(result);
     }
+
+
 }

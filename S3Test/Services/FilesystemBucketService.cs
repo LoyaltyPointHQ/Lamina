@@ -178,7 +178,7 @@ public class FilesystemBucketService : IBucketService
         return Task.FromResult(response);
     }
 
-    public async Task<bool> DeleteBucketAsync(string bucketName, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteBucketAsync(string bucketName, bool force = false, CancellationToken cancellationToken = default)
     {
         var bucketDataPath = Path.Combine(_dataDirectory, bucketName);
 
@@ -193,26 +193,40 @@ public class FilesystemBucketService : IBucketService
             var bucketMetadataPath = Path.Combine(_metadataDirectory, bucketName);
             var bucketMetadataFile = Path.Combine(_metadataDirectory, "_buckets", $"{bucketName}.json");
 
-            // Check if data directory is empty
-            if (Directory.GetFileSystemEntries(bucketDataPath).Any())
+            // If not forced, check if directories are empty
+            if (!force)
             {
-                _logger.LogWarning("Cannot delete non-empty bucket {BucketName}", bucketName);
-                return false;
+                // Check if data directory is empty
+                if (Directory.GetFileSystemEntries(bucketDataPath).Any())
+                {
+                    _logger.LogWarning("Cannot delete non-empty bucket {BucketName}", bucketName);
+                    return false;
+                }
+
+                // Check if metadata directory is empty
+                if (Directory.Exists(bucketMetadataPath) && Directory.GetFileSystemEntries(bucketMetadataPath).Any())
+                {
+                    _logger.LogWarning("Cannot delete bucket {BucketName} with metadata", bucketName);
+                    return false;
+                }
+
+                // Delete directories (non-recursive since they should be empty)
+                Directory.Delete(bucketDataPath, false);
+
+                if (Directory.Exists(bucketMetadataPath))
+                {
+                    Directory.Delete(bucketMetadataPath, false);
+                }
             }
-
-            // Check if metadata directory is empty
-            if (Directory.Exists(bucketMetadataPath) && Directory.GetFileSystemEntries(bucketMetadataPath).Any())
+            else
             {
-                _logger.LogWarning("Cannot delete bucket {BucketName} with metadata", bucketName);
-                return false;
-            }
+                // Force delete - remove all contents recursively
+                Directory.Delete(bucketDataPath, recursive: true);
 
-            // Delete directories
-            Directory.Delete(bucketDataPath, false);
-
-            if (Directory.Exists(bucketMetadataPath))
-            {
-                Directory.Delete(bucketMetadataPath, false);
+                if (Directory.Exists(bucketMetadataPath))
+                {
+                    Directory.Delete(bucketMetadataPath, recursive: true);
+                }
             }
 
             if (File.Exists(bucketMetadataFile))
@@ -220,7 +234,7 @@ public class FilesystemBucketService : IBucketService
                 File.Delete(bucketMetadataFile);
             }
 
-            _logger.LogInformation("Deleted bucket {BucketName} and its directories", bucketName);
+            _logger.LogInformation("Deleted bucket {BucketName} and its directories (force: {Force})", bucketName, force);
             return true;
         }
         catch (Exception ex)

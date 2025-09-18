@@ -131,6 +131,27 @@ public class BucketsControllerIntegrationTests : IClassFixture<WebApplicationFac
     }
 
     [Fact]
+    public async Task DeleteBucket_BucketWithFiles_Returns204()
+    {
+        var bucketName = $"delete-with-files-{Guid.NewGuid()}";
+
+        // Create bucket
+        await _client.PutAsync($"/{bucketName}", null);
+
+        // Add one simple file to the bucket
+        var putResponse = await _client.PutAsync($"/{bucketName}/file1.txt", new StringContent("content1"));
+        Assert.Equal(HttpStatusCode.OK, putResponse.StatusCode);
+
+        // Delete bucket (should delete all files)
+        var deleteResponse = await _client.DeleteAsync($"/{bucketName}");
+        Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
+
+        // Verify bucket is gone
+        var bucketResponse = await _client.GetAsync($"/{bucketName}");
+        Assert.Equal(HttpStatusCode.NotFound, bucketResponse.StatusCode);
+    }
+
+    [Fact]
     public async Task HeadBucket_ExistingBucket_Returns200()
     {
         var bucketName = $"head-test-{Guid.NewGuid()}";
