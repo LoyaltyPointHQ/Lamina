@@ -12,20 +12,20 @@ namespace S3Test.Controllers;
 [Produces("application/xml")]
 public class S3ObjectsController : ControllerBase
 {
-    private readonly IObjectService _objectService;
-    private readonly IBucketService _bucketService;
-    private readonly IMultipartUploadService _multipartUploadService;
+    private readonly IObjectServiceFacade _objectService;
+    private readonly IMultipartUploadServiceFacade _multipartService;
+    private readonly IBucketServiceFacade _bucketService;
     private readonly ILogger<S3ObjectsController> _logger;
 
     public S3ObjectsController(
-        IObjectService objectService,
-        IBucketService bucketService,
-        IMultipartUploadService multipartUploadService,
+        IObjectServiceFacade objectService,
+        IMultipartUploadServiceFacade multipartService,
+        IBucketServiceFacade bucketService,
         ILogger<S3ObjectsController> logger)
     {
         _objectService = objectService;
+        _multipartService = multipartService;
         _bucketService = bucketService;
-        _multipartUploadService = multipartUploadService;
         _logger = logger;
     }
 
@@ -73,6 +73,7 @@ public class S3ObjectsController : ControllerBase
         var reader = Request.BodyReader;
 
         _logger.LogInformation("Putting object {Key} in bucket {BucketName}", key, bucketName);
+
         var s3Object = await _objectService.PutObjectAsync(bucketName, key, reader, putRequest, cancellationToken);
         if (s3Object == null)
         {
@@ -101,8 +102,9 @@ public class S3ObjectsController : ControllerBase
             return await ListPartsInternal(bucketName, key, uploadId, partNumberMarker, maxParts, cancellationToken);
         }
         _logger.LogInformation("Getting object {Key} from bucket {BucketName}", key, bucketName);
-        var response = await _objectService.GetObjectAsync(bucketName, key, cancellationToken);
-        if (response == null)
+
+        var metadata = await _objectService.GetObjectInfoAsync(bucketName, key, cancellationToken);
+        if (metadata == null)
         {
             _logger.LogWarning("Object not found: {Key} in bucket {BucketName}", key, bucketName);
             var error = new S3Error
@@ -116,13 +118,13 @@ public class S3ObjectsController : ControllerBase
             return new ObjectResult(error);
         }
 
-        Response.Headers.Append("ETag", $"\"{response.ETag}\"");
-        Response.Headers.Append("Last-Modified", response.LastModified.ToString("R"));
-        Response.Headers.Append("Content-Length", response.ContentLength.ToString());
+        Response.Headers.Append("ETag", $"\"{metadata.ETag}\"");
+        Response.Headers.Append("Last-Modified", metadata.LastModified.ToString("R"));
+        Response.Headers.Append("Content-Length", metadata.Size.ToString());
 
-        foreach (var metadata in response.Metadata)
+        foreach (var metadataItem in metadata.Metadata)
         {
-            Response.Headers.Append($"x-amz-meta-{metadata.Key}", metadata.Value);
+            Response.Headers.Append($"x-amz-meta-{metadataItem.Key}", metadataItem.Value);
         }
 
         // Create a pipe to stream data back
@@ -134,7 +136,7 @@ public class S3ObjectsController : ControllerBase
         {
             try
             {
-                await _objectService.WriteObjectToPipeAsync(bucketName, key, writer, cancellationToken);
+                await _objectService.WriteObjectToStreamAsync(bucketName, key, writer, cancellationToken);
                 await writer.CompleteAsync();
             }
             catch (Exception ex)
@@ -143,7 +145,7 @@ public class S3ObjectsController : ControllerBase
             }
         });
 
-        return new FileStreamResult(pipe.Reader.AsStream(), response.ContentType);
+        return new FileStreamResult(pipe.Reader.AsStream(), metadata.ContentType);
     }
 
     [HttpDelete("{*key}")]
@@ -233,13 +235,18 @@ public class S3ObjectsController : ControllerBase
 
         try
         {
-            var response = await _multipartUploadService.InitiateMultipartUploadAsync(bucketName, request, cancellationToken);
+            if (!await _bucketService.BucketExistsAsync(bucketName, cancellationToken))
+            {
+                throw new InvalidOperationException($"Bucket '{bucketName}' does not exist");
+            }
+
+            var upload = await _multipartService.InitiateMultipartUploadAsync(bucketName, key, request, cancellationToken);
 
             var result = new InitiateMultipartUploadResult
             {
-                Bucket = response.BucketName,
-                Key = response.Key,
-                UploadId = response.UploadId
+                Bucket = bucketName,
+                Key = key,
+                UploadId = upload.UploadId
             };
 
             Response.ContentType = "application/xml";
@@ -270,8 +277,8 @@ public class S3ObjectsController : ControllerBase
         {
             // Use PipeReader from the request body
             var reader = Request.BodyReader;
-            var response = await _multipartUploadService.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, cancellationToken);
-            Response.Headers.Append("ETag", $"\"{response.ETag}\"");
+            var part = await _multipartService.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, cancellationToken);
+            Response.Headers.Append("ETag", $"\"{part.ETag}\"");
             return Ok();
         }
         catch (InvalidOperationException ex)
@@ -350,26 +357,20 @@ public class S3ObjectsController : ControllerBase
                 Parts = parts
             };
 
-            var response = await _multipartUploadService.CompleteMultipartUploadAsync(bucketName, key, request, cancellationToken);
-            if (response == null)
+            var completeRequest = new CompleteMultipartUploadRequest
             {
-                var error = new S3Error
-                {
-                    Code = "InvalidPart",
-                    Message = "One or more of the specified parts could not be found. Check ETags and part numbers.",
-                    Resource = $"{bucketName}/{key}"
-                };
-                Response.StatusCode = 400;
-                Response.ContentType = "application/xml";
-                return new ObjectResult(error);
-            }
+                UploadId = uploadId,
+                Parts = parts
+            };
+
+            var completeResponse = await _multipartService.CompleteMultipartUploadAsync(bucketName, key, completeRequest, cancellationToken);
 
             var result = new CompleteMultipartUploadResult
             {
                 Location = $"http://{Request.Host}/{bucketName}/{key}",
-                Bucket = response.BucketName,
-                Key = response.Key,
-                ETag = $"\"{response.ETag}\""
+                Bucket = bucketName,
+                Key = key,
+                ETag = $"\"{completeResponse.ETag}\""
             };
 
             Response.ContentType = "application/xml";
@@ -395,7 +396,7 @@ public class S3ObjectsController : ControllerBase
         string uploadId,
         CancellationToken cancellationToken)
     {
-        await _multipartUploadService.AbortMultipartUploadAsync(bucketName, key, uploadId, cancellationToken);
+        await _multipartService.AbortMultipartUploadAsync(bucketName, key, uploadId, cancellationToken);
         return NoContent();
     }
 
@@ -407,7 +408,7 @@ public class S3ObjectsController : ControllerBase
         int? maxParts,
         CancellationToken cancellationToken)
     {
-        var parts = await _multipartUploadService.ListPartsAsync(bucketName, key, uploadId, cancellationToken);
+        var parts = await _multipartService.ListPartsAsync(bucketName, key, uploadId, cancellationToken);
 
         var result = new ListPartsResult
         {

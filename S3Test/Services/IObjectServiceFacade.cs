@@ -3,13 +3,12 @@ using S3Test.Models;
 
 namespace S3Test.Services;
 
-public interface IObjectService
+public interface IObjectServiceFacade
 {
     Task<S3Object?> PutObjectAsync(string bucketName, string key, PipeReader dataReader, PutObjectRequest? request = null, CancellationToken cancellationToken = default);
-    Task<GetObjectResponse?> GetObjectAsync(string bucketName, string key, CancellationToken cancellationToken = default);
-    Task<bool> WriteObjectToPipeAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default);
+    Task<S3ObjectInfo?> GetObjectInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    Task<bool> WriteObjectToStreamAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default);
     Task<bool> DeleteObjectAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default);
     Task<bool> ObjectExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
-    Task<S3ObjectInfo?> GetObjectInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default);
 }

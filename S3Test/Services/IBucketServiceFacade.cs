@@ -2,7 +2,7 @@ using S3Test.Models;
 
 namespace S3Test.Services;
 
-public interface IBucketService
+public interface IBucketServiceFacade
 {
     Task<Bucket?> CreateBucketAsync(string bucketName, CreateBucketRequest? request = null, CancellationToken cancellationToken = default);
     Task<Bucket?> GetBucketAsync(string bucketName, CancellationToken cancellationToken = default);

@@ -38,19 +38,42 @@ var storageType = builder.Configuration["StorageType"] ?? "InMemory";
 
 if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
 {
-    builder.Services.AddSingleton<IBucketService, FilesystemBucketService>();
-    builder.Services.AddSingleton<IObjectService, FilesystemObjectService>();
-    builder.Services.AddSingleton<IMultipartUploadService, FilesystemMultipartUploadService>();
+    // Register bucket services
+    builder.Services.AddSingleton<IBucketDataService, FilesystemBucketDataService>();
+    builder.Services.AddSingleton<IBucketMetadataService, FilesystemBucketMetadataService>();
+
+    // Register data and metadata services for objects
+    builder.Services.AddSingleton<IObjectDataService, FilesystemObjectDataService>();
+    builder.Services.AddSingleton<IObjectMetadataService, FilesystemObjectMetadataService>();
+
+    // Register data and metadata services for multipart uploads
+    builder.Services.AddSingleton<IMultipartUploadDataService, FilesystemMultipartUploadDataService>();
+    builder.Services.AddSingleton<IMultipartUploadMetadataService, FilesystemMultipartUploadMetadataService>();
+
     builder.Logging.AddConsole().SetMinimumLevel(LogLevel.Information);
     Console.WriteLine("Using Filesystem storage");
 }
 else
 {
-    builder.Services.AddSingleton<IBucketService, InMemoryBucketService>();
-    builder.Services.AddSingleton<IObjectService, InMemoryObjectService>();
-    builder.Services.AddSingleton<IMultipartUploadService, InMemoryMultipartUploadService>();
+    // Register bucket services
+    builder.Services.AddSingleton<IBucketDataService, InMemoryBucketDataService>();
+    builder.Services.AddSingleton<IBucketMetadataService, InMemoryBucketMetadataService>();
+
+    // Register data and metadata services for objects
+    builder.Services.AddSingleton<IObjectDataService, InMemoryObjectDataService>();
+    builder.Services.AddSingleton<IObjectMetadataService, InMemoryObjectMetadataService>();
+
+    // Register data and metadata services for multipart uploads
+    builder.Services.AddSingleton<IMultipartUploadDataService, InMemoryMultipartUploadDataService>();
+    builder.Services.AddSingleton<IMultipartUploadMetadataService, InMemoryMultipartUploadMetadataService>();
+
     Console.WriteLine("Using In-Memory storage");
 }
+
+// Register facade services
+builder.Services.AddSingleton<IBucketServiceFacade, BucketServiceFacade>();
+builder.Services.AddSingleton<IObjectServiceFacade, ObjectServiceFacade>();
+builder.Services.AddSingleton<IMultipartUploadServiceFacade, MultipartUploadServiceFacade>();
 
 var app = builder.Build();
 

@@ -9,22 +9,22 @@ namespace S3Test.Controllers;
 [Produces("application/xml")]
 public class S3BucketsController : ControllerBase
 {
-    private readonly IBucketService _bucketService;
-    private readonly IObjectService _objectService;
-    private readonly IMultipartUploadService _multipartUploadService;
+    private readonly IBucketServiceFacade _bucketService;
+    private readonly IObjectServiceFacade _objectService;
+    private readonly IMultipartUploadServiceFacade _multipartService;
     private readonly IAuthenticationService _authService;
     private readonly ILogger<S3BucketsController> _logger;
 
     public S3BucketsController(
-        IBucketService bucketService,
-        IObjectService objectService,
-        IMultipartUploadService multipartUploadService,
+        IBucketServiceFacade bucketService,
+        IObjectServiceFacade objectService,
+        IMultipartUploadServiceFacade multipartService,
         IAuthenticationService authService,
         ILogger<S3BucketsController> logger)
     {
         _bucketService = bucketService;
         _objectService = objectService;
-        _multipartUploadService = multipartUploadService;
+        _multipartService = multipartService;
         _authService = authService;
         _logger = logger;
     }
@@ -241,7 +241,7 @@ public class S3BucketsController : ControllerBase
         int? maxUploads,
         CancellationToken cancellationToken)
     {
-        var uploads = await _multipartUploadService.ListMultipartUploadsAsync(bucketName, cancellationToken);
+        var uploads = await _multipartService.ListMultipartUploadsAsync(bucketName, cancellationToken);
 
         var result = new ListMultipartUploadsResult
         {
