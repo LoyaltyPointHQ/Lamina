@@ -145,12 +145,13 @@ namespace S3Test.Services
             }
 
             request.EnableBuffering();
-            var payload = "";
+            byte[] payload = Array.Empty<byte>();
             if (request.Body != null)
             {
                 request.Body.Position = 0;
-                using var reader = new StreamReader(request.Body, Encoding.UTF8, leaveOpen: true);
-                payload = await reader.ReadToEndAsync();
+                using var memoryStream = new MemoryStream();
+                await request.Body.CopyToAsync(memoryStream);
+                payload = memoryStream.ToArray();
                 request.Body.Position = 0;
             }
 
@@ -268,11 +269,16 @@ namespace S3Test.Services
             return BitConverter.ToString(hash).Replace("-", "").ToLower();
         }
 
-        private string GetHash(string text)
+        private string GetHash(byte[] data)
         {
             using var sha256 = SHA256.Create();
-            var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(text));
+            var hash = sha256.ComputeHash(data);
             return BitConverter.ToString(hash).Replace("-", "").ToLower();
+        }
+
+        private string GetHash(string text)
+        {
+            return GetHash(Encoding.UTF8.GetBytes(text));
         }
 
         private string EncodeUri(string uri)

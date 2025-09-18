@@ -28,7 +28,7 @@ namespace S3Test.Models
         public string CanonicalUri { get; set; } = string.Empty;
         public string CanonicalQueryString { get; set; } = string.Empty;
         public Dictionary<string, string> Headers { get; set; } = new();
-        public string Payload { get; set; } = string.Empty;
+        public byte[] Payload { get; set; } = Array.Empty<byte>();
         public string Region { get; set; } = string.Empty;
         public string Service { get; set; } = "s3";
         public DateTime RequestDateTime { get; set; }
