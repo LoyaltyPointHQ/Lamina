@@ -35,7 +35,27 @@ namespace S3Test.Middleware
             if (pathSegments.Length == 0)
             {
                 // Root path - ListBuckets operation
-                bucketName = "*"; // Use * for service-level operations
+                // For list buckets, we only need to validate the signature, not bucket permissions
+                var (bucketListIsValid, bucketListUser, bucketListError) = await _authService.ValidateRequestAsync(
+                    context.Request,
+                    "", // Empty bucket name for signature validation only
+                    null,
+                    "LIST");
+
+                if (!bucketListIsValid)
+                {
+                    _logger.LogWarning("Authentication failed: {Error}", bucketListError);
+                    await WriteErrorResponse(context, bucketListError ?? "Access Denied");
+                    return;
+                }
+
+                if (bucketListUser != null)
+                {
+                    context.Items["AuthenticatedUser"] = bucketListUser;
+                }
+
+                await _next(context);
+                return;
             }
             else
             {

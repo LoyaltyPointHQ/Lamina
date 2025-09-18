@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Xml.Serialization;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Hosting;
 using S3Test.Models;
 
 namespace S3Test.Tests.Controllers;
@@ -13,7 +14,10 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
 
     public ObjectsControllerIntegrationTests(WebApplicationFactory<Program> factory)
     {
-        _factory = factory;
+        _factory = factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Test");
+        });
         _client = _factory.CreateClient();
     }
 

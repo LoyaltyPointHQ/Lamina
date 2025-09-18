@@ -12,17 +12,20 @@ public class S3BucketsController : ControllerBase
     private readonly IBucketService _bucketService;
     private readonly IObjectService _objectService;
     private readonly IMultipartUploadService _multipartUploadService;
+    private readonly IAuthenticationService _authService;
     private readonly ILogger<S3BucketsController> _logger;
 
     public S3BucketsController(
         IBucketService bucketService,
         IObjectService objectService,
         IMultipartUploadService multipartUploadService,
+        IAuthenticationService authService,
         ILogger<S3BucketsController> logger)
     {
         _bucketService = bucketService;
         _objectService = objectService;
         _multipartUploadService = multipartUploadService;
+        _authService = authService;
         _logger = logger;
     }
 
@@ -97,10 +100,27 @@ public class S3BucketsController : ControllerBase
     {
         var buckets = await _bucketService.ListBucketsAsync(cancellationToken);
 
+        // Filter buckets based on user permissions
+        var filteredBuckets = buckets.Buckets;
+
+        if (_authService.IsAuthenticationEnabled())
+        {
+            var user = HttpContext.Items["AuthenticatedUser"] as S3User;
+            if (user != null)
+            {
+                filteredBuckets = buckets.Buckets.Where(bucket =>
+                    _authService.UserHasAccessToBucket(user, bucket.Name, "list") ||
+                    _authService.UserHasAccessToBucket(user, bucket.Name, "read") ||
+                    _authService.UserHasAccessToBucket(user, bucket.Name, "write") ||
+                    _authService.UserHasAccessToBucket(user, bucket.Name, "delete")
+                ).ToList();
+            }
+        }
+
         var result = new ListAllMyBucketsResult
         {
             Owner = new Owner(),
-            Buckets = buckets.Buckets.Select(b => new BucketInfo
+            Buckets = filteredBuckets.Select(b => new BucketInfo
             {
                 Name = b.Name,
                 CreationDate = b.CreationDate.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")

@@ -62,7 +62,8 @@ namespace S3Test.Services
                     return (false, null, "Invalid access key");
                 }
 
-                if (!CheckPermissions(user, bucketName, operation))
+                // Skip permission check for list buckets operation (empty bucket name)
+                if (!string.IsNullOrEmpty(bucketName) && !CheckPermissions(user, bucketName, operation))
                 {
                     return (false, user, "Access denied");
                 }
@@ -81,6 +82,11 @@ namespace S3Test.Services
                 _logger.LogError(ex, "Error validating request");
                 return (false, null, "Authentication error");
             }
+        }
+
+        public bool UserHasAccessToBucket(S3User user, string bucketName, string? operation = null)
+        {
+            return CheckPermissions(user, bucketName, operation);
         }
 
         private bool CheckPermissions(S3User user, string bucketName, string? operation)
