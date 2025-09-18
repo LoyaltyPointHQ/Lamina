@@ -12,20 +12,43 @@ public class S3BucketsController : ControllerBase
     private readonly IBucketService _bucketService;
     private readonly IObjectService _objectService;
     private readonly IMultipartUploadService _multipartUploadService;
+    private readonly ILogger<S3BucketsController> _logger;
 
-    public S3BucketsController(IBucketService bucketService, IObjectService objectService, IMultipartUploadService multipartUploadService)
+    public S3BucketsController(
+        IBucketService bucketService,
+        IObjectService objectService,
+        IMultipartUploadService multipartUploadService,
+        ILogger<S3BucketsController> logger)
     {
         _bucketService = bucketService;
         _objectService = objectService;
         _multipartUploadService = multipartUploadService;
+        _logger = logger;
     }
 
     [HttpPut("{bucketName}")]
     public async Task<IActionResult> CreateBucket(string bucketName, CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Creating bucket: {BucketName}", bucketName);
+
+        if (!IsValidBucketName(bucketName))
+        {
+            _logger.LogWarning("Invalid bucket name: {BucketName}", bucketName);
+            var error = new S3Error
+            {
+                Code = "InvalidBucketName",
+                Message = "The specified bucket is not valid. Bucket names must be between 3-63 characters, contain only lowercase letters, numbers, dots, and hyphens, and follow S3 naming conventions.",
+                Resource = bucketName
+            };
+            Response.StatusCode = 400;
+            Response.ContentType = "application/xml";
+            return new ObjectResult(error);
+        }
+
         var bucket = await _bucketService.CreateBucketAsync(bucketName, null, cancellationToken);
         if (bucket == null)
         {
+            _logger.LogWarning("Bucket already exists: {BucketName}", bucketName);
             var error = new S3Error
             {
                 Code = "BucketAlreadyExists",
@@ -37,8 +60,35 @@ public class S3BucketsController : ControllerBase
             return new ObjectResult(error);
         }
 
+        _logger.LogInformation("Bucket created successfully: {BucketName}", bucketName);
         Response.Headers.Append("Location", $"/{bucketName}");
         return Ok();
+    }
+
+    private static bool IsValidBucketName(string bucketName)
+    {
+        if (string.IsNullOrWhiteSpace(bucketName) || bucketName.Length < 3 || bucketName.Length > 63)
+            return false;
+
+        var regex = new System.Text.RegularExpressions.Regex(@"^[a-z0-9][a-z0-9.-]*[a-z0-9]$");
+        if (!regex.IsMatch(bucketName))
+            return false;
+
+        if (bucketName.Contains("..") || bucketName.Contains(".-") || bucketName.Contains("-."))
+            return false;
+
+        var ipRegex = new System.Text.RegularExpressions.Regex(@"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$");
+        if (ipRegex.IsMatch(bucketName))
+            return false;
+
+        string[] reservedPrefixes = { "xn--", "sthree-", "amzn-s3-demo-" };
+        foreach (var prefix in reservedPrefixes)
+        {
+            if (bucketName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        return true;
     }
 
     [HttpGet("")]
@@ -131,9 +181,11 @@ public class S3BucketsController : ControllerBase
     [HttpDelete("{bucketName}")]
     public async Task<IActionResult> DeleteBucket(string bucketName, CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Deleting bucket: {BucketName}", bucketName);
         var deleted = await _bucketService.DeleteBucketAsync(bucketName, cancellationToken);
         if (!deleted)
         {
+            _logger.LogWarning("Bucket not found for deletion: {BucketName}", bucketName);
             var error = new S3Error
             {
                 Code = "NoSuchBucket",
@@ -145,6 +197,7 @@ public class S3BucketsController : ControllerBase
             return new ObjectResult(error);
         }
 
+        _logger.LogInformation("Bucket deleted successfully: {BucketName}", bucketName);
         return NoContent();
     }
 

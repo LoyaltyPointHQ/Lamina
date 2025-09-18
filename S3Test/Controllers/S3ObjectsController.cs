@@ -14,12 +14,18 @@ public class S3ObjectsController : ControllerBase
     private readonly IObjectService _objectService;
     private readonly IBucketService _bucketService;
     private readonly IMultipartUploadService _multipartUploadService;
+    private readonly ILogger<S3ObjectsController> _logger;
 
-    public S3ObjectsController(IObjectService objectService, IBucketService bucketService, IMultipartUploadService multipartUploadService)
+    public S3ObjectsController(
+        IObjectService objectService,
+        IBucketService bucketService,
+        IMultipartUploadService multipartUploadService,
+        ILogger<S3ObjectsController> logger)
     {
         _objectService = objectService;
         _bucketService = bucketService;
         _multipartUploadService = multipartUploadService;
+        _logger = logger;
     }
 
     [HttpPut("{*key}")]
@@ -34,6 +40,7 @@ public class S3ObjectsController : ControllerBase
         // If uploadId and partNumber are present, this is a part upload
         if (!string.IsNullOrEmpty(uploadId) && partNumber.HasValue)
         {
+            _logger.LogInformation("Uploading part {PartNumber} for upload {UploadId} in bucket {BucketName}, key {Key}", partNumber.Value, uploadId, bucketName, key);
             return await UploadPartInternal(bucketName, key, partNumber.Value, uploadId, cancellationToken);
         }
 
@@ -64,12 +71,15 @@ public class S3ObjectsController : ControllerBase
                 .ToDictionary(h => h.Key.Substring(11), h => h.Value.ToString())
         };
 
+        _logger.LogInformation("Putting object {Key} in bucket {BucketName}, size: {Size} bytes", key, bucketName, data.Length);
         var s3Object = await _objectService.PutObjectAsync(bucketName, key, data, putRequest, cancellationToken);
         if (s3Object == null)
         {
+            _logger.LogError("Failed to put object {Key} in bucket {BucketName}", key, bucketName);
             return StatusCode(500);
         }
 
+        _logger.LogInformation("Object {Key} stored successfully in bucket {BucketName}, ETag: {ETag}", key, bucketName, s3Object.ETag);
         Response.Headers.Append("ETag", $"\"{s3Object.ETag}\"");
         Response.Headers.Append("x-amz-version-id", "null");
         return Ok();
@@ -89,9 +99,11 @@ public class S3ObjectsController : ControllerBase
         {
             return await ListPartsInternal(bucketName, key, uploadId, partNumberMarker, maxParts, cancellationToken);
         }
+        _logger.LogInformation("Getting object {Key} from bucket {BucketName}", key, bucketName);
         var response = await _objectService.GetObjectAsync(bucketName, key, cancellationToken);
         if (response == null)
         {
+            _logger.LogWarning("Object not found: {Key} in bucket {BucketName}", key, bucketName);
             var error = new S3Error
             {
                 Code = "NoSuchKey",
@@ -125,6 +137,7 @@ public class S3ObjectsController : ControllerBase
         // Abort multipart upload
         if (!string.IsNullOrEmpty(uploadId))
         {
+            _logger.LogInformation("Aborting multipart upload {UploadId} for key {Key} in bucket {BucketName}", uploadId, key, bucketName);
             return await AbortMultipartUploadInternal(bucketName, key, uploadId, cancellationToken);
         }
         if (!await _bucketService.BucketExistsAsync(bucketName, cancellationToken))
@@ -133,6 +146,7 @@ public class S3ObjectsController : ControllerBase
             return NoContent();
         }
 
+        _logger.LogInformation("Deleting object {Key} from bucket {BucketName}", key, bucketName);
         await _objectService.DeleteObjectAsync(bucketName, key, cancellationToken);
         return NoContent();
     }

@@ -81,9 +81,12 @@ public class InMemoryMultipartUploadService : IMultipartUploadService
             Data = data
         };
 
-        upload.Parts.RemoveAll(p => p.PartNumber == partNumber);
-        upload.Parts.Add(part);
-        upload.Parts.Sort((a, b) => a.PartNumber.CompareTo(b.PartNumber));
+        lock (upload.Parts)
+        {
+            upload.Parts.RemoveAll(p => p.PartNumber == partNumber);
+            upload.Parts.Add(part);
+            upload.Parts.Sort((a, b) => a.PartNumber.CompareTo(b.PartNumber));
+        }
 
         return new UploadPartResponse
         {
@@ -114,7 +117,11 @@ public class InMemoryMultipartUploadService : IMultipartUploadService
         }
 
         var completedPartNumbers = request.Parts.Select(p => p.PartNumber).ToHashSet();
-        var uploadedParts = upload.Parts.Where(p => completedPartNumbers.Contains(p.PartNumber)).OrderBy(p => p.PartNumber).ToList();
+        List<UploadPart> uploadedParts;
+        lock (upload.Parts)
+        {
+            uploadedParts = upload.Parts.Where(p => completedPartNumbers.Contains(p.PartNumber)).OrderBy(p => p.PartNumber).ToList();
+        }
 
         if (uploadedParts.Count != request.Parts.Count)
         {
@@ -186,13 +193,16 @@ public class InMemoryMultipartUploadService : IMultipartUploadService
         {
             if (upload.BucketName == bucketName && upload.Key == key)
             {
-                return Task.FromResult(upload.Parts.Select(p => new UploadPart
+                lock (upload.Parts)
                 {
-                    PartNumber = p.PartNumber,
-                    ETag = p.ETag,
-                    Size = p.Size,
-                    LastModified = p.LastModified
-                }).ToList());
+                    return Task.FromResult(upload.Parts.Select(p => new UploadPart
+                    {
+                        PartNumber = p.PartNumber,
+                        ETag = p.ETag,
+                        Size = p.Size,
+                        LastModified = p.LastModified
+                    }).ToList());
+                }
             }
         }
 
@@ -215,6 +225,6 @@ public class InMemoryMultipartUploadService : IMultipartUploadService
     {
         using var md5 = MD5.Create();
         var hash = md5.ComputeHash(data);
-        return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 }

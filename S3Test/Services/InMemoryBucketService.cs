@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using S3Test.Models;
 
 namespace S3Test.Services;
@@ -6,10 +7,12 @@ namespace S3Test.Services;
 public class InMemoryBucketService : IBucketService
 {
     private readonly ConcurrentDictionary<string, Bucket> _buckets = new();
+    private static readonly Regex BucketNameRegex = new(@"^[a-z0-9][a-z0-9.-]*[a-z0-9]$", RegexOptions.Compiled);
+    private static readonly Regex IpAddressRegex = new(@"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", RegexOptions.Compiled);
 
     public Task<Bucket?> CreateBucketAsync(string bucketName, CreateBucketRequest? request = null, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(bucketName))
+        if (!IsValidBucketName(bucketName))
         {
             return Task.FromResult<Bucket?>(null);
         }
@@ -64,5 +67,32 @@ public class InMemoryBucketService : IBucketService
         }
 
         return Task.FromResult<Bucket?>(null);
+    }
+
+    private static bool IsValidBucketName(string bucketName)
+    {
+        if (string.IsNullOrWhiteSpace(bucketName))
+            return false;
+
+        if (bucketName.Length < 3 || bucketName.Length > 63)
+            return false;
+
+        if (!BucketNameRegex.IsMatch(bucketName))
+            return false;
+
+        if (bucketName.Contains("..") || bucketName.Contains(".-") || bucketName.Contains("-."))
+            return false;
+
+        if (IpAddressRegex.IsMatch(bucketName))
+            return false;
+
+        string[] reservedPrefixes = { "xn--", "sthree-", "amzn-s3-demo-" };
+        foreach (var prefix in reservedPrefixes)
+        {
+            if (bucketName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        return true;
     }
 }
