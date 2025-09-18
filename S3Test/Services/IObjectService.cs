@@ -1,0 +1,13 @@
+using S3Test.Models;
+
+namespace S3Test.Services;
+
+public interface IObjectService
+{
+    Task<S3Object?> PutObjectAsync(string bucketName, string key, byte[] data, PutObjectRequest? request = null, CancellationToken cancellationToken = default);
+    Task<GetObjectResponse?> GetObjectAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    Task<bool> DeleteObjectAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default);
+    Task<bool> ObjectExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    Task<S3ObjectInfo?> GetObjectInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+}
