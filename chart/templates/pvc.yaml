@@ -1,0 +1,21 @@
+{{- if and (eq .Values.config.storageType "Filesystem") .Values.config.filesystemStorage.persistentVolume.enabled (not .Values.config.filesystemStorage.persistentVolume.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "s3test.fullname" . }}-data
+  labels:
+    {{- include "s3test.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.config.filesystemStorage.persistentVolume.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.config.filesystemStorage.persistentVolume.size }}
+  {{- if .Values.config.filesystemStorage.persistentVolume.storageClass }}
+  {{- if (eq "-" .Values.config.filesystemStorage.persistentVolume.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.config.filesystemStorage.persistentVolume.storageClass }}
+  {{- end }}
+  {{- end }}
+{{- end }}

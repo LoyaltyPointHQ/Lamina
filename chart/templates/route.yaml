@@ -1,0 +1,41 @@
+{{- if eq (include "s3test.routeEnabled" .) "true" }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "s3test.fullname" . }}
+  labels:
+    {{- include "s3test.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.route.host }}
+  host: {{ .Values.route.host }}
+  {{- end }}
+  path: {{ .Values.route.path }}
+  to:
+    kind: Service
+    name: {{ include "s3test.fullname" . }}
+    weight: 100
+  port:
+    targetPort: http
+  {{- if .Values.route.tls.enabled }}
+  tls:
+    termination: {{ .Values.route.tls.termination }}
+    insecureEdgeTerminationPolicy: {{ .Values.route.tls.insecureEdgeTerminationPolicy }}
+    {{- if .Values.route.tls.certificate }}
+    certificate: |
+{{ .Values.route.tls.certificate | indent 6 }}
+    {{- end }}
+    {{- if .Values.route.tls.key }}
+    key: |
+{{ .Values.route.tls.key | indent 6 }}
+    {{- end }}
+    {{- if .Values.route.tls.caCertificate }}
+    caCertificate: |
+{{ .Values.route.tls.caCertificate | indent 6 }}
+    {{- end }}
+    {{- if and (eq .Values.route.tls.termination "reencrypt") .Values.route.tls.destinationCACertificate }}
+    destinationCACertificate: |
+{{ .Values.route.tls.destinationCACertificate | indent 6 }}
+    {{- end }}
+  {{- end }}
+  wildcardPolicy: {{ .Values.route.wildcardPolicy }}
+{{- end }}

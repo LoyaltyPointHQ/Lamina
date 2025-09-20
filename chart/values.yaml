@@ -1,0 +1,195 @@
+# Default values for s3test.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Platform detection - can be overridden
+platform:
+  # Auto-detect OpenShift (set to "auto", "kubernetes", or "openshift")
+  type: auto
+
+# Number of replicas
+replicaCount: 1
+
+# Image configuration
+image:
+  repository: s3test
+  pullPolicy: IfNotPresent
+  tag: ""  # Defaults to .Chart.AppVersion
+
+# ImageStream configuration (OpenShift only)
+imageStream:
+  enabled: auto  # auto, true, or false
+  namespace: ""  # Defaults to release namespace
+  name: s3test
+
+# Service account configuration
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod annotations and labels
+podAnnotations: {}
+podLabels: {}
+
+# Security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  fsGroup: 1001
+
+securityContext:
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  annotations: {}
+
+# Ingress configuration (Kubernetes)
+ingress:
+  enabled: auto  # auto, true, or false (auto = true on k8s, false on openshift)
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: s3test.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: s3test-tls
+  #    hosts:
+  #      - s3test.local
+
+# Route configuration (OpenShift)
+route:
+  enabled: auto  # auto, true, or false (auto = true on openshift, false on k8s)
+  host: ""  # Leave empty to auto-generate
+  path: /
+  wildcardPolicy: None
+  tls:
+    enabled: true
+    termination: edge  # edge, passthrough, or reencrypt
+    insecureEdgeTerminationPolicy: Redirect  # Allow, Redirect, or None
+    certificate: ""
+    key: ""
+    caCertificate: ""
+    destinationCACertificate: ""
+
+# Resources
+resources:
+  limits:
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# Autoscaling
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Application configuration
+config:
+  # Storage configuration
+  storageType: InMemory  # InMemory or Filesystem
+
+  # Filesystem storage configuration
+  filesystemStorage:
+    enabled: false
+    dataDirectory: /data/s3test/data
+    metadataDirectory: /data/s3test/metadata
+    # Persistent volume configuration
+    persistentVolume:
+      enabled: false
+      storageClass: ""
+      accessMode: ReadWriteOnce
+      size: 10Gi
+      existingClaim: ""
+
+  # Authentication configuration
+  authentication:
+    enabled: false
+    users: []
+    # Example user configuration:
+    # - accessKeyId: "admin"
+    #   secretAccessKey: "admin-secret"
+    #   name: "admin-user"
+    #   bucketPermissions:
+    #     - bucketName: "*"
+    #       permissions: ["*"]
+
+  # Multipart upload cleanup configuration
+  multipartUploadCleanup:
+    enabled: true
+    cleanupIntervalMinutes: 60
+    uploadTimeoutHours: 24
+
+  # Storage limits
+  limits:
+    maxBuckets: 100
+    maxObjectsPerBucket: 10000
+    maxObjectSize: 5368709120  # 5GB in bytes
+    maxMultipartUploads: 1000
+    maxPartsPerUpload: 10000
+
+  # CORS configuration
+  cors:
+    enabled: true
+    origins: ["*"]
+    methods: ["GET", "PUT", "POST", "DELETE", "HEAD"]
+    headers: ["*"]
+    exposeHeaders: ["ETag", "x-amz-request-id"]
+    maxAge: 3600
+
+# Liveness and readiness probes
+livenessProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Environment variables
+env: []
+  # - name: ASPNETCORE_ENVIRONMENT
+  #   value: Production
+
+# Extra volume mounts
+volumeMounts: []
+
+# Extra volumes
+volumes: []

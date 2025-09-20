@@ -1,0 +1,18 @@
+apiVersion: v2
+name: s3test
+description: S3-compatible storage API service with support for Kubernetes and OpenShift
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - s3
+  - storage
+  - api
+  - dotnet
+home: https://github.com/your-org/s3test
+sources:
+  - https://github.com/your-org/s3test
+maintainers:
+  - name: Your Name
+    email: your-email@example.com
+icon: https://example.com/s3test-icon.png
