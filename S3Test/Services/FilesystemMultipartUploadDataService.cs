@@ -193,8 +193,8 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
 
     private static string ComputeETag(byte[] data)
     {
-        using var md5 = MD5.Create();
-        var hash = md5.ComputeHash(data);
+        using var sha1 = SHA1.Create();
+        var hash = sha1.ComputeHash(data);
         return Convert.ToHexString(hash).ToLower();
     }
 }
