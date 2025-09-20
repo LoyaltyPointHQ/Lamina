@@ -75,6 +75,14 @@ builder.Services.AddSingleton<IBucketServiceFacade, BucketServiceFacade>();
 builder.Services.AddSingleton<IObjectServiceFacade, ObjectServiceFacade>();
 builder.Services.AddSingleton<IMultipartUploadServiceFacade, MultipartUploadServiceFacade>();
 
+// Register multipart upload cleanup service if enabled
+var cleanupEnabled = builder.Configuration.GetValue<bool>("MultipartUploadCleanup:Enabled", true);
+if (cleanupEnabled)
+{
+    builder.Services.AddHostedService<MultipartUploadCleanupService>();
+    Console.WriteLine("Multipart upload cleanup service enabled");
+}
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
