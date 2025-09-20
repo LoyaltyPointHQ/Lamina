@@ -4,9 +4,9 @@ namespace S3Test.Services;
 
 public interface IFileSystemLockManager
 {
-    Task<T> ReadFileAsync<T>(string filePath, Func<string, Task<T>> readOperation, CancellationToken cancellationToken = default);
-    Task WriteFileAsync(string filePath, Func<Task<string>> writeOperation, CancellationToken cancellationToken = default);
-    Task<bool> DeleteFileAsync(string filePath, CancellationToken cancellationToken = default);
+    Task<T?> ReadFileAsync<T>(string filePath, Func<string, Task<T>> readOperation, CancellationToken cancellationToken = default);
+    Task WriteFileAsync(string filePath, string content, CancellationToken cancellationToken = default);
+    bool DeleteFile(string filePath);
 }
 
 public class FileSystemLockManager : IFileSystemLockManager, IDisposable
@@ -22,7 +22,7 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
         {
             _filePath = filePath;
             _manager = manager;
-            Lock = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
+            Lock = new ReaderWriterLockSlim();
         }
 
         public void Acquire() => _referenceCount++;
@@ -50,12 +50,12 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
         _logger = logger;
     }
 
-    public async Task<T> ReadFileAsync<T>(string filePath, Func<string, Task<T>> readOperation, CancellationToken cancellationToken = default)
+    public async Task<T?> ReadFileAsync<T>(string filePath, Func<string, Task<T>> readOperation, CancellationToken cancellationToken = default)
     {
         var lockKey = GetNormalizedPath(filePath);
         using var lockInfo = AcquireLockInfo(lockKey);
 
-        bool lockAcquired = false;
+        var lockAcquired = false;
         try
         {
             if (!lockInfo.Lock.TryEnterReadLock(_lockTimeout))
@@ -67,7 +67,7 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
 
             if (!File.Exists(filePath))
             {
-                return default(T)!;
+                return default;
             }
 
             var content = await File.ReadAllTextAsync(filePath, cancellationToken);
@@ -95,12 +95,12 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
         }
     }
 
-    public async Task WriteFileAsync(string filePath, Func<Task<string>> writeOperation, CancellationToken cancellationToken = default)
+    public async Task WriteFileAsync(string filePath, string content, CancellationToken cancellationToken = default)
     {
         var lockKey = GetNormalizedPath(filePath);
         using var lockInfo = AcquireLockInfo(lockKey);
 
-        bool lockAcquired = false;
+        var lockAcquired = false;
         try
         {
             if (!lockInfo.Lock.TryEnterWriteLock(_lockTimeout))
@@ -110,9 +110,6 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
 
             lockAcquired = true;
 
-            // Generate new content
-            var newContent = await writeOperation();
-
             // Ensure directory exists
             var directory = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrEmpty(directory))
@@ -120,7 +117,7 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
                 Directory.CreateDirectory(directory);
             }
 
-            await File.WriteAllTextAsync(filePath, newContent, cancellationToken);
+            await File.WriteAllTextAsync(filePath, content, cancellationToken);
         }
         finally
         {
@@ -144,12 +141,12 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
         }
     }
 
-    public async Task<bool> DeleteFileAsync(string filePath, CancellationToken cancellationToken = default)
+    public bool DeleteFile(string filePath)
     {
         var lockKey = GetNormalizedPath(filePath);
         using var lockInfo = AcquireLockInfo(lockKey);
 
-        bool lockAcquired = false;
+        var lockAcquired = false;
         try
         {
             if (!lockInfo.Lock.TryEnterWriteLock(_lockTimeout))

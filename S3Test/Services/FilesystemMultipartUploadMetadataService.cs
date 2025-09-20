@@ -40,7 +40,7 @@ public class FilesystemMultipartUploadMetadataService : IMultipartUploadMetadata
 
         var json = JsonSerializer.Serialize(upload, new JsonSerializerOptions { WriteIndented = true });
 
-        await _lockManager.WriteFileAsync(uploadMetadataPath, () => Task.FromResult(json), cancellationToken);
+        await _lockManager.WriteFileAsync(uploadMetadataPath, json, cancellationToken);
 
         return upload;
     }
@@ -67,10 +67,10 @@ public class FilesystemMultipartUploadMetadataService : IMultipartUploadMetadata
         return upload;
     }
 
-    public async Task<bool> DeleteUploadMetadataAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
+    public Task<bool> DeleteUploadMetadataAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
     {
         var uploadMetadataPath = GetUploadMetadataPath(uploadId);
-        return await _lockManager.DeleteFileAsync(uploadMetadataPath, cancellationToken);
+        return Task.FromResult(_lockManager.DeleteFile(uploadMetadataPath));
     }
 
     public async Task<List<MultipartUpload>> ListUploadsAsync(string bucketName, CancellationToken cancellationToken = default)

@@ -107,22 +107,22 @@ public class FilesystemBucketMetadataService : IBucketMetadataService
         return buckets.OrderBy(b => b.Name).ToList();
     }
 
-    public async Task<bool> DeleteBucketMetadataAsync(string bucketName, CancellationToken cancellationToken = default)
+    public Task<bool> DeleteBucketMetadataAsync(string bucketName, CancellationToken cancellationToken = default)
     {
         try
         {
             var metadataFile = Path.Combine(_metadataDirectory, "_buckets", $"{bucketName}.json");
             if (File.Exists(metadataFile))
             {
-                return await _lockManager.DeleteFileAsync(metadataFile, cancellationToken);
+                return Task.FromResult(_lockManager.DeleteFile(metadataFile));
             }
 
-            return true;
+            return Task.FromResult(true);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to delete bucket metadata: {BucketName}", bucketName);
-            return false;
+            return Task.FromResult(false);
         }
     }
 
@@ -151,7 +151,7 @@ public class FilesystemBucketMetadataService : IBucketMetadataService
             };
 
             var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
-            await _lockManager.WriteFileAsync(metadataFile, () => Task.FromResult(json), cancellationToken);
+            await _lockManager.WriteFileAsync(metadataFile, json, cancellationToken);
         }
         catch (Exception ex)
         {

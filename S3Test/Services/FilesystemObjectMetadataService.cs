@@ -58,7 +58,7 @@ public class FilesystemObjectMetadataService : IObjectMetadataService
 
         var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
 
-        await _lockManager.WriteFileAsync(metadataPath, () => Task.FromResult(json), cancellationToken);
+        await _lockManager.WriteFileAsync(metadataPath, json, cancellationToken);
 
         return s3Object;
     }
@@ -97,10 +97,10 @@ public class FilesystemObjectMetadataService : IObjectMetadataService
         };
     }
 
-    public async Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         var metadataPath = GetMetadataPath(bucketName, key);
-        var result = await _lockManager.DeleteFileAsync(metadataPath, cancellationToken);
+        var result = _lockManager.DeleteFile(metadataPath);
 
         // Clean up empty directories
         try
@@ -126,7 +126,7 @@ public class FilesystemObjectMetadataService : IObjectMetadataService
             _logger.LogWarning(ex, "Failed to clean up empty directories for path: {MetadataPath}", metadataPath);
         }
 
-        return result;
+        return Task.FromResult(result);
     }
 
     public async Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)

@@ -96,12 +96,12 @@ public class FilesystemObjectDataService : IObjectDataService
         return true;
     }
 
-    public async Task<bool> DeleteDataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public Task<bool> DeleteDataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         var dataPath = GetDataPath(bucketName, key);
         if (!File.Exists(dataPath))
         {
-            return false;
+            return Task.FromResult(false);
         }
 
         File.Delete(dataPath);
@@ -130,7 +130,7 @@ public class FilesystemObjectDataService : IObjectDataService
             _logger.LogWarning(ex, "Failed to clean up empty directories for path: {DataPath}", dataPath);
         }
 
-        return true;
+        return Task.FromResult(true);
     }
 
     public Task<bool> DataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
