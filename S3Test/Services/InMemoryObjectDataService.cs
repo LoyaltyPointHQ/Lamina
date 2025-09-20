@@ -9,7 +9,7 @@ public class InMemoryObjectDataService : IObjectDataService
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte[]>> _data = new();
 
-    public async Task<(byte[] data, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, CancellationToken cancellationToken = default)
+    public async Task<(long size, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, CancellationToken cancellationToken = default)
     {
         var bucketData = _data.GetOrAdd(bucketName, _ => new ConcurrentDictionary<string, byte[]>());
 
@@ -54,7 +54,60 @@ public class InMemoryObjectDataService : IObjectDataService
         var etag = ETagHelper.ComputeETag(combinedData);
         bucketData[key] = combinedData;
 
-        return (combinedData, etag);
+        return (totalSize, etag);
+    }
+
+    public async Task<(long size, string etag)> StoreMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
+    {
+        var bucketData = _data.GetOrAdd(bucketName, _ => new ConcurrentDictionary<string, byte[]>());
+
+        var allSegments = new List<byte[]>();
+        long totalSize = 0;
+
+        // Read all parts
+        foreach (var reader in partReaders)
+        {
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    var result = await reader.ReadAsync(cancellationToken);
+                    var buffer = result.Buffer;
+
+                    if (buffer.Length > 0)
+                    {
+                        var data = buffer.ToArray();
+                        allSegments.Add(data);
+                        totalSize += data.Length;
+                    }
+
+                    reader.AdvanceTo(buffer.End);
+
+                    if (result.IsCompleted)
+                    {
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                await reader.CompleteAsync();
+            }
+        }
+
+        // Combine all segments into one array
+        var combinedData = new byte[totalSize];
+        var offset = 0;
+        foreach (var segment in allSegments)
+        {
+            Buffer.BlockCopy(segment, 0, combinedData, offset, segment.Length);
+            offset += segment.Length;
+        }
+
+        var etag = ETagHelper.ComputeETag(combinedData);
+        bucketData[key] = combinedData;
+
+        return (totalSize, etag);
     }
 
     public Task<byte[]?> GetDataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
@@ -87,23 +140,6 @@ public class InMemoryObjectDataService : IObjectDataService
             return Task.FromResult(bucketData.TryRemove(key, out _));
         }
         return Task.FromResult(false);
-    }
-
-    public Task<bool> DataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
-    {
-        return Task.FromResult(
-            _data.TryGetValue(bucketName, out var bucketData) &&
-            bucketData.ContainsKey(key));
-    }
-
-    public Task<long?> GetDataSizeAsync(string bucketName, string key, CancellationToken cancellationToken = default)
-    {
-        if (_data.TryGetValue(bucketName, out var bucketData) &&
-            bucketData.TryGetValue(key, out var data))
-        {
-            return Task.FromResult<long?>(data.Length);
-        }
-        return Task.FromResult<long?>(null);
     }
 
 }

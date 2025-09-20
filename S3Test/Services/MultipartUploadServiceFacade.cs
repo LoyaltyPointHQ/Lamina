@@ -1,5 +1,4 @@
 using System.IO.Pipelines;
-using System.Security.Cryptography;
 using S3Test.Models;
 
 namespace S3Test.Services;
@@ -50,35 +49,13 @@ public class MultipartUploadServiceFacade : IMultipartUploadServiceFacade
             throw new InvalidOperationException($"Upload '{request.UploadId}' not found");
         }
 
-        // Assemble parts
-        var combinedData = await _dataService.AssemblePartsAsync(bucketName, key, request.UploadId, request.Parts, cancellationToken);
-        if (combinedData == null)
+        // Get readers for all parts
+        var partReaders = await _dataService.GetPartReadersAsync(bucketName, key, request.UploadId, request.Parts, cancellationToken);
+        var readersList = partReaders.ToList();
+        if (!readersList.Any())
         {
-            throw new InvalidOperationException("Failed to assemble parts");
+            throw new InvalidOperationException("Failed to get part readers");
         }
-
-        // Compute final ETag
-        using var md5 = MD5.Create();
-        var hash = md5.ComputeHash(combinedData);
-        var finalETag = Convert.ToHexString(hash).ToLowerInvariant();
-
-        // Store as a regular object
-        var pipe = new Pipe();
-        var writer = pipe.Writer;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var memory = writer.GetMemory(combinedData.Length);
-                combinedData.CopyTo(memory);
-                writer.Advance(combinedData.Length);
-                await writer.FlushAsync();
-            }
-            finally
-            {
-                await writer.CompleteAsync();
-            }
-        });
 
         var putRequest = new PutObjectRequest
         {
@@ -87,9 +64,11 @@ public class MultipartUploadServiceFacade : IMultipartUploadServiceFacade
             Metadata = upload.Metadata
         };
 
-        // Store data and metadata
-        var (_, etag) = await _objectDataService.StoreDataAsync(bucketName, key, pipe.Reader, cancellationToken);
-        await _objectMetadataService.StoreMetadataAsync(bucketName, key, etag, combinedData.Length, putRequest, cancellationToken);
+        // Store multipart data directly using the new streaming method
+        var (size, etag) = await _objectDataService.StoreMultipartDataAsync(bucketName, key, readersList, cancellationToken);
+
+        // Store metadata
+        await _objectMetadataService.StoreMetadataAsync(bucketName, key, etag, size, putRequest, cancellationToken);
 
         // Clean up multipart upload
         await _dataService.DeleteAllPartsAsync(bucketName, key, request.UploadId, cancellationToken);
@@ -99,7 +78,7 @@ public class MultipartUploadServiceFacade : IMultipartUploadServiceFacade
         {
             BucketName = bucketName,
             Key = key,
-            ETag = finalETag
+            ETag = etag  // Use the ETag computed by StoreMultipartDataAsync
         };
     }
 

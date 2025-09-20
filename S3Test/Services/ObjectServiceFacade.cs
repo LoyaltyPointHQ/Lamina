@@ -24,10 +24,10 @@ public class ObjectServiceFacade : IObjectServiceFacade
         try
         {
             // Store data and get ETag
-            var (data, etag) = await _dataService.StoreDataAsync(bucketName, key, dataReader, cancellationToken);
+            var (size, etag) = await _dataService.StoreDataAsync(bucketName, key, dataReader, cancellationToken);
 
             // Store metadata
-            var s3Object = await _metadataService.StoreMetadataAsync(bucketName, key, etag, data.Length, request, cancellationToken);
+            var s3Object = await _metadataService.StoreMetadataAsync(bucketName, key, etag, size, request, cancellationToken);
 
             if (s3Object == null)
             {

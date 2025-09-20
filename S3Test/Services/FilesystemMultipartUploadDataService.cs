@@ -26,7 +26,10 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
         var partDir = Path.GetDirectoryName(partPath)!;
         Directory.CreateDirectory(partDir);
 
-        using var memoryStream = new MemoryStream();
+        // Stream directly to file without buffering in memory
+        await using var fileStream = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
+        long bytesWritten = 0;
+
         while (!cancellationToken.IsCancellationRequested)
         {
             var result = await dataReader.ReadAsync(cancellationToken);
@@ -39,7 +42,8 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
 
             foreach (var segment in buffer)
             {
-                await memoryStream.WriteAsync(segment, cancellationToken);
+                await fileStream.WriteAsync(segment, cancellationToken);
+                bytesWritten += segment.Length;
             }
 
             dataReader.AdvanceTo(buffer.End);
@@ -51,11 +55,7 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
         }
 
         await dataReader.CompleteAsync();
-
-        var data = memoryStream.ToArray();
-
-        // Write data to file first
-        await File.WriteAllBytesAsync(partPath, data, cancellationToken);
+        await fileStream.FlushAsync(cancellationToken);
 
         // Compute ETag from the file on disk
         var etag = await ETagHelper.ComputeETagFromFileAsync(partPath);
@@ -64,7 +64,7 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
         {
             PartNumber = partNumber,
             ETag = etag,
-            Size = data.Length,
+            Size = bytesWritten,
             LastModified = DateTime.UtcNow
         };
 
@@ -86,18 +86,19 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
     public async Task<byte[]?> AssemblePartsAsync(string bucketName, string key, string uploadId, List<CompletedPart> parts, CancellationToken cancellationToken = default)
     {
         var orderedParts = parts.OrderBy(p => p.PartNumber).ToList();
-        var combinedData = new MemoryStream();
 
+        // First, verify all parts exist and have correct ETags
+        long totalSize = 0;
         foreach (var part in orderedParts)
         {
-            var partData = await GetPartDataAsync(bucketName, key, uploadId, part.PartNumber, cancellationToken);
-            if (partData == null)
+            var partPath = GetPartPath(uploadId, part.PartNumber);
+            if (!File.Exists(partPath))
             {
+                _logger.LogWarning("Part file not found for upload {UploadId}, part {PartNumber}", uploadId, part.PartNumber);
                 return null;
             }
 
             // Verify ETag from the file on disk
-            var partPath = GetPartPath(uploadId, part.PartNumber);
             var actualETag = await ETagHelper.ComputeETagFromFileAsync(partPath);
             var expectedETag = part.ETag.Trim('"');
             if (actualETag != expectedETag)
@@ -106,10 +107,90 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
                 return null;
             }
 
-            combinedData.Write(partData);
+            var fileInfo = new FileInfo(partPath);
+            totalSize += fileInfo.Length;
         }
 
-        return combinedData.ToArray();
+        // Now stream all parts together into a combined array
+        var combinedData = new byte[totalSize];
+        var offset = 0;
+
+        foreach (var part in orderedParts)
+        {
+            var partPath = GetPartPath(uploadId, part.PartNumber);
+            await using var partStream = File.OpenRead(partPath);
+            var bytesRead = await partStream.ReadAsync(combinedData.AsMemory(offset, (int)partStream.Length), cancellationToken);
+            offset += bytesRead;
+        }
+
+        return combinedData;
+    }
+
+    public async Task<IEnumerable<PipeReader>> GetPartReadersAsync(string bucketName, string key, string uploadId, List<CompletedPart> parts, CancellationToken cancellationToken = default)
+    {
+        var orderedParts = parts.OrderBy(p => p.PartNumber).ToList();
+        var readers = new List<PipeReader>();
+
+        foreach (var part in orderedParts)
+        {
+            var partPath = GetPartPath(uploadId, part.PartNumber);
+            if (!File.Exists(partPath))
+            {
+                // Clean up any readers we've already created
+                foreach (var reader in readers)
+                {
+                    await reader.CompleteAsync();
+                }
+                _logger.LogWarning("Part file not found for upload {UploadId}, part {PartNumber}", uploadId, part.PartNumber);
+                return Enumerable.Empty<PipeReader>();
+            }
+
+            // Verify ETag
+            var actualETag = await ETagHelper.ComputeETagFromFileAsync(partPath);
+            var expectedETag = part.ETag.Trim('"');
+            if (actualETag != expectedETag)
+            {
+                // Clean up any readers we've already created
+                foreach (var reader in readers)
+                {
+                    await reader.CompleteAsync();
+                }
+                _logger.LogWarning("Part ETag mismatch for upload {UploadId}, part {PartNumber}", uploadId, part.PartNumber);
+                return Enumerable.Empty<PipeReader>();
+            }
+
+            // Create a pipe for this part
+            var pipe = new Pipe();
+            var writer = pipe.Writer;
+
+            // Start streaming the part file to the pipe in the background
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await using var fileStream = File.OpenRead(partPath);
+                    const int bufferSize = 4096;
+
+                    int bytesRead;
+                    while ((bytesRead = await fileStream.ReadAsync(writer.GetMemory(bufferSize), cancellationToken)) > 0)
+                    {
+                        writer.Advance(bytesRead);
+                        await writer.FlushAsync(cancellationToken);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    await writer.CompleteAsync(ex);
+                    return;
+                }
+
+                await writer.CompleteAsync();
+            }, cancellationToken);
+
+            readers.Add(pipe.Reader);
+        }
+
+        return readers;
     }
 
     public Task<bool> DeletePartDataAsync(string bucketName, string key, string uploadId, int partNumber, CancellationToken cancellationToken = default)

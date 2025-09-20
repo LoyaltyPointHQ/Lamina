@@ -18,13 +18,16 @@ public class FilesystemObjectDataService : IObjectDataService
         Directory.CreateDirectory(_dataDirectory);
     }
 
-    public async Task<(byte[] data, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, CancellationToken cancellationToken = default)
+    public async Task<(long size, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, CancellationToken cancellationToken = default)
     {
         var dataPath = GetDataPath(bucketName, key);
         var dataDir = Path.GetDirectoryName(dataPath)!;
         Directory.CreateDirectory(dataDir);
 
-        using var memoryStream = new MemoryStream();
+        // Stream directly to file without buffering in memory
+        await using var fileStream = new FileStream(dataPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
+        long bytesWritten = 0;
+
         while (!cancellationToken.IsCancellationRequested)
         {
             var result = await dataReader.ReadAsync(cancellationToken);
@@ -37,7 +40,8 @@ public class FilesystemObjectDataService : IObjectDataService
 
             foreach (var segment in buffer)
             {
-                await memoryStream.WriteAsync(segment, cancellationToken);
+                await fileStream.WriteAsync(segment, cancellationToken);
+                bytesWritten += segment.Length;
             }
 
             dataReader.AdvanceTo(buffer.End);
@@ -49,28 +53,58 @@ public class FilesystemObjectDataService : IObjectDataService
         }
 
         await dataReader.CompleteAsync();
-
-        var data = memoryStream.ToArray();
-
-        // Write data to file first
-        await File.WriteAllBytesAsync(dataPath, data, cancellationToken);
+        await fileStream.FlushAsync(cancellationToken);
 
         // Compute ETag from the file on disk
         var etag = await ETagHelper.ComputeETagFromFileAsync(dataPath);
 
-        return (data, etag);
+        return (bytesWritten, etag);
     }
 
-    public async Task<byte[]?> GetDataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public async Task<(long size, string etag)> StoreMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
     {
         var dataPath = GetDataPath(bucketName, key);
+        var dataDir = Path.GetDirectoryName(dataPath)!;
+        Directory.CreateDirectory(dataDir);
 
-        if (!File.Exists(dataPath))
+        // Stream all parts directly to the final file
+        await using var fileStream = new FileStream(dataPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
+        long totalBytesWritten = 0;
+
+        foreach (var reader in partReaders)
         {
-            return null;
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var result = await reader.ReadAsync(cancellationToken);
+                var buffer = result.Buffer;
+
+                if (buffer.IsEmpty && result.IsCompleted)
+                {
+                    break;
+                }
+
+                foreach (var segment in buffer)
+                {
+                    await fileStream.WriteAsync(segment, cancellationToken);
+                    totalBytesWritten += segment.Length;
+                }
+
+                reader.AdvanceTo(buffer.End);
+
+                if (result.IsCompleted)
+                {
+                    break;
+                }
+            }
+            await reader.CompleteAsync();
         }
 
-        return await File.ReadAllBytesAsync(dataPath, cancellationToken);
+        await fileStream.FlushAsync(cancellationToken);
+
+        // Compute ETag from the completed file
+        var etag = await ETagHelper.ComputeETagFromFileAsync(dataPath);
+
+        return (totalBytesWritten, etag);
     }
 
     public async Task<bool> WriteDataToPipeAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default)
@@ -134,25 +168,6 @@ public class FilesystemObjectDataService : IObjectDataService
         }
 
         return Task.FromResult(true);
-    }
-
-    public Task<bool> DataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
-    {
-        var dataPath = GetDataPath(bucketName, key);
-        return Task.FromResult(File.Exists(dataPath));
-    }
-
-    public Task<long?> GetDataSizeAsync(string bucketName, string key, CancellationToken cancellationToken = default)
-    {
-        var dataPath = GetDataPath(bucketName, key);
-
-        if (!File.Exists(dataPath))
-        {
-            return Task.FromResult<long?>(null);
-        }
-
-        var fileInfo = new FileInfo(dataPath);
-        return Task.FromResult<long?>(fileInfo.Length);
     }
 
     private string GetDataPath(string bucketName, string key)

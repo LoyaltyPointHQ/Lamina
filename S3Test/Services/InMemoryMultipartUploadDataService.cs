@@ -114,6 +114,38 @@ public class InMemoryMultipartUploadDataService : IMultipartUploadDataService
         return Task.FromResult<byte[]?>(combinedData);
     }
 
+    public Task<IEnumerable<PipeReader>> GetPartReadersAsync(string bucketName, string key, string uploadId, List<CompletedPart> parts, CancellationToken cancellationToken = default)
+    {
+        var uploadKey = $"{bucketName}/{key}/{uploadId}";
+        if (!_uploadParts.TryGetValue(uploadKey, out var storedParts))
+        {
+            return Task.FromResult(Enumerable.Empty<PipeReader>());
+        }
+
+        var orderedParts = parts.OrderBy(p => p.PartNumber).ToList();
+        var readers = new List<PipeReader>();
+
+        foreach (var completePart in orderedParts)
+        {
+            if (!storedParts.TryGetValue(completePart.PartNumber, out var part) || part.Data == null)
+            {
+                // Clean up any readers we've already created
+                foreach (var r in readers)
+                {
+                    _ = r.CompleteAsync();
+                }
+                return Task.FromResult(Enumerable.Empty<PipeReader>());
+            }
+
+            // Create a PipeReader from the in-memory data
+            var stream = new MemoryStream(part.Data);
+            var partReader = PipeReader.Create(stream);
+            readers.Add(partReader);
+        }
+
+        return Task.FromResult<IEnumerable<PipeReader>>(readers);
+    }
+
     public Task<bool> DeletePartDataAsync(string bucketName, string key, string uploadId, int partNumber, CancellationToken cancellationToken = default)
     {
         var uploadKey = $"{bucketName}/{key}/{uploadId}";
