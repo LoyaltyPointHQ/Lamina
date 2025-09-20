@@ -7,7 +7,6 @@ namespace S3Test.Services;
 public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
 {
     private readonly string _metadataDirectory;
-    private readonly IFileSystemLockManager _lockManager;
     private readonly ILogger<FilesystemMultipartUploadDataService> _logger;
 
     public FilesystemMultipartUploadDataService(
@@ -16,7 +15,6 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
         ILogger<FilesystemMultipartUploadDataService> logger)
     {
         _metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"] ?? "/var/s3test/metadata";
-        _lockManager = lockManager;
         _logger = logger;
 
         Directory.CreateDirectory(_metadataDirectory);
@@ -56,12 +54,8 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
 
         var data = memoryStream.ToArray();
         var etag = ComputeETag(data);
-
-        await _lockManager.WriteFileAsync(partPath, async _ =>
-        {
-            await File.WriteAllBytesAsync(partPath, data, cancellationToken);
-            return partPath;
-        }, cancellationToken);
+        
+        await File.WriteAllBytesAsync(partPath, data, cancellationToken);
 
         var part = new UploadPart
         {
@@ -83,10 +77,7 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
             return null;
         }
 
-        return await _lockManager.ReadFileAsync(partPath, async path =>
-        {
-            return await File.ReadAllBytesAsync(path, cancellationToken);
-        }, cancellationToken);
+        return await File.ReadAllBytesAsync(partPath, cancellationToken);
     }
 
     public async Task<byte[]?> AssemblePartsAsync(string bucketName, string key, string uploadId, List<CompletedPart> parts, CancellationToken cancellationToken = default)
@@ -117,10 +108,13 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
         return combinedData.ToArray();
     }
 
-    public async Task<bool> DeletePartDataAsync(string bucketName, string key, string uploadId, int partNumber, CancellationToken cancellationToken = default)
+    public Task<bool> DeletePartDataAsync(string bucketName, string key, string uploadId, int partNumber, CancellationToken cancellationToken = default)
     {
         var partPath = GetPartPath(uploadId, partNumber);
-        return await _lockManager.DeleteFileAsync(partPath, cancellationToken);
+        if (!File.Exists(partPath)) 
+            return Task.FromResult(false);
+        File.Delete(partPath);
+        return Task.FromResult(true);
     }
 
     public Task<bool> DeleteAllPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)

@@ -79,10 +79,9 @@ public class FilesystemBucketMetadataService : IBucketMetadataService
         {
             try
             {
-                var metadata = await _lockManager.ReadFileAsync(metadataFile, async path =>
+                var metadata = await _lockManager.ReadFileAsync(metadataFile, async content =>
                 {
-                    var json = await File.ReadAllTextAsync(path, cancellationToken);
-                    return JsonSerializer.Deserialize<BucketMetadata>(json);
+                    return await Task.FromResult(JsonSerializer.Deserialize<BucketMetadata>(content));
                 }, cancellationToken);
 
                 if (metadata != null)
@@ -160,7 +159,7 @@ public class FilesystemBucketMetadataService : IBucketMetadataService
             };
 
             var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
-            await _lockManager.WriteFileAsync(metadataFile, _ => Task.FromResult(json), cancellationToken);
+            await _lockManager.WriteFileAsync(metadataFile, () => Task.FromResult(json), cancellationToken);
         }
         catch (Exception ex)
         {

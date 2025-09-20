@@ -7,16 +7,13 @@ public class FilesystemObjectDataService : IObjectDataService
 {
     private readonly string _dataDirectory;
     private readonly ILogger<FilesystemObjectDataService> _logger;
-    private readonly IFileSystemLockManager _lockManager;
 
     public FilesystemObjectDataService(
         IConfiguration configuration,
-        ILogger<FilesystemObjectDataService> logger,
-        IFileSystemLockManager lockManager)
+        ILogger<FilesystemObjectDataService> logger)
     {
         _dataDirectory = configuration["FilesystemStorage:DataDirectory"] ?? "/var/s3test/data";
         _logger = logger;
-        _lockManager = lockManager;
 
         Directory.CreateDirectory(_dataDirectory);
     }
@@ -56,11 +53,7 @@ public class FilesystemObjectDataService : IObjectDataService
         var data = memoryStream.ToArray();
         var etag = ComputeETag(data);
 
-        await _lockManager.WriteFileAsync(dataPath, async _ =>
-        {
-            await File.WriteAllBytesAsync(dataPath, data, cancellationToken);
-            return dataPath;
-        }, cancellationToken);
+        await File.WriteAllBytesAsync(dataPath, data, cancellationToken);
 
         return (data, etag);
     }
@@ -74,10 +67,7 @@ public class FilesystemObjectDataService : IObjectDataService
             return null;
         }
 
-        return await _lockManager.ReadFileAsync(dataPath, async path =>
-        {
-            return await File.ReadAllBytesAsync(path, cancellationToken);
-        }, cancellationToken);
+        return await File.ReadAllBytesAsync(dataPath, cancellationToken);
     }
 
     public async Task<bool> WriteDataToPipeAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default)
@@ -89,30 +79,32 @@ public class FilesystemObjectDataService : IObjectDataService
             return false;
         }
 
-        return await _lockManager.ReadFileAsync(dataPath, async path =>
+        await using var fileStream = File.OpenRead(dataPath);
+        const int bufferSize = 4096;
+        var buffer = new byte[bufferSize];
+        int bytesRead;
+
+        while ((bytesRead = await fileStream.ReadAsync(buffer, cancellationToken)) > 0)
         {
-            await using var fileStream = File.OpenRead(path);
-            const int bufferSize = 4096;
-            var buffer = new byte[bufferSize];
-            int bytesRead;
+            var memory = writer.GetMemory(bytesRead);
+            buffer.AsMemory(0, bytesRead).CopyTo(memory);
+            writer.Advance(bytesRead);
+            await writer.FlushAsync(cancellationToken);
+        }
 
-            while ((bytesRead = await fileStream.ReadAsync(buffer, cancellationToken)) > 0)
-            {
-                var memory = writer.GetMemory(bytesRead);
-                buffer.AsMemory(0, bytesRead).CopyTo(memory);
-                writer.Advance(bytesRead);
-                await writer.FlushAsync(cancellationToken);
-            }
-
-            await writer.CompleteAsync();
-            return true;
-        }, cancellationToken);
+        await writer.CompleteAsync();
+        return true;
     }
 
     public async Task<bool> DeleteDataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         var dataPath = GetDataPath(bucketName, key);
-        var result = await _lockManager.DeleteFileAsync(dataPath, cancellationToken);
+        if (!File.Exists(dataPath))
+        {
+            return false;
+        }
+
+        File.Delete(dataPath);
 
         // Clean up empty directories
         try
@@ -138,7 +130,7 @@ public class FilesystemObjectDataService : IObjectDataService
             _logger.LogWarning(ex, "Failed to clean up empty directories for path: {DataPath}", dataPath);
         }
 
-        return result;
+        return true;
     }
 
     public Task<bool> DataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)

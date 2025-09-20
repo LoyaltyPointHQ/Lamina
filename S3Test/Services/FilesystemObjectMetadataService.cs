@@ -58,7 +58,7 @@ public class FilesystemObjectMetadataService : IObjectMetadataService
 
         var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
 
-        await _lockManager.WriteFileAsync(metadataPath, async _ =>
+        await _lockManager.WriteFileAsync(metadataPath, async () =>
         {
             await File.WriteAllTextAsync(metadataPath, json, cancellationToken);
             return json;
@@ -77,10 +77,9 @@ public class FilesystemObjectMetadataService : IObjectMetadataService
             return null;
         }
 
-        var metadata = await _lockManager.ReadFileAsync(metadataPath, async path =>
+        var metadata = await _lockManager.ReadFileAsync(metadataPath, async content =>
         {
-            var json = await File.ReadAllTextAsync(path, cancellationToken);
-            return JsonSerializer.Deserialize<S3ObjectMetadata>(json);
+            return await Task.FromResult(JsonSerializer.Deserialize<S3ObjectMetadata>(content));
         }, cancellationToken);
 
         if (metadata == null)
