@@ -1,5 +1,4 @@
 using S3Test.Services;
-using S3Test.Configuration;
 using S3Test.Models;
 using S3Test.Middleware;
 
@@ -18,10 +17,6 @@ builder.Services.AddControllers(options =>
 .AddXmlSerializerFormatters()
 .AddXmlDataContractSerializerFormatters();
 builder.Services.AddOpenApi();
-
-// Configure storage limits
-builder.Services.Configure<StorageLimits>(
-    builder.Configuration.GetSection("StorageLimits"));
 
 // Configure authentication
 builder.Services.Configure<AuthenticationSettings>(
