@@ -1,8 +1,8 @@
 using Lamina.Models;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.Abstract;
 
-public interface IMultipartUploadMetadataService
+public interface IMultipartUploadMetadataStorage
 {
     Task<MultipartUpload> InitiateUploadAsync(string bucketName, string key, InitiateMultipartUploadRequest request, CancellationToken cancellationToken = default);
     Task<MultipartUpload?> GetUploadMetadataAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default);

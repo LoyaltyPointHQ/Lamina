@@ -1,16 +1,17 @@
 using System.IO.Pipelines;
 using Lamina.Helpers;
+using Lamina.Storage.Abstract;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.Filesystem;
 
-public class FilesystemObjectDataService : IObjectDataService
+public class FilesystemObjectDataStorage : IObjectDataStorage
 {
     private readonly string _dataDirectory;
-    private readonly ILogger<FilesystemObjectDataService> _logger;
+    private readonly ILogger<FilesystemObjectDataStorage> _logger;
 
-    public FilesystemObjectDataService(
+    public FilesystemObjectDataStorage(
         IConfiguration configuration,
-        ILogger<FilesystemObjectDataService> logger)
+        ILogger<FilesystemObjectDataStorage> logger)
     {
         _dataDirectory = configuration["FilesystemStorage:DataDirectory"]
             ?? throw new InvalidOperationException("FilesystemStorage:DataDirectory configuration is required when using Filesystem storage");

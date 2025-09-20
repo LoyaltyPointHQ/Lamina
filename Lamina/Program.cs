@@ -1,6 +1,9 @@
-using Lamina.Services;
-using Lamina.Models;
 using Lamina.Middleware;
+using Lamina.Models;
+using Lamina.Services;
+using Lamina.Storage.Abstract;
+using Lamina.Storage.Filesystem;
+using Lamina.Storage.InMemory;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -45,38 +48,38 @@ var storageType = builder.Configuration["StorageType"] ?? "InMemory";
 if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
 {
     // Register bucket services
-    builder.Services.AddSingleton<IBucketDataService, FilesystemBucketDataService>();
-    builder.Services.AddSingleton<IBucketMetadataService, FilesystemBucketMetadataService>();
+    builder.Services.AddSingleton<IBucketDataStorage, FilesystemBucketDataStorage>();
+    builder.Services.AddSingleton<IBucketMetadataStorage, FilesystemBucketMetadataStorage>();
 
     // Register data and metadata services for objects
-    builder.Services.AddSingleton<IObjectDataService, FilesystemObjectDataService>();
-    builder.Services.AddSingleton<IObjectMetadataService, FilesystemObjectMetadataService>();
+    builder.Services.AddSingleton<IObjectDataStorage, FilesystemObjectDataStorage>();
+    builder.Services.AddSingleton<IObjectMetadataStorage, FilesystemObjectMetadataStorage>();
 
     // Register data and metadata services for multipart uploads
-    builder.Services.AddSingleton<IMultipartUploadDataService, FilesystemMultipartUploadDataService>();
-    builder.Services.AddSingleton<IMultipartUploadMetadataService, FilesystemMultipartUploadMetadataService>();
+    builder.Services.AddSingleton<IMultipartUploadDataStorage, FilesystemMultipartUploadDataStorage>();
+    builder.Services.AddSingleton<IMultipartUploadMetadataStorage, FilesystemMultipartUploadMetadataStorage>();
 
     builder.Logging.AddConsole().SetMinimumLevel(LogLevel.Information);
 }
 else
 {
     // Register bucket services
-    builder.Services.AddSingleton<IBucketDataService, InMemoryBucketDataService>();
-    builder.Services.AddSingleton<IBucketMetadataService, InMemoryBucketMetadataService>();
+    builder.Services.AddSingleton<IBucketDataStorage, InMemoryBucketDataStorage>();
+    builder.Services.AddSingleton<IBucketMetadataStorage, InMemoryBucketMetadataStorage>();
 
     // Register data and metadata services for objects
-    builder.Services.AddSingleton<IObjectDataService, InMemoryObjectDataService>();
-    builder.Services.AddSingleton<IObjectMetadataService, InMemoryObjectMetadataService>();
+    builder.Services.AddSingleton<IObjectDataStorage, InMemoryObjectDataStorage>();
+    builder.Services.AddSingleton<IObjectMetadataStorage, InMemoryObjectMetadataStorage>();
 
     // Register data and metadata services for multipart uploads
-    builder.Services.AddSingleton<IMultipartUploadDataService, InMemoryMultipartUploadDataService>();
-    builder.Services.AddSingleton<IMultipartUploadMetadataService, InMemoryMultipartUploadMetadataService>();
+    builder.Services.AddSingleton<IMultipartUploadDataStorage, InMemoryMultipartUploadDataStorage>();
+    builder.Services.AddSingleton<IMultipartUploadMetadataStorage, InMemoryMultipartUploadMetadataStorage>();
 }
 
 // Register facade services
-builder.Services.AddSingleton<IBucketServiceFacade, BucketServiceFacade>();
-builder.Services.AddSingleton<IObjectServiceFacade, ObjectServiceFacade>();
-builder.Services.AddSingleton<IMultipartUploadServiceFacade, MultipartUploadServiceFacade>();
+builder.Services.AddSingleton<IBucketStorageFacade, BucketStorageFacade>();
+builder.Services.AddSingleton<IObjectStorageFacade, ObjectStorageFacade>();
+builder.Services.AddSingleton<IMultipartUploadStorageFacade, MultipartUploadStorageFacade>();
 
 // Register multipart upload cleanup service if enabled
 var cleanupEnabled = builder.Configuration.GetValue<bool>("MultipartUploadCleanup:Enabled", true);
@@ -100,4 +103,7 @@ app.MapControllers();
 
 app.Run();
 
-public partial class Program { }
+namespace Lamina
+{
+    public partial class Program { }
+}

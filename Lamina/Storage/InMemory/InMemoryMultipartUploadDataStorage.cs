@@ -3,10 +3,11 @@ using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using Lamina.Helpers;
 using Lamina.Models;
+using Lamina.Storage.Abstract;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.InMemory;
 
-public class InMemoryMultipartUploadDataService : IMultipartUploadDataService
+public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<int, UploadPart>> _uploadParts = new();
 

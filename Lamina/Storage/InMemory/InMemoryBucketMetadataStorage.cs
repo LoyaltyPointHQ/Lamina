@@ -1,22 +1,23 @@
 using System.Collections.Concurrent;
 using Lamina.Models;
+using Lamina.Storage.Abstract;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.InMemory;
 
-public class InMemoryBucketMetadataService : IBucketMetadataService
+public class InMemoryBucketMetadataStorage : IBucketMetadataStorage
 {
     private readonly ConcurrentDictionary<string, Bucket> _bucketMetadata = new();
-    private readonly IBucketDataService _dataService;
+    private readonly IBucketDataStorage _dataStorage;
 
-    public InMemoryBucketMetadataService(IBucketDataService dataService)
+    public InMemoryBucketMetadataStorage(IBucketDataStorage dataStorage)
     {
-        _dataService = dataService;
+        _dataStorage = dataStorage;
     }
 
     public async Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest? request = null, CancellationToken cancellationToken = default)
     {
         // Check if bucket exists in data service
-        if (!await _dataService.BucketExistsAsync(bucketName, cancellationToken))
+        if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return null;
         }
@@ -41,7 +42,7 @@ public class InMemoryBucketMetadataService : IBucketMetadataService
 
     public async Task<List<Bucket>> GetAllBucketsMetadataAsync(CancellationToken cancellationToken = default)
     {
-        var bucketNames = await _dataService.ListBucketNamesAsync(cancellationToken);
+        var bucketNames = await _dataStorage.ListBucketNamesAsync(cancellationToken);
         var buckets = new List<Bucket>();
 
         foreach (var name in bucketNames)
@@ -62,7 +63,7 @@ public class InMemoryBucketMetadataService : IBucketMetadataService
 
     public async Task<Bucket?> UpdateBucketTagsAsync(string bucketName, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
     {
-        if (!await _dataService.BucketExistsAsync(bucketName, cancellationToken))
+        if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return null;
         }

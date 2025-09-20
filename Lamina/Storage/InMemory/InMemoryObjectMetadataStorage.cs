@@ -1,21 +1,22 @@
 using System.Collections.Concurrent;
 using Lamina.Models;
+using Lamina.Storage.Abstract;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.InMemory;
 
-public class InMemoryObjectMetadataService : IObjectMetadataService
+public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, S3Object>> _metadata = new();
-    private readonly IBucketServiceFacade _bucketService;
+    private readonly IBucketStorageFacade _bucketStorage;
 
-    public InMemoryObjectMetadataService(IBucketServiceFacade bucketService)
+    public InMemoryObjectMetadataStorage(IBucketStorageFacade bucketStorage)
     {
-        _bucketService = bucketService;
+        _bucketStorage = bucketStorage;
     }
 
     public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
     {
-        if (!await _bucketService.BucketExistsAsync(bucketName, cancellationToken))
+        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return null;
         }
@@ -66,7 +67,7 @@ public class InMemoryObjectMetadataService : IObjectMetadataService
 
     public async Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)
     {
-        if (!await _bucketService.BucketExistsAsync(bucketName, cancellationToken))
+        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return new ListObjectsResponse
             {

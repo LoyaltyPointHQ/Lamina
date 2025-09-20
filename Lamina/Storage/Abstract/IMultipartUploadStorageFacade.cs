@@ -1,9 +1,9 @@
 using System.IO.Pipelines;
 using Lamina.Models;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.Abstract;
 
-public interface IMultipartUploadServiceFacade
+public interface IMultipartUploadStorageFacade
 {
     Task<MultipartUpload> InitiateMultipartUploadAsync(string bucketName, string key, InitiateMultipartUploadRequest request, CancellationToken cancellationToken = default);
     Task<UploadPart> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, CancellationToken cancellationToken = default);

@@ -1,13 +1,15 @@
-namespace Lamina.Services;
+using Lamina.Storage.Abstract;
 
-public class FilesystemBucketDataService : IBucketDataService
+namespace Lamina.Storage.Filesystem;
+
+public class FilesystemBucketDataStorage : IBucketDataStorage
 {
     private readonly string _dataDirectory;
-    private readonly ILogger<FilesystemBucketDataService> _logger;
+    private readonly ILogger<FilesystemBucketDataStorage> _logger;
 
-    public FilesystemBucketDataService(
+    public FilesystemBucketDataStorage(
         IConfiguration configuration,
-        ILogger<FilesystemBucketDataService> logger)
+        ILogger<FilesystemBucketDataStorage> logger)
     {
         _dataDirectory = configuration["FilesystemStorage:DataDirectory"]
             ?? throw new InvalidOperationException("FilesystemStorage:DataDirectory configuration is required when using Filesystem storage");

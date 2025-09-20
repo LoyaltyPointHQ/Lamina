@@ -1,8 +1,8 @@
 using Lamina.Models;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.Abstract;
 
-public interface IBucketServiceFacade
+public interface IBucketStorageFacade
 {
     Task<Bucket?> CreateBucketAsync(string bucketName, CreateBucketRequest? request = null, CancellationToken cancellationToken = default);
     Task<Bucket?> GetBucketAsync(string bucketName, CancellationToken cancellationToken = default);

@@ -1,23 +1,23 @@
 using System.Text.RegularExpressions;
 using Lamina.Models;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.Abstract;
 
-public class BucketServiceFacade : IBucketServiceFacade
+public class BucketStorageFacade : IBucketStorageFacade
 {
-    private readonly IBucketDataService _dataService;
-    private readonly IBucketMetadataService _metadataService;
-    private readonly ILogger<BucketServiceFacade> _logger;
+    private readonly IBucketDataStorage _dataStorage;
+    private readonly IBucketMetadataStorage _metadataStorage;
+    private readonly ILogger<BucketStorageFacade> _logger;
     private static readonly Regex BucketNameRegex = new(@"^[a-z0-9][a-z0-9.-]*[a-z0-9]$", RegexOptions.Compiled);
     private static readonly Regex IpAddressRegex = new(@"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", RegexOptions.Compiled);
 
-    public BucketServiceFacade(
-        IBucketDataService dataService,
-        IBucketMetadataService metadataService,
-        ILogger<BucketServiceFacade> logger)
+    public BucketStorageFacade(
+        IBucketDataStorage dataStorage,
+        IBucketMetadataStorage metadataStorage,
+        ILogger<BucketStorageFacade> logger)
     {
-        _dataService = dataService;
-        _metadataService = metadataService;
+        _dataStorage = dataStorage;
+        _metadataStorage = metadataStorage;
         _logger = logger;
     }
 
@@ -30,18 +30,18 @@ public class BucketServiceFacade : IBucketServiceFacade
         }
 
         // Create bucket in data service
-        var created = await _dataService.CreateBucketAsync(bucketName, cancellationToken);
+        var created = await _dataStorage.CreateBucketAsync(bucketName, cancellationToken);
         if (!created)
         {
             return null;
         }
 
         // Store metadata
-        var bucket = await _metadataService.StoreBucketMetadataAsync(bucketName, request, cancellationToken);
+        var bucket = await _metadataStorage.StoreBucketMetadataAsync(bucketName, request, cancellationToken);
         if (bucket == null)
         {
             // Rollback data creation if metadata storage failed
-            await _dataService.DeleteBucketAsync(bucketName, cancellationToken);
+            await _dataStorage.DeleteBucketAsync(bucketName, cancellationToken);
             _logger.LogError("Failed to store metadata for bucket {BucketName}", bucketName);
             return null;
         }
@@ -51,12 +51,12 @@ public class BucketServiceFacade : IBucketServiceFacade
 
     public async Task<Bucket?> GetBucketAsync(string bucketName, CancellationToken cancellationToken = default)
     {
-        return await _metadataService.GetBucketMetadataAsync(bucketName, cancellationToken);
+        return await _metadataStorage.GetBucketMetadataAsync(bucketName, cancellationToken);
     }
 
     public async Task<ListBucketsResponse> ListBucketsAsync(CancellationToken cancellationToken = default)
     {
-        var buckets = await _metadataService.GetAllBucketsMetadataAsync(cancellationToken);
+        var buckets = await _metadataStorage.GetAllBucketsMetadataAsync(cancellationToken);
 
         return new ListBucketsResponse
         {
@@ -67,20 +67,20 @@ public class BucketServiceFacade : IBucketServiceFacade
     public async Task<bool> DeleteBucketAsync(string bucketName, bool force = false, CancellationToken cancellationToken = default)
     {
         // Delete metadata first
-        await _metadataService.DeleteBucketMetadataAsync(bucketName, cancellationToken);
+        await _metadataStorage.DeleteBucketMetadataAsync(bucketName, cancellationToken);
 
         // Then delete the actual bucket
-        return await _dataService.DeleteBucketAsync(bucketName, cancellationToken);
+        return await _dataStorage.DeleteBucketAsync(bucketName, cancellationToken);
     }
 
     public async Task<bool> BucketExistsAsync(string bucketName, CancellationToken cancellationToken = default)
     {
-        return await _dataService.BucketExistsAsync(bucketName, cancellationToken);
+        return await _dataStorage.BucketExistsAsync(bucketName, cancellationToken);
     }
 
     public async Task<Bucket?> UpdateBucketTagsAsync(string bucketName, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
     {
-        return await _metadataService.UpdateBucketTagsAsync(bucketName, tags, cancellationToken);
+        return await _metadataStorage.UpdateBucketTagsAsync(bucketName, tags, cancellationToken);
     }
 
     private static bool IsValidBucketName(string bucketName)

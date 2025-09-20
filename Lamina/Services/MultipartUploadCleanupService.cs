@@ -1,4 +1,5 @@
 using Lamina.Models;
+using Lamina.Storage.Abstract;
 
 namespace Lamina.Services;
 
@@ -56,8 +57,8 @@ public class MultipartUploadCleanupService : BackgroundService
     {
         using var scope = _serviceProvider.CreateScope();
 
-        var bucketServiceFacade = scope.ServiceProvider.GetRequiredService<IBucketServiceFacade>();
-        var multipartUploadServiceFacade = scope.ServiceProvider.GetRequiredService<IMultipartUploadServiceFacade>();
+        var bucketServiceFacade = scope.ServiceProvider.GetRequiredService<IBucketStorageFacade>();
+        var multipartUploadServiceFacade = scope.ServiceProvider.GetRequiredService<IMultipartUploadStorageFacade>();
 
         _logger.LogDebug("Starting cleanup of stale multipart uploads");
 

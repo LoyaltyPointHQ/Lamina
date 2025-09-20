@@ -1,9 +1,9 @@
 using System.IO.Pipelines;
 using Lamina.Models;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.Abstract;
 
-public interface IObjectServiceFacade
+public interface IObjectStorageFacade
 {
     Task<S3Object?> PutObjectAsync(string bucketName, string key, PipeReader dataReader, PutObjectRequest? request = null, CancellationToken cancellationToken = default);
     Task<S3ObjectInfo?> GetObjectInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default);

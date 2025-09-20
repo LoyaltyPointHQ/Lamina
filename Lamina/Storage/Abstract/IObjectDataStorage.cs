@@ -1,8 +1,8 @@
 using System.IO.Pipelines;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.Abstract;
 
-public interface IObjectDataService
+public interface IObjectDataStorage
 {
     Task<(long size, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, CancellationToken cancellationToken = default);
     Task<(long size, string etag)> StoreMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default);

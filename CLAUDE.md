@@ -68,42 +68,46 @@ docker run -p 8080:8080 lamina
   - `MultipartUpload.cs`: Multipart upload related models
   - `S3XmlResponses.cs`: XML response DTOs for S3 API compliance
 
+### Storage Layer
+
+**Architecture**: The storage layer uses a Facade pattern with separate Data and Metadata storage components:
+
+- **Lamina/Storage/Abstract/** (Interfaces and Facade implementations):
+  - **Facade Interfaces & Implementations** (Main entry points):
+    - `IBucketStorageFacade` / `BucketStorageFacade`: Orchestrates bucket operations
+    - `IObjectStorageFacade` / `ObjectStorageFacade`: Orchestrates object operations
+    - `IMultipartUploadStorageFacade` / `MultipartUploadStorageFacade`: Orchestrates multipart uploads
+
+  - **Storage Interfaces** (Define storage contracts):
+    - `IBucketDataStorage`: Interface for bucket data operations
+    - `IBucketMetadataStorage`: Interface for bucket metadata
+    - `IObjectDataStorage`: Interface for object data operations
+    - `IObjectMetadataStorage`: Interface for object metadata
+    - `IMultipartUploadDataStorage`: Interface for multipart data operations
+    - `IMultipartUploadMetadataStorage`: Interface for multipart metadata
+
+- **Lamina/Storage/InMemory/** (In-memory implementations):
+  - `InMemoryBucketDataStorage`: In-memory bucket data storage
+  - `InMemoryBucketMetadataStorage`: In-memory bucket metadata storage
+  - `InMemoryObjectDataStorage`: In-memory object data storage
+  - `InMemoryObjectMetadataStorage`: In-memory object metadata storage
+  - `InMemoryMultipartUploadDataStorage`: In-memory multipart data storage
+  - `InMemoryMultipartUploadMetadataStorage`: In-memory multipart metadata storage
+
+- **Lamina/Storage/Filesystem/** (Filesystem implementations):
+  - `FilesystemBucketDataStorage`: Filesystem bucket data storage
+  - `FilesystemBucketMetadataStorage`: Filesystem bucket metadata storage
+  - `FilesystemObjectDataStorage`: Filesystem object data storage
+  - `FilesystemObjectMetadataStorage`: Filesystem object metadata storage
+  - `FilesystemMultipartUploadDataStorage`: Filesystem multipart data storage
+  - `FilesystemMultipartUploadMetadataStorage`: Filesystem multipart metadata storage
+  - `FileSystemLockManager`: Thread-safe file operations manager
+
 ### Services
 
-**Architecture**: The service layer uses a Facade pattern with separate Data and Metadata services:
-
 - **Lamina/Services/**:
-  - **Facade Services** (Main entry points):
-    - `IBucketServiceFacade` / `BucketServiceFacade`: Orchestrates bucket operations
-    - `IObjectServiceFacade` / `ObjectServiceFacade`: Orchestrates object operations
-    - `IMultipartUploadServiceFacade` / `MultipartUploadServiceFacade`: Orchestrates multipart uploads
-
-  - **Data Services** (Handle actual data storage):
-    - `IBucketDataService`: Interface for bucket data operations
-      - `InMemoryBucketDataService`: In-memory implementation
-      - `FilesystemBucketDataService`: Filesystem implementation
-    - `IObjectDataService`: Interface for object data operations
-      - `InMemoryObjectDataService`: In-memory implementation
-      - `FilesystemObjectDataService`: Filesystem implementation
-    - `IMultipartUploadDataService`: Interface for multipart data operations
-      - `InMemoryMultipartUploadDataService`: In-memory implementation
-      - `FilesystemMultipartUploadDataService`: Filesystem implementation
-
-  - **Metadata Services** (Handle metadata storage):
-    - `IBucketMetadataService`: Interface for bucket metadata
-      - `InMemoryBucketMetadataService`: In-memory implementation
-      - `FilesystemBucketMetadataService`: Filesystem implementation
-    - `IObjectMetadataService`: Interface for object metadata
-      - `InMemoryObjectMetadataService`: In-memory implementation
-      - `FilesystemObjectMetadataService`: Filesystem implementation
-    - `IMultipartUploadMetadataService`: Interface for multipart metadata
-      - `InMemoryMultipartUploadMetadataService`: In-memory implementation
-      - `FilesystemMultipartUploadMetadataService`: Filesystem implementation
-
-  - **Supporting Services**:
-    - `IAuthenticationService` / `AuthenticationService`: AWS Signature V4 authentication
-    - `IFileSystemLockManager` / `FileSystemLockManager`: Thread-safe file operations
-    - `MultipartUploadCleanupService`: Background service for automatic cleanup of stale multipart uploads
+  - `IAuthenticationService` / `AuthenticationService`: AWS Signature V4 authentication
+  - `MultipartUploadCleanupService`: Background service for automatic cleanup of stale multipart uploads
 
 ### Helpers
 - **Lamina/Helpers/**:
@@ -113,8 +117,8 @@ docker run -p 8080:8080 lamina
 - **Lamina.Tests/**:
   - `Controllers/BucketsControllerIntegrationTests.cs`: Bucket API integration tests
   - `Controllers/ObjectsControllerIntegrationTests.cs`: Object API integration tests
-  - `Services/BucketServiceTests.cs`: Bucket service unit tests
-  - `Services/ObjectServiceTests.cs`: Object service unit tests
+  - `Services/BucketServiceTests.cs`: Bucket storage unit tests
+  - `Services/ObjectServiceTests.cs`: Object storage unit tests
   - `Services/MultipartUploadServiceTests.cs`: Multipart upload tests
   - `Services/MultipartUploadCleanupServiceTests.cs`: Cleanup service tests
 
@@ -185,7 +189,7 @@ docker run -p 8080:8080 lamina
 ## Testing Strategy
 
 - **Integration Tests**: Use `WebApplicationFactory` to test full HTTP pipeline
-- **Unit Tests**: Test service logic in isolation
+- **Unit Tests**: Test storage logic in isolation
 - **XML Validation**: Tests verify both request and response XML formats
 - **Multipart Flow**: Comprehensive tests for complete upload lifecycle
 
@@ -262,8 +266,8 @@ Configure in `appsettings.json` or `appsettings.Development.json`:
 1. Check S3 API documentation for request/response format
 2. Add XML models to `S3XmlResponses.cs` if needed
 3. Update controller with new endpoint/query parameter handling
-4. Add corresponding service interface methods
-5. Implement in-memory service logic
+4. Add corresponding storage interface methods in `Storage/Abstract/`
+5. Implement in both `Storage/InMemory/` and `Storage/Filesystem/`
 6. Add integration and unit tests
 
 ### Debugging XML Issues
@@ -310,5 +314,5 @@ ls -la /tmp/laminas/metadata/test-bucket/
 cat /tmp/laminas/metadata/test-bucket/test.txt.json | jq .
 ```
 
-### Miscelenous commands
+### Miscellaneous commands
 Auto update CLAUDE.md after every interaction to reflect latest changes

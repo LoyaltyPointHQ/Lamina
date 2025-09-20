@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Lamina.Models;
 using Lamina.Services;
 using System.Xml.Serialization;
+using Lamina.Storage.Abstract;
 
 namespace Lamina.Controllers;
 
@@ -9,22 +10,22 @@ namespace Lamina.Controllers;
 [Produces("application/xml")]
 public class S3BucketsController : ControllerBase
 {
-    private readonly IBucketServiceFacade _bucketService;
-    private readonly IObjectServiceFacade _objectService;
-    private readonly IMultipartUploadServiceFacade _multipartService;
+    private readonly IBucketStorageFacade _bucketStorage;
+    private readonly IObjectStorageFacade _objectStorage;
+    private readonly IMultipartUploadStorageFacade _multipartStorage;
     private readonly IAuthenticationService _authService;
     private readonly ILogger<S3BucketsController> _logger;
 
     public S3BucketsController(
-        IBucketServiceFacade bucketService,
-        IObjectServiceFacade objectService,
-        IMultipartUploadServiceFacade multipartService,
+        IBucketStorageFacade bucketStorage,
+        IObjectStorageFacade objectStorage,
+        IMultipartUploadStorageFacade multipartStorage,
         IAuthenticationService authService,
         ILogger<S3BucketsController> logger)
     {
-        _bucketService = bucketService;
-        _objectService = objectService;
-        _multipartService = multipartService;
+        _bucketStorage = bucketStorage;
+        _objectStorage = objectStorage;
+        _multipartStorage = multipartStorage;
         _authService = authService;
         _logger = logger;
     }
@@ -48,7 +49,7 @@ public class S3BucketsController : ControllerBase
             return new ObjectResult(error);
         }
 
-        var bucket = await _bucketService.CreateBucketAsync(bucketName, null, cancellationToken);
+        var bucket = await _bucketStorage.CreateBucketAsync(bucketName, null, cancellationToken);
         if (bucket == null)
         {
             _logger.LogWarning("Bucket already exists: {BucketName}", bucketName);
@@ -98,7 +99,7 @@ public class S3BucketsController : ControllerBase
     [Route("/")]
     public async Task<IActionResult> ListBuckets(CancellationToken cancellationToken = default)
     {
-        var buckets = await _bucketService.ListBucketsAsync(cancellationToken);
+        var buckets = await _bucketStorage.ListBucketsAsync(cancellationToken);
 
         // Filter buckets based on user permissions
         var filteredBuckets = buckets.Buckets;
@@ -151,7 +152,7 @@ public class S3BucketsController : ControllerBase
         {
             return await ListMultipartUploadsInternal(bucketName, keyMarker, uploadIdMarker, maxUploads, cancellationToken);
         }
-        var exists = await _bucketService.BucketExistsAsync(bucketName, cancellationToken);
+        var exists = await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken);
         if (!exists)
         {
             var error = new S3Error
@@ -174,7 +175,7 @@ public class S3BucketsController : ControllerBase
             ContinuationToken = continuationToken ?? marker
         };
 
-        var objects = await _objectService.ListObjectsAsync(bucketName, listRequest, cancellationToken);
+        var objects = await _objectStorage.ListObjectsAsync(bucketName, listRequest, cancellationToken);
 
         var result = new ListBucketResult
         {
@@ -203,7 +204,7 @@ public class S3BucketsController : ControllerBase
     {
         _logger.LogInformation("Deleting bucket: {BucketName}", bucketName);
 
-        var deleted = await _bucketService.DeleteBucketAsync(bucketName, force: true, cancellationToken);
+        var deleted = await _bucketStorage.DeleteBucketAsync(bucketName, force: true, cancellationToken);
         if (!deleted)
         {
             _logger.LogWarning("Bucket not found for deletion: {BucketName}", bucketName);
@@ -225,7 +226,7 @@ public class S3BucketsController : ControllerBase
     [HttpHead("{bucketName}")]
     public async Task<IActionResult> HeadBucket(string bucketName, CancellationToken cancellationToken = default)
     {
-        var exists = await _bucketService.BucketExistsAsync(bucketName, cancellationToken);
+        var exists = await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken);
         if (!exists)
         {
             return NotFound();
@@ -241,7 +242,7 @@ public class S3BucketsController : ControllerBase
         int? maxUploads,
         CancellationToken cancellationToken)
     {
-        var uploads = await _multipartService.ListMultipartUploadsAsync(bucketName, cancellationToken);
+        var uploads = await _multipartStorage.ListMultipartUploadsAsync(bucketName, cancellationToken);
 
         var result = new ListMultipartUploadsResult
         {

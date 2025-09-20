@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using Nito.AsyncEx;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.Filesystem;
 
 public interface IFileSystemLockManager
 {

@@ -2,10 +2,11 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using Lamina.Helpers;
+using Lamina.Storage.Abstract;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.InMemory;
 
-public class InMemoryObjectDataService : IObjectDataService
+public class InMemoryObjectDataStorage : IObjectDataStorage
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte[]>> _data = new();
 

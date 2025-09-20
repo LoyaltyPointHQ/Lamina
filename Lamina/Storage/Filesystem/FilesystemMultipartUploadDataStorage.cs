@@ -1,18 +1,19 @@
 using System.IO.Pipelines;
 using Lamina.Helpers;
 using Lamina.Models;
+using Lamina.Storage.Abstract;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.Filesystem;
 
-public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
+public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
 {
     private readonly string _metadataDirectory;
-    private readonly ILogger<FilesystemMultipartUploadDataService> _logger;
+    private readonly ILogger<FilesystemMultipartUploadDataStorage> _logger;
 
-    public FilesystemMultipartUploadDataService(
+    public FilesystemMultipartUploadDataStorage(
         IConfiguration configuration,
         IFileSystemLockManager lockManager,
-        ILogger<FilesystemMultipartUploadDataService> logger)
+        ILogger<FilesystemMultipartUploadDataStorage> logger)
     {
         _metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"]
             ?? throw new InvalidOperationException("FilesystemStorage:MetadataDirectory configuration is required when using Filesystem storage");

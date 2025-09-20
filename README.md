@@ -176,6 +176,26 @@ curl -X POST "http://localhost:5214/my-bucket/large-file.bin?uploadId=$UPLOAD_ID
 
 ## Technical Details
 
+### Architecture
+
+The application follows a layered architecture with clear separation of concerns:
+
+- **Controllers**: Handle HTTP requests and S3 API compatibility
+- **Storage Layer**: Organized into three main components:
+  - **Abstract**: Interfaces and facade implementations that orchestrate operations
+  - **InMemory**: In-memory storage implementations
+  - **Filesystem**: Filesystem-based storage implementations
+- **Services**: Supporting services like authentication and cleanup
+- **Models**: Data models and S3 XML response DTOs
+
+### Storage Layer Organization
+
+The storage layer uses a facade pattern to orchestrate operations between data and metadata storage components. It is organized into three main directories:
+
+- **Abstract**: Contains interfaces and facade implementations that define the storage contracts
+- **InMemory**: In-memory storage implementations using ConcurrentDictionary for thread-safety
+- **Filesystem**: Filesystem-based storage implementations with FileSystemLockManager for concurrent access
+
 ### S3 Compatibility
 - **XML Responses**: All responses use S3-compliant XML format
 - **HTTP Headers**: Supports standard S3 headers (ETag, Content-Type, x-amz-meta-*, etc.)
@@ -190,6 +210,7 @@ curl -X POST "http://localhost:5214/my-bucket/large-file.bin?uploadId=$UPLOAD_ID
 - **Fast Performance**: All data is stored in memory
 - **Non-Persistent**: Data is lost on restart
 - **Best For**: Development, testing, temporary storage
+- **Implementation**: Located in `Storage/InMemory/` directory
 
 #### Filesystem Storage
 - **Persistent**: Data survives application restarts
@@ -199,6 +220,7 @@ curl -X POST "http://localhost:5214/my-bucket/large-file.bin?uploadId=$UPLOAD_ID
   - Data: `/configured/path/data/{bucket}/{key}`
   - Metadata: `/configured/path/metadata/{bucket}/{key}.json`
 - **Best For**: Production use, persistent storage needs
+- **Implementation**: Located in `Storage/Filesystem/` directory
 
 ### Common Features
 - **ETag Generation**: SHA1 hash of object content (more secure than MD5)

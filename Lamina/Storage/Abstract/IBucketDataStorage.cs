@@ -1,8 +1,6 @@
-using Lamina.Models;
+namespace Lamina.Storage.Abstract;
 
-namespace Lamina.Services;
-
-public interface IBucketDataService
+public interface IBucketDataStorage
 {
     Task<bool> CreateBucketAsync(string bucketName, CancellationToken cancellationToken = default);
     Task<bool> DeleteBucketAsync(string bucketName, CancellationToken cancellationToken = default);

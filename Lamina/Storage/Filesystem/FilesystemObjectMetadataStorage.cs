@@ -1,24 +1,25 @@
 using System.Text.Json;
 using Lamina.Models;
+using Lamina.Storage.Abstract;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.Filesystem;
 
-public class FilesystemObjectMetadataService : IObjectMetadataService
+public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
 {
     private readonly string _metadataDirectory;
-    private readonly IBucketServiceFacade _bucketService;
+    private readonly IBucketStorageFacade _bucketStorage;
     private readonly IFileSystemLockManager _lockManager;
-    private readonly ILogger<FilesystemObjectMetadataService> _logger;
+    private readonly ILogger<FilesystemObjectMetadataStorage> _logger;
 
-    public FilesystemObjectMetadataService(
+    public FilesystemObjectMetadataStorage(
         IConfiguration configuration,
-        IBucketServiceFacade bucketService,
+        IBucketStorageFacade bucketStorage,
         IFileSystemLockManager lockManager,
-        ILogger<FilesystemObjectMetadataService> logger)
+        ILogger<FilesystemObjectMetadataStorage> logger)
     {
         _metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"]
             ?? throw new InvalidOperationException("FilesystemStorage:MetadataDirectory configuration is required when using Filesystem storage");
-        _bucketService = bucketService;
+        _bucketStorage = bucketStorage;
         _lockManager = lockManager;
         _logger = logger;
 
@@ -27,7 +28,7 @@ public class FilesystemObjectMetadataService : IObjectMetadataService
 
     public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
     {
-        if (!await _bucketService.BucketExistsAsync(bucketName, cancellationToken))
+        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return null;
         }
@@ -132,7 +133,7 @@ public class FilesystemObjectMetadataService : IObjectMetadataService
 
     public async Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)
     {
-        if (!await _bucketService.BucketExistsAsync(bucketName, cancellationToken))
+        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return new ListObjectsResponse
             {

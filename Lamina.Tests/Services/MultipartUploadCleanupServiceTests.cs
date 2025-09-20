@@ -9,22 +9,23 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using Lamina.Models;
 using Lamina.Services;
+using Lamina.Storage.Abstract;
 using Xunit;
 
 namespace Lamina.Tests.Services;
 
 public class MultipartUploadCleanupServiceTests
 {
-    private readonly Mock<IBucketServiceFacade> _mockBucketService;
-    private readonly Mock<IMultipartUploadServiceFacade> _mockMultipartUploadService;
+    private readonly Mock<IBucketStorageFacade> _mockBucketService;
+    private readonly Mock<IMultipartUploadStorageFacade> _mockMultipartUploadService;
     private readonly Mock<ILogger<MultipartUploadCleanupService>> _mockLogger;
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
 
     public MultipartUploadCleanupServiceTests()
     {
-        _mockBucketService = new Mock<IBucketServiceFacade>();
-        _mockMultipartUploadService = new Mock<IMultipartUploadServiceFacade>();
+        _mockBucketService = new Mock<IBucketStorageFacade>();
+        _mockMultipartUploadService = new Mock<IMultipartUploadStorageFacade>();
         _mockLogger = new Mock<ILogger<MultipartUploadCleanupService>>();
 
         var services = new ServiceCollection();

@@ -1,8 +1,9 @@
 using System.Collections.Concurrent;
+using Lamina.Storage.Abstract;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.InMemory;
 
-public class InMemoryBucketDataService : IBucketDataService
+public class InMemoryBucketDataStorage : IBucketDataStorage
 {
     private readonly ConcurrentDictionary<string, bool> _buckets = new();
 

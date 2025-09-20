@@ -1,21 +1,22 @@
 using System.Text.Json;
 using Lamina.Models;
+using Lamina.Storage.Abstract;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.Filesystem;
 
-public class FilesystemBucketMetadataService : IBucketMetadataService
+public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
 {
     private readonly string _dataDirectory;
     private readonly string _metadataDirectory;
     private readonly IFileSystemLockManager _lockManager;
-    private readonly IBucketDataService _dataService;
-    private readonly ILogger<FilesystemBucketMetadataService> _logger;
+    private readonly IBucketDataStorage _dataStorage;
+    private readonly ILogger<FilesystemBucketMetadataStorage> _logger;
 
-    public FilesystemBucketMetadataService(
+    public FilesystemBucketMetadataStorage(
         IConfiguration configuration,
         IFileSystemLockManager lockManager,
-        IBucketDataService dataService,
-        ILogger<FilesystemBucketMetadataService> logger
+        IBucketDataStorage dataStorage,
+        ILogger<FilesystemBucketMetadataStorage> logger
     )
     {
         _dataDirectory = configuration["FilesystemStorage:DataDirectory"]
@@ -23,7 +24,7 @@ public class FilesystemBucketMetadataService : IBucketMetadataService
         _metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"]
             ?? throw new InvalidOperationException("FilesystemStorage:MetadataDirectory configuration is required when using Filesystem storage");
         _lockManager = lockManager;
-        _dataService = dataService;
+        _dataStorage = dataStorage;
         _logger = logger;
 
         Directory.CreateDirectory(_metadataDirectory);
@@ -38,7 +39,7 @@ public class FilesystemBucketMetadataService : IBucketMetadataService
 
     public async Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest? request = null, CancellationToken cancellationToken = default)
     {
-        if (!await _dataService.BucketExistsAsync(bucketName, cancellationToken))
+        if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return null;
         }
@@ -60,7 +61,7 @@ public class FilesystemBucketMetadataService : IBucketMetadataService
 
     public async Task<Bucket?> GetBucketMetadataAsync(string bucketName, CancellationToken cancellationToken = default)
     {
-        if (!await _dataService.BucketExistsAsync(bucketName, cancellationToken))
+        if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return null;
         }
@@ -94,7 +95,7 @@ public class FilesystemBucketMetadataService : IBucketMetadataService
 
     public async Task<List<Bucket>> GetAllBucketsMetadataAsync(CancellationToken cancellationToken = default)
     {
-        var bucketNames = await _dataService.ListBucketNamesAsync(cancellationToken);
+        var bucketNames = await _dataStorage.ListBucketNamesAsync(cancellationToken);
         var buckets = new List<Bucket>();
 
         foreach (var bucketName in bucketNames)

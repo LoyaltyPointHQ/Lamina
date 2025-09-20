@@ -1,8 +1,8 @@
 using Lamina.Models;
 
-namespace Lamina.Services;
+namespace Lamina.Storage.Abstract;
 
-public interface IBucketMetadataService
+public interface IBucketMetadataStorage
 {
     Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest? request = null, CancellationToken cancellationToken = default);
     Task<Bucket?> GetBucketMetadataAsync(string bucketName, CancellationToken cancellationToken = default);
