@@ -1,5 +1,5 @@
 using System.IO.Pipelines;
-using System.Security.Cryptography;
+using S3Test.Helpers;
 
 namespace S3Test.Services;
 
@@ -51,9 +51,12 @@ public class FilesystemObjectDataService : IObjectDataService
         await dataReader.CompleteAsync();
 
         var data = memoryStream.ToArray();
-        var etag = ComputeETag(data);
 
+        // Write data to file first
         await File.WriteAllBytesAsync(dataPath, data, cancellationToken);
+
+        // Compute ETag from the file on disk
+        var etag = await ETagHelper.ComputeETagFromFileAsync(dataPath);
 
         return (data, etag);
     }
@@ -157,10 +160,4 @@ public class FilesystemObjectDataService : IObjectDataService
         return Path.Combine(_dataDirectory, bucketName, key);
     }
 
-    private static string ComputeETag(byte[] data)
-    {
-        using var md5 = MD5.Create();
-        var hash = md5.ComputeHash(data);
-        return Convert.ToHexString(hash).ToLower();
-    }
 }

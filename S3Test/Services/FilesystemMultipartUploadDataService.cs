@@ -1,5 +1,5 @@
 using System.IO.Pipelines;
-using System.Security.Cryptography;
+using S3Test.Helpers;
 using S3Test.Models;
 
 namespace S3Test.Services;
@@ -53,9 +53,12 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
         await dataReader.CompleteAsync();
 
         var data = memoryStream.ToArray();
-        var etag = ComputeETag(data);
-        
+
+        // Write data to file first
         await File.WriteAllBytesAsync(partPath, data, cancellationToken);
+
+        // Compute ETag from the file on disk
+        var etag = await ETagHelper.ComputeETagFromFileAsync(partPath);
 
         var part = new UploadPart
         {
@@ -93,8 +96,9 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
                 return null;
             }
 
-            // Verify ETag
-            var actualETag = ComputeETag(partData);
+            // Verify ETag from the file on disk
+            var partPath = GetPartPath(uploadId, part.PartNumber);
+            var actualETag = await ETagHelper.ComputeETagFromFileAsync(partPath);
             var expectedETag = part.ETag.Trim('"');
             if (actualETag != expectedETag)
             {
@@ -162,8 +166,8 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
                 if (fileName.StartsWith("part_") && int.TryParse(fileName.Substring(5), out int partNumber))
                 {
                     var fileInfo = new FileInfo(partFile);
-                    var data = await File.ReadAllBytesAsync(partFile, cancellationToken);
-                    var etag = ComputeETag(data);
+                    // Compute ETag directly from file without loading into memory
+                    var etag = await ETagHelper.ComputeETagFromFileAsync(partFile);
 
                     var part = new UploadPart
                     {
@@ -188,13 +192,5 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
     private string GetPartPath(string uploadId, int partNumber)
     {
         return Path.Combine(_metadataDirectory, "_multipart_uploads", uploadId, $"part_{partNumber}");
-    }
-
-
-    private static string ComputeETag(byte[] data)
-    {
-        using var sha1 = SHA1.Create();
-        var hash = sha1.ComputeHash(data);
-        return Convert.ToHexString(hash).ToLower();
     }
 }

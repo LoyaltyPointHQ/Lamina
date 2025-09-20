@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
-using System.Security.Cryptography;
+using S3Test.Helpers;
 
 namespace S3Test.Services;
 
@@ -51,7 +51,7 @@ public class InMemoryObjectDataService : IObjectDataService
             offset += segment.Length;
         }
 
-        var etag = ComputeETag(combinedData);
+        var etag = ETagHelper.ComputeETag(combinedData);
         bucketData[key] = combinedData;
 
         return (combinedData, etag);
@@ -106,10 +106,4 @@ public class InMemoryObjectDataService : IObjectDataService
         return Task.FromResult<long?>(null);
     }
 
-    private static string ComputeETag(byte[] data)
-    {
-        using var md5 = MD5.Create();
-        var hash = md5.ComputeHash(data);
-        return Convert.ToHexString(hash).ToLower();
-    }
 }
