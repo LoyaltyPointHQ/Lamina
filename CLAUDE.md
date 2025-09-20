@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a .NET 9.0 ASP.NET Core Web API project called "S3Test" that implements an S3-compatible storage API. The application provides two storage backends (configurable via appsettings.json):
+This is a .NET 9.0 ASP.NET Core Web API project called "Lamina" that implements an S3-compatible storage API. The application provides two storage backends (configurable via appsettings.json):
 
 1. **In-Memory Storage**: Default option, stores all data in memory using ConcurrentDictionary
 2. **Filesystem Storage**: Stores objects on disk with separate data and metadata directories
@@ -25,11 +25,11 @@ Features supported:
 dotnet build
 
 # Run the application (development)
-dotnet run --project S3Test/S3Test.csproj
+dotnet run --project Lamina/Lamina.csproj
 
 # Run with specific profile
-dotnet run --project S3Test/S3Test.csproj --launch-profile http   # Port 5214
-dotnet run --project S3Test/S3Test.csproj --launch-profile https  # Ports 7179/5214
+dotnet run --project Lamina/Lamina.csproj --launch-profile http   # Port 5214
+dotnet run --project Lamina/Lamina.csproj --launch-profile https  # Ports 7179/5214
 ```
 
 ### Testing
@@ -47,22 +47,22 @@ dotnet test --logger "console;verbosity=detailed"
 ### Docker
 ```bash
 # Build Docker image
-docker build -f S3Test/Dockerfile -t s3test .
+docker build -f Lamina/Dockerfile -t lamina .
 
 # Run containerized application
-docker run -p 8080:8080 s3test
+docker run -p 8080:8080 lamina
 ```
 
 ## Project Structure
 
 ### Core Components
-- **S3Test/Program.cs**: Main application entry point with service registration
-- **S3Test/Controllers/**:
+- **Lamina/Program.cs**: Main application entry point with service registration
+- **Lamina/Controllers/**:
   - `S3BucketsController.cs`: Handles bucket operations (PUT, GET, DELETE, HEAD)
   - `S3ObjectsController.cs`: Handles object operations including multipart uploads
 
 ### Models
-- **S3Test/Models/**:
+- **Lamina/Models/**:
   - `Bucket.cs`: Bucket entity model
   - `S3Object.cs`: Object entity and related models (PutObjectRequest, GetObjectResponse, etc.)
   - `MultipartUpload.cs`: Multipart upload related models
@@ -72,7 +72,7 @@ docker run -p 8080:8080 s3test
 
 **Architecture**: The service layer uses a Facade pattern with separate Data and Metadata services:
 
-- **S3Test/Services/**:
+- **Lamina/Services/**:
   - **Facade Services** (Main entry points):
     - `IBucketServiceFacade` / `BucketServiceFacade`: Orchestrates bucket operations
     - `IObjectServiceFacade` / `ObjectServiceFacade`: Orchestrates object operations
@@ -106,11 +106,11 @@ docker run -p 8080:8080 s3test
     - `MultipartUploadCleanupService`: Background service for automatic cleanup of stale multipart uploads
 
 ### Helpers
-- **S3Test/Helpers/**:
+- **Lamina/Helpers/**:
   - `ETagHelper.cs`: Centralized ETag computation using SHA1 (supports byte arrays, files, and streams)
 
 ### Tests
-- **S3Test.Tests/**:
+- **Lamina.Tests/**:
   - `Controllers/BucketsControllerIntegrationTests.cs`: Bucket API integration tests
   - `Controllers/ObjectsControllerIntegrationTests.cs`: Object API integration tests
   - `Services/BucketServiceTests.cs`: Bucket service unit tests
@@ -198,8 +198,8 @@ Configure in `appsettings.json` or `appsettings.Development.json`:
 {
   "StorageType": "InMemory",  // or "Filesystem"
   "FilesystemStorage": {
-    "DataDirectory": "/tmp/s3tests/data",
-    "MetadataDirectory": "/tmp/s3tests/metadata"
+    "DataDirectory": "/tmp/laminas/data",
+    "MetadataDirectory": "/tmp/laminas/metadata"
   }
 }
 ```
@@ -296,16 +296,19 @@ The API is compatible with standard S3 clients. Test with:
 # Edit appsettings.json: "StorageType": "Filesystem"
 
 # Run the application
-dotnet run --project S3Test/S3Test.csproj
+dotnet run --project Lamina/Lamina.csproj
 
 # Create bucket and upload object
 curl -X PUT http://localhost:5214/test-bucket
 echo "test content" | curl -X PUT -H "Content-Type: text/plain" --data-binary @- http://localhost:5214/test-bucket/test.txt
 
 # Check filesystem
-ls -la /tmp/s3tests/data/test-bucket/
-ls -la /tmp/s3tests/metadata/test-bucket/
+ls -la /tmp/laminas/data/test-bucket/
+ls -la /tmp/laminas/metadata/test-bucket/
 
 # Verify metadata doesn't contain size
-cat /tmp/s3tests/metadata/test-bucket/test.txt.json | jq .
+cat /tmp/laminas/metadata/test-bucket/test.txt.json | jq .
 ```
+
+### Miscelenous commands
+Auto update CLAUDE.md after every interaction to reflect latest changes

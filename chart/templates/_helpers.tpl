@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "s3test.name" -}}
+{{- define "lamina.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "s3test.fullname" -}}
+{{- define "lamina.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -24,16 +24,16 @@ Create a default fully qualified app name.
 {{/*
 Create chart name and version as used by the chart label.
 */}}
-{{- define "s3test.chart" -}}
+{{- define "lamina.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Common labels
 */}}
-{{- define "s3test.labels" -}}
-helm.sh/chart: {{ include "s3test.chart" . }}
-{{ include "s3test.selectorLabels" . }}
+{{- define "lamina.labels" -}}
+helm.sh/chart: {{ include "lamina.chart" . }}
+{{ include "lamina.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -43,17 +43,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "s3test.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "s3test.name" . }}
+{{- define "lamina.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "lamina.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
 Create the name of the service account to use
 */}}
-{{- define "s3test.serviceAccountName" -}}
+{{- define "lamina.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "s3test.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "lamina.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
@@ -62,7 +62,7 @@ Create the name of the service account to use
 {{/*
 Detect if we're running on OpenShift
 */}}
-{{- define "s3test.isOpenShift" -}}
+{{- define "lamina.isOpenShift" -}}
 {{- if eq .Values.platform.type "openshift" }}
 {{- true }}
 {{- else if eq .Values.platform.type "kubernetes" }}
@@ -79,9 +79,9 @@ Detect if we're running on OpenShift
 {{/*
 Determine if Ingress should be enabled
 */}}
-{{- define "s3test.ingressEnabled" -}}
+{{- define "lamina.ingressEnabled" -}}
 {{- if eq .Values.ingress.enabled "auto" }}
-{{- if eq (include "s3test.isOpenShift" .) "true" }}
+{{- if eq (include "lamina.isOpenShift" .) "true" }}
 {{- false }}
 {{- else }}
 {{- true }}
@@ -94,9 +94,9 @@ Determine if Ingress should be enabled
 {{/*
 Determine if Route should be enabled
 */}}
-{{- define "s3test.routeEnabled" -}}
+{{- define "lamina.routeEnabled" -}}
 {{- if eq .Values.route.enabled "auto" }}
-{{- if eq (include "s3test.isOpenShift" .) "true" }}
+{{- if eq (include "lamina.isOpenShift" .) "true" }}
 {{- true }}
 {{- else }}
 {{- false }}
@@ -109,9 +109,9 @@ Determine if Route should be enabled
 {{/*
 Determine if ImageStream should be enabled
 */}}
-{{- define "s3test.imageStreamEnabled" -}}
+{{- define "lamina.imageStreamEnabled" -}}
 {{- if eq .Values.imageStream.enabled "auto" }}
-{{- if eq (include "s3test.isOpenShift" .) "true" }}
+{{- if eq (include "lamina.isOpenShift" .) "true" }}
 {{- true }}
 {{- else }}
 {{- false }}
@@ -124,10 +124,10 @@ Determine if ImageStream should be enabled
 {{/*
 Get the image reference
 */}}
-{{- define "s3test.image" -}}
-{{- if eq (include "s3test.imageStreamEnabled" .) "true" }}
+{{- define "lamina.image" -}}
+{{- if eq (include "lamina.imageStreamEnabled" .) "true" }}
 {{- $namespace := .Values.imageStream.namespace | default .Release.Namespace }}
-{{- printf "%s:latest" (include "s3test.fullname" .) }}
+{{- printf "%s:latest" (include "lamina.fullname" .) }}
 {{- else }}
 {{- $tag := .Values.image.tag | default .Chart.AppVersion }}
 {{- printf "%s:%s" .Values.image.repository $tag }}

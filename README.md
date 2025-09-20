@@ -1,4 +1,4 @@
-# S3Test - S3-Compatible Storage API
+# Lamina - S3-Compatible Storage API
 
 A lightweight, S3-compatible storage API implementation built with .NET 9.0 and ASP.NET Core. This project provides both in-memory and filesystem storage backends with full support for essential S3 operations, making it ideal for development, testing, and production use cases.
 
@@ -30,13 +30,13 @@ A lightweight, S3-compatible storage API implementation built with .NET 9.0 and 
 ```bash
 # Clone the repository
 git clone [repository-url]
-cd S3Test
+cd Lamina
 
 # Build the project
 dotnet build
 
 # Run the application
-dotnet run --project S3Test/S3Test.csproj
+dotnet run --project Lamina/Lamina.csproj
 
 # The API will be available at:
 # http://localhost:5214 (HTTP)
@@ -47,10 +47,10 @@ dotnet run --project S3Test/S3Test.csproj
 
 ```bash
 # Build the Docker image
-docker build -f S3Test/Dockerfile -t s3test .
+docker build -f Lamina/Dockerfile -t lamina .
 
 # Run the container
-docker run -p 8080:8080 s3test
+docker run -p 8080:8080 lamina
 ```
 
 ### Running Tests
@@ -63,10 +63,10 @@ dotnet test
 dotnet test --logger "console;verbosity=detailed"
 
 # Run only unit tests
-dotnet test --filter "FullyQualifiedName~S3Test.Tests.Services"
+dotnet test --filter "FullyQualifiedName~Lamina.Tests.Services"
 
 # Run only integration tests
-dotnet test --filter "FullyQualifiedName~S3Test.Tests.Controllers"
+dotnet test --filter "FullyQualifiedName~Lamina.Tests.Controllers"
 ```
 
 ## S3-Compatible API Endpoints
@@ -214,8 +214,8 @@ curl -X POST "http://localhost:5214/my-bucket/large-file.bin?uploadId=$UPLOAD_ID
 {
   "StorageType": "InMemory",  // or "Filesystem"
   "FilesystemStorage": {
-    "DataDirectory": "/tmp/s3tests/data",
-    "MetadataDirectory": "/tmp/s3tests/metadata"
+    "DataDirectory": "/tmp/laminas/data",
+    "MetadataDirectory": "/tmp/laminas/metadata"
   }
 }
 ```
@@ -270,7 +270,7 @@ curl -X POST "http://localhost:5214/my-bucket/large-file.bin?uploadId=$UPLOAD_ID
 ```bash
 # Clone the repository
 git clone [repository-url]
-cd S3Test
+cd Lamina
 
 # Restore dependencies
 dotnet restore

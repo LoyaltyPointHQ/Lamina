@@ -1,0 +1,272 @@
+using System.Xml.Serialization;
+
+namespace Lamina.Models;
+
+[XmlRoot("ListAllMyBucketsResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class ListAllMyBucketsResult
+{
+    [XmlElement("Owner")]
+    public Owner? Owner { get; set; }
+
+    [XmlArray("Buckets")]
+    [XmlArrayItem("Bucket")]
+    public List<BucketInfo> Buckets { get; set; } = new();
+}
+
+[XmlRoot("Owner")]
+public class Owner
+{
+    [XmlElement("ID")]
+    public string ID { get; set; } = "02d6176db174dc93cb1b899f7c6078f08654445fe8cf1b6ce98d8855f66bdbf4";
+
+    [XmlElement("DisplayName")]
+    public string DisplayName { get; set; } = "minio";
+}
+
+[XmlRoot("Bucket")]
+public class BucketInfo
+{
+    [XmlElement("Name")]
+    public string Name { get; set; } = string.Empty;
+
+    [XmlElement("CreationDate")]
+    public string CreationDate { get; set; } = string.Empty;
+}
+
+[XmlRoot("ListBucketResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class ListBucketResult
+{
+    [XmlElement("Name")]
+    public string Name { get; set; } = string.Empty;
+
+    [XmlElement("Prefix")]
+    public string? Prefix { get; set; }
+
+    [XmlElement("Marker")]
+    public string? Marker { get; set; }
+
+    [XmlElement("MaxKeys")]
+    public int MaxKeys { get; set; }
+
+    [XmlElement("IsTruncated")]
+    public bool IsTruncated { get; set; }
+
+    [XmlElement("Contents")]
+    public List<Contents> ContentsList { get; set; } = new();
+
+    [XmlElement("CommonPrefixes")]
+    public List<CommonPrefixes> CommonPrefixesList { get; set; } = new();
+}
+
+[XmlRoot("Contents")]
+public class Contents
+{
+    [XmlElement("Key")]
+    public string Key { get; set; } = string.Empty;
+
+    [XmlElement("LastModified")]
+    public string LastModified { get; set; } = string.Empty;
+
+    [XmlElement("ETag")]
+    public string ETag { get; set; } = string.Empty;
+
+    [XmlElement("Size")]
+    public long Size { get; set; }
+
+    [XmlElement("StorageClass")]
+    public string StorageClass { get; set; } = "STANDARD";
+
+    [XmlElement("Owner")]
+    public Owner? Owner { get; set; }
+}
+
+[XmlRoot("CommonPrefixes")]
+public class CommonPrefixes
+{
+    [XmlElement("Prefix")]
+    public string Prefix { get; set; } = string.Empty;
+}
+
+[XmlRoot("InitiateMultipartUploadResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class InitiateMultipartUploadResult
+{
+    [XmlElement("Bucket")]
+    public string Bucket { get; set; } = string.Empty;
+
+    [XmlElement("Key")]
+    public string Key { get; set; } = string.Empty;
+
+    [XmlElement("UploadId")]
+    public string UploadId { get; set; } = string.Empty;
+}
+
+[XmlRoot("CompleteMultipartUploadResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class CompleteMultipartUploadResult
+{
+    [XmlElement("Location")]
+    public string Location { get; set; } = string.Empty;
+
+    [XmlElement("Bucket")]
+    public string Bucket { get; set; } = string.Empty;
+
+    [XmlElement("Key")]
+    public string Key { get; set; } = string.Empty;
+
+    [XmlElement("ETag")]
+    public string ETag { get; set; } = string.Empty;
+}
+
+[XmlRoot("ListPartsResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class ListPartsResult
+{
+    [XmlElement("Bucket")]
+    public string Bucket { get; set; } = string.Empty;
+
+    [XmlElement("Key")]
+    public string Key { get; set; } = string.Empty;
+
+    [XmlElement("UploadId")]
+    public string UploadId { get; set; } = string.Empty;
+
+    [XmlElement("Initiator")]
+    public Owner? Initiator { get; set; }
+
+    [XmlElement("Owner")]
+    public Owner? Owner { get; set; }
+
+    [XmlElement("StorageClass")]
+    public string StorageClass { get; set; } = "STANDARD";
+
+    [XmlElement("PartNumberMarker")]
+    public int PartNumberMarker { get; set; }
+
+    [XmlElement("NextPartNumberMarker")]
+    public int? NextPartNumberMarker { get; set; }
+
+    [XmlElement("MaxParts")]
+    public int MaxParts { get; set; }
+
+    [XmlElement("IsTruncated")]
+    public bool IsTruncated { get; set; }
+
+    [XmlElement("Part")]
+    public List<Part> Parts { get; set; } = new();
+}
+
+[XmlRoot("Part")]
+public class Part
+{
+    [XmlElement("PartNumber")]
+    public int PartNumber { get; set; }
+
+    [XmlElement("LastModified")]
+    public string LastModified { get; set; } = string.Empty;
+
+    [XmlElement("ETag")]
+    public string ETag { get; set; } = string.Empty;
+
+    [XmlElement("Size")]
+    public long Size { get; set; }
+}
+
+[XmlRoot("ListMultipartUploadsResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class ListMultipartUploadsResult
+{
+    [XmlElement("Bucket")]
+    public string Bucket { get; set; } = string.Empty;
+
+    [XmlElement("KeyMarker")]
+    public string? KeyMarker { get; set; }
+
+    [XmlElement("UploadIdMarker")]
+    public string? UploadIdMarker { get; set; }
+
+    [XmlElement("NextKeyMarker")]
+    public string? NextKeyMarker { get; set; }
+
+    [XmlElement("NextUploadIdMarker")]
+    public string? NextUploadIdMarker { get; set; }
+
+    [XmlElement("MaxUploads")]
+    public int MaxUploads { get; set; }
+
+    [XmlElement("IsTruncated")]
+    public bool IsTruncated { get; set; }
+
+    [XmlElement("Upload")]
+    public List<Upload> Uploads { get; set; } = new();
+}
+
+[XmlRoot("Upload")]
+public class Upload
+{
+    [XmlElement("Key")]
+    public string Key { get; set; } = string.Empty;
+
+    [XmlElement("UploadId")]
+    public string UploadId { get; set; } = string.Empty;
+
+    [XmlElement("Initiator")]
+    public Owner? Initiator { get; set; }
+
+    [XmlElement("Owner")]
+    public Owner? Owner { get; set; }
+
+    [XmlElement("StorageClass")]
+    public string StorageClass { get; set; } = "STANDARD";
+
+    [XmlElement("Initiated")]
+    public string Initiated { get; set; } = string.Empty;
+}
+
+[XmlRoot("Error")]
+public class S3Error
+{
+    [XmlElement("Code")]
+    public string Code { get; set; } = string.Empty;
+
+    [XmlElement("Message")]
+    public string Message { get; set; } = string.Empty;
+
+    [XmlElement("Resource")]
+    public string? Resource { get; set; }
+
+    [XmlElement("RequestId")]
+    public string RequestId { get; set; } = Guid.NewGuid().ToString();
+}
+
+// Version with namespace for S3 spec compliance
+[XmlRoot("CompleteMultipartUpload", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class CompleteMultipartUploadXml
+{
+    [XmlElement("Part")]
+    public List<CompletedPartXml> Parts { get; set; } = new();
+}
+
+// Version without namespace for compatibility
+[XmlRoot("CompleteMultipartUpload")]
+public class CompleteMultipartUploadXmlNoNamespace
+{
+    [XmlElement("Part")]
+    public List<CompletedPartXmlNoNamespace> Parts { get; set; } = new();
+}
+
+[XmlRoot("Part")]
+public class CompletedPartXml
+{
+    [XmlElement("PartNumber")]
+    public int PartNumber { get; set; }
+
+    [XmlElement("ETag")]
+    public string ETag { get; set; } = string.Empty;
+}
+
+[XmlRoot("Part")]
+public class CompletedPartXmlNoNamespace
+{
+    [XmlElement("PartNumber")]
+    public int PartNumber { get; set; }
+
+    [XmlElement("ETag")]
+    public string ETag { get; set; } = string.Empty;
+}

@@ -1,6 +1,6 @@
-# S3Test Helm Chart
+# Lamina Helm Chart
 
-This Helm chart deploys the S3Test application on Kubernetes or OpenShift clusters with automatic platform detection.
+This Helm chart deploys the Lamina application on Kubernetes or OpenShift clusters with automatic platform detection.
 
 ## Features
 
@@ -31,23 +31,23 @@ This Helm chart deploys the S3Test application on Kubernetes or OpenShift cluste
 
 ```bash
 # Install with default values
-helm install s3test ./chart
+helm install lamina ./chart
 
 # Install with custom release name
 helm install my-s3-api ./chart
 
 # Install in specific namespace
-helm install s3test ./chart -n s3test --create-namespace
+helm install lamina ./chart -n lamina --create-namespace
 ```
 
 ### Installation with Custom Values
 
 ```bash
 # Install with custom values file
-helm install s3test ./chart -f my-values.yaml
+helm install lamina ./chart -f my-values.yaml
 
 # Install with specific parameters
-helm install s3test ./chart \
+helm install lamina ./chart \
   --set config.storageType=Filesystem \
   --set config.filesystemStorage.enabled=true \
   --set config.authentication.enabled=true
@@ -61,7 +61,7 @@ Key configuration options:
 |-----------|-------------|---------|
 | `platform.type` | Platform type (`auto`, `kubernetes`, `openshift`) | `auto` |
 | `replicaCount` | Number of replicas | `1` |
-| `image.repository` | Container image repository | `s3test` |
+| `image.repository` | Container image repository | `lamina` |
 | `image.tag` | Container image tag | `Chart.AppVersion` |
 | `imageStream.enabled` | Enable ImageStream (OpenShift) | `auto` |
 | `service.type` | Kubernetes service type | `ClusterIP` |
@@ -87,8 +87,8 @@ config:
   storageType: Filesystem
   filesystemStorage:
     enabled: true
-    dataDirectory: /data/s3test/data
-    metadataDirectory: /data/s3test/metadata
+    dataDirectory: /data/lamina/data
+    metadataDirectory: /data/lamina/metadata
     persistentVolume:
       enabled: true
       storageClass: standard
@@ -153,7 +153,7 @@ imageStream:
 ### Deploy to OpenShift with Persistent Storage
 
 ```bash
-helm install s3test ./chart \
+helm install lamina ./chart \
   --set config.storageType=Filesystem \
   --set config.filesystemStorage.enabled=true \
   --set config.filesystemStorage.persistentVolume.enabled=true \
@@ -163,7 +163,7 @@ helm install s3test ./chart \
 ### Deploy to Kubernetes with Ingress
 
 ```bash
-helm install s3test ./chart \
+helm install lamina ./chart \
   --set ingress.enabled=true \
   --set ingress.hosts[0].host=s3.mydomain.com \
   --set ingress.className=nginx
@@ -172,7 +172,7 @@ helm install s3test ./chart \
 ### Deploy with Authentication and Custom Limits
 
 ```bash
-helm install s3test ./chart \
+helm install lamina ./chart \
   --set config.authentication.enabled=true \
   --set 'config.authentication.users[0].accessKeyId=admin' \
   --set 'config.authentication.users[0].secretAccessKey=secret123' \
@@ -188,13 +188,13 @@ After installation, test the S3 API:
 ```bash
 # Get the service URL (varies by configuration)
 # For NodePort/LoadBalancer:
-kubectl get svc s3test
+kubectl get svc lamina
 
 # For Ingress:
-kubectl get ingress s3test
+kubectl get ingress lamina
 
 # For OpenShift Route:
-oc get route s3test
+oc get route lamina
 
 # Test with curl
 export S3_ENDPOINT=<your-endpoint-url>
@@ -209,10 +209,10 @@ aws s3 --endpoint-url $S3_ENDPOINT mb s3://test-bucket
 
 ```bash
 # Check pod status
-kubectl get pods -l app.kubernetes.io/name=s3test
+kubectl get pods -l app.kubernetes.io/name=lamina
 
 # View logs
-kubectl logs -l app.kubernetes.io/name=s3test --tail=100
+kubectl logs -l app.kubernetes.io/name=lamina --tail=100
 
 # Check health endpoint
 curl $S3_ENDPOINT/health
@@ -222,11 +222,11 @@ curl $S3_ENDPOINT/health
 
 ```bash
 # Uninstall the release
-helm uninstall s3test
+helm uninstall lamina
 
 # Uninstall and delete namespace
-helm uninstall s3test -n s3test
-kubectl delete namespace s3test
+helm uninstall lamina -n lamina
+kubectl delete namespace lamina
 ```
 
 ## Troubleshooting
@@ -237,12 +237,12 @@ If using ImageStream and getting image pull errors:
 
 1. Check the ImageStream:
    ```bash
-   oc get imagestream s3test -o yaml
+   oc get imagestream lamina -o yaml
    ```
 
 2. Manually import the image:
    ```bash
-   oc import-image s3test:latest --from=docker.io/yourreg/s3test:latest --confirm
+   oc import-image lamina:latest --from=docker.io/yourreg/lamina:latest --confirm
    ```
 
 ### Permission Denied on OpenShift
@@ -283,14 +283,14 @@ kind create cluster
 minikube start
 
 # Build and load local image
-docker build -t s3test:dev .
-kind load docker-image s3test:dev
+docker build -t lamina:dev .
+kind load docker-image lamina:dev
 # or
-minikube image load s3test:dev
+minikube image load lamina:dev
 
 # Install with local image
-helm install s3test ./chart \
-  --set image.repository=s3test \
+helm install lamina ./chart \
+  --set image.repository=lamina \
   --set image.tag=dev \
   --set image.pullPolicy=Never
 ```
@@ -299,10 +299,10 @@ helm install s3test ./chart \
 
 ```bash
 # Generate manifests without installing
-helm install s3test ./chart --dry-run --debug
+helm install lamina ./chart --dry-run --debug
 
 # Template specific values
-helm template s3test ./chart -f values-prod.yaml
+helm template lamina ./chart -f values-prod.yaml
 ```
 
 ## License

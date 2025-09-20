@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "s3test.fullname" . }}
+  name: {{ include "lamina.fullname" . }}
   labels:
-    {{- include "s3test.labels" . | nindent 4 }}
+    {{- include "lamina.labels" . | nindent 4 }}
 data:
   appsettings.Production.json: |
     {

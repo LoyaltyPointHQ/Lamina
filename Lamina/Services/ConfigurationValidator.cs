@@ -1,0 +1,103 @@
+namespace Lamina.Services;
+
+public static class ConfigurationValidator
+{
+    public static void ValidateConfiguration(IConfiguration configuration)
+    {
+        var storageType = configuration["StorageType"] ?? "InMemory";
+
+        if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
+        {
+            var dataDirectory = configuration["FilesystemStorage:DataDirectory"];
+            var metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"];
+
+            if (string.IsNullOrWhiteSpace(dataDirectory))
+            {
+                throw new InvalidOperationException(
+                    "Configuration error: FilesystemStorage:DataDirectory is required when StorageType is 'Filesystem'. " +
+                    "Please configure it in appsettings.json or through environment variables.");
+            }
+
+            if (string.IsNullOrWhiteSpace(metadataDirectory))
+            {
+                throw new InvalidOperationException(
+                    "Configuration error: FilesystemStorage:MetadataDirectory is required when StorageType is 'Filesystem'. " +
+                    "Please configure it in appsettings.json or through environment variables.");
+            }
+
+            // Validate paths are not the same
+            if (dataDirectory.Equals(metadataDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "Configuration error: FilesystemStorage:DataDirectory and FilesystemStorage:MetadataDirectory must be different paths.");
+            }
+
+            // Log the configuration
+            Console.WriteLine($"Filesystem Storage Configuration:");
+            Console.WriteLine($"  Data Directory: {dataDirectory}");
+            Console.WriteLine($"  Metadata Directory: {metadataDirectory}");
+        }
+        else if (!storageType.Equals("InMemory", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Configuration error: Invalid StorageType '{storageType}'. Valid values are 'InMemory' or 'Filesystem'.");
+        }
+
+        // Validate authentication configuration if enabled
+        var authEnabled = configuration.GetValue<bool>("Authentication:Enabled", false);
+        if (authEnabled)
+        {
+            var users = configuration.GetSection("Authentication:Users").GetChildren().ToList();
+            if (!users.Any())
+            {
+                throw new InvalidOperationException(
+                    "Configuration error: Authentication is enabled but no users are configured. " +
+                    "Please configure users in Authentication:Users section.");
+            }
+
+            foreach (var user in users)
+            {
+                var accessKeyId = user["AccessKeyId"];
+                var secretAccessKey = user["SecretAccessKey"];
+
+                if (string.IsNullOrWhiteSpace(accessKeyId))
+                {
+                    throw new InvalidOperationException(
+                        "Configuration error: User configured without AccessKeyId in Authentication:Users.");
+                }
+
+                if (string.IsNullOrWhiteSpace(secretAccessKey))
+                {
+                    throw new InvalidOperationException(
+                        $"Configuration error: User '{accessKeyId}' configured without SecretAccessKey in Authentication:Users.");
+                }
+            }
+
+            Console.WriteLine($"Authentication enabled with {users.Count} user(s) configured");
+        }
+
+        // Validate multipart cleanup configuration
+        var cleanupEnabled = configuration.GetValue<bool>("MultipartUploadCleanup:Enabled", true);
+        if (cleanupEnabled)
+        {
+            var cleanupInterval = configuration.GetValue<int>("MultipartUploadCleanup:CleanupIntervalMinutes", 60);
+            var uploadTimeout = configuration.GetValue<int>("MultipartUploadCleanup:UploadTimeoutHours", 24);
+
+            if (cleanupInterval <= 0)
+            {
+                throw new InvalidOperationException(
+                    "Configuration error: MultipartUploadCleanup:CleanupIntervalMinutes must be greater than 0.");
+            }
+
+            if (uploadTimeout <= 0)
+            {
+                throw new InvalidOperationException(
+                    "Configuration error: MultipartUploadCleanup:UploadTimeoutHours must be greater than 0.");
+            }
+
+            Console.WriteLine($"Multipart Cleanup Configuration:");
+            Console.WriteLine($"  Cleanup Interval: {cleanupInterval} minutes");
+            Console.WriteLine($"  Upload Timeout: {uploadTimeout} hours");
+        }
+    }
+}

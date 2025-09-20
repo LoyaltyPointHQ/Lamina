@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "s3test.fullname" . }}
+  name: {{ include "lamina.fullname" . }}
   labels:
-    {{- include "s3test.labels" . | nindent 4 }}
+    {{- include "lamina.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "s3test.selectorLabels" . | nindent 6 }}
+      {{- include "lamina.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
@@ -19,19 +19,19 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "s3test.selectorLabels" . | nindent 8 }}
+        {{- include "lamina.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: {{ include "s3test.serviceAccountName" . }}
+      serviceAccountName: {{ include "lamina.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ include "s3test.image" . }}"
+          image: "{{ include "lamina.image" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
@@ -82,12 +82,12 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "s3test.fullname" . }}
+            name: {{ include "lamina.fullname" . }}
         {{- if and (eq .Values.config.storageType "Filesystem") .Values.config.filesystemStorage.enabled }}
         - name: data-storage
           {{- if .Values.config.filesystemStorage.persistentVolume.enabled }}
           persistentVolumeClaim:
-            claimName: {{ .Values.config.filesystemStorage.persistentVolume.existingClaim | default (printf "%s-data" (include "s3test.fullname" .)) }}
+            claimName: {{ .Values.config.filesystemStorage.persistentVolume.existingClaim | default (printf "%s-data" (include "lamina.fullname" .)) }}
           {{- else }}
           emptyDir: {}
           {{- end }}

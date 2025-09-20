@@ -1,10 +1,10 @@
-{{- if eq (include "s3test.imageStreamEnabled" .) "true" }}
+{{- if eq (include "lamina.imageStreamEnabled" .) "true" }}
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
-  name: {{ include "s3test.fullname" . }}
+  name: {{ include "lamina.fullname" . }}
   labels:
-    {{- include "s3test.labels" . | nindent 4 }}
+    {{- include "lamina.labels" . | nindent 4 }}
 spec:
   lookupPolicy:
     local: false

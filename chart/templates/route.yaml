@@ -1,10 +1,10 @@
-{{- if eq (include "s3test.routeEnabled" .) "true" }}
+{{- if eq (include "lamina.routeEnabled" .) "true" }}
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: {{ include "s3test.fullname" . }}
+  name: {{ include "lamina.fullname" . }}
   labels:
-    {{- include "s3test.labels" . | nindent 4 }}
+    {{- include "lamina.labels" . | nindent 4 }}
 spec:
   {{- if .Values.route.host }}
   host: {{ .Values.route.host }}
@@ -12,7 +12,7 @@ spec:
   path: {{ .Values.route.path }}
   to:
     kind: Service
-    name: {{ include "s3test.fullname" . }}
+    name: {{ include "lamina.fullname" . }}
     weight: 100
   port:
     targetPort: http

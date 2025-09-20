@@ -1,4 +1,4 @@
-# Default values for s3test.
+# Default values for lamina.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
@@ -12,7 +12,7 @@ replicaCount: 1
 
 # Image configuration
 image:
-  repository: s3test
+  repository: lamina
   pullPolicy: IfNotPresent
   tag: ""  # Defaults to .Chart.AppVersion
 
@@ -20,7 +20,7 @@ image:
 imageStream:
   enabled: auto  # auto, true, or false
   namespace: ""  # Defaults to release namespace
-  name: s3test
+  name: lamina
 
 # Service account configuration
 serviceAccount:
@@ -60,14 +60,14 @@ ingress:
     # kubernetes.io/ingress.class: nginx
     # kubernetes.io/tls-acme: "true"
   hosts:
-    - host: s3test.local
+    - host: lamina.local
       paths:
         - path: /
           pathType: Prefix
   tls: []
-  #  - secretName: s3test-tls
+  #  - secretName: lamina-tls
   #    hosts:
-  #      - s3test.local
+  #      - lamina.local
 
 # Route configuration (OpenShift)
 route:
@@ -117,8 +117,8 @@ config:
   # Filesystem storage configuration
   filesystemStorage:
     enabled: false
-    dataDirectory: /data/s3test/data
-    metadataDirectory: /data/s3test/metadata
+    dataDirectory: /data/lamina/data
+    metadataDirectory: /data/lamina/metadata
     # Persistent volume configuration
     persistentVolume:
       enabled: false

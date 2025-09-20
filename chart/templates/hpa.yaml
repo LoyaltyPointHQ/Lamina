@@ -2,14 +2,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "s3test.fullname" . }}
+  name: {{ include "lamina.fullname" . }}
   labels:
-    {{- include "s3test.labels" . | nindent 4 }}
+    {{- include "lamina.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "s3test.fullname" . }}
+    name: {{ include "lamina.fullname" . }}
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:

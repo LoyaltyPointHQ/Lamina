@@ -2,9 +2,9 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "s3test.fullname" . }}-data
+  name: {{ include "lamina.fullname" . }}-data
   labels:
-    {{- include "s3test.labels" . | nindent 4 }}
+    {{- include "lamina.labels" . | nindent 4 }}
 spec:
   accessModes:
     - {{ .Values.config.filesystemStorage.persistentVolume.accessMode }}

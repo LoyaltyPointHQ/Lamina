@@ -1,5 +1,5 @@
 apiVersion: v2
-name: s3test
+name: lamina
 description: S3-compatible storage API service with support for Kubernetes and OpenShift
 type: application
 version: 1.0.0
@@ -9,10 +9,10 @@ keywords:
   - storage
   - api
   - dotnet
-home: https://github.com/your-org/s3test
+home: https://github.com/your-org/lamina
 sources:
-  - https://github.com/your-org/s3test
+  - https://github.com/your-org/lamina
 maintainers:
   - name: Your Name
     email: your-email@example.com
-icon: https://example.com/s3test-icon.png
+icon: https://example.com/lamina-icon.png
