@@ -12,9 +12,8 @@ replicaCount: 1
 
 # Image configuration
 image:
-  repository: lamina
+  repository: ghcr.io/loyaltypointhq/lamina
   pullPolicy: IfNotPresent
-  tag: ""  # Defaults to .Chart.AppVersion
 
 # ImageStream configuration (OpenShift only)
 imageStream:

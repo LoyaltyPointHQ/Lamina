@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a .NET 9.0 ASP.NET Core Web API project called "Lamina" that implements an S3-compatible storage API. The application provides two storage backends (configurable via appsettings.json):
+This is a .NET 9.0 ASP.NET Core Web API project called "Lamina" that implements an S3-compatible storage API.
+
+**GitHub Repository**: https://github.com/LoyaltyPointHQ/Lamina
+**Docker Image**: `ghcr.io/loyaltypointhq/lamina:latest`
+
+The application provides two storage backends (configurable via appsettings.json):
 
 1. **In-Memory Storage**: Default option, stores all data in memory using ConcurrentDictionary
 2. **Filesystem Storage**: Stores objects on disk with separate data and metadata directories

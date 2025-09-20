@@ -25,11 +25,27 @@ A lightweight, S3-compatible storage API implementation built with .NET 9.0 and 
 - .NET 9.0 SDK
 - Docker (optional, for containerized deployment)
 
+### Docker Image
+
+Pre-built Docker images are available from GitHub Container Registry:
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/loyaltypointhq/lamina:latest
+
+# Run the container
+docker run -p 8080:8080 ghcr.io/loyaltypointhq/lamina:latest
+```
+
+Images are automatically built and published for:
+- Every push to master branch (tagged as `latest`)
+- Every release tag (e.g., `v1.0.0`)
+
 ### Running the Application
 
 ```bash
 # Clone the repository
-git clone [repository-url]
+git clone https://github.com/LoyaltyPointHQ/Lamina.git
 cd Lamina
 
 # Build the project
@@ -46,10 +62,11 @@ dotnet run --project Lamina/Lamina.csproj
 ### Running with Docker
 
 ```bash
-# Build the Docker image
-docker build -f Lamina/Dockerfile -t lamina .
+# Using pre-built image from GitHub Container Registry
+docker run -p 8080:8080 ghcr.io/loyaltypointhq/lamina:latest
 
-# Run the container
+# Or build your own image
+docker build -f Lamina/Dockerfile -t lamina .
 docker run -p 8080:8080 lamina
 ```
 
@@ -285,13 +302,36 @@ The storage layer uses a facade pattern to orchestrate operations between data a
 - No cross-region replication
 - No S3 Select or analytics features
 
+## Deployment
+
+### Kubernetes/OpenShift Deployment with Helm
+
+The project includes a Helm chart for easy deployment to Kubernetes or OpenShift clusters:
+
+```bash
+# Add the Helm repository (if published)
+# helm repo add lamina https://loyaltypointhq.github.io/lamina
+# helm repo update
+
+# Install using local chart
+helm install lamina ./chart
+
+# Install with custom values
+helm install lamina ./chart -f custom-values.yaml
+
+# Upgrade existing deployment
+helm upgrade lamina ./chart
+```
+
+The Helm chart automatically detects whether it's running on OpenShift or Kubernetes and applies the appropriate configurations.
+
 ## Development
 
 ### Building from Source
 
 ```bash
 # Clone the repository
-git clone [repository-url]
+git clone https://github.com/LoyaltyPointHQ/Lamina.git
 cd Lamina
 
 # Restore dependencies
