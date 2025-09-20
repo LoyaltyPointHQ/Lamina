@@ -10,11 +10,12 @@ A lightweight, S3-compatible storage API implementation built with .NET 9.0 and 
   - **Filesystem Storage**: Persistent storage with separate data and metadata directories
 - **Bucket Management**: Create, list, delete (including force delete), and check bucket existence
 - **Object Operations**: Upload, download, delete, and list objects with metadata support
-- **Multipart Uploads**: Complete support for large file uploads using S3's multipart upload protocol
-- **AWS Signature V4 Authentication**: Optional authentication support compatible with AWS SDKs
+- **Multipart Uploads**: Complete support for large file uploads using S3's multipart upload protocol with streaming assembly
+- **AWS Signature V4 Authentication**: Optional authentication with per-bucket permissions
+- **Automatic Cleanup**: Background service for cleaning up stale multipart uploads
 - **Thread-Safe Operations**: FileSystemLockManager ensures concurrent access safety
-- **Storage Limits**: Configurable limits for buckets, object sizes, and total storage
-- **Comprehensive Testing**: 62+ tests covering all operations with both unit and integration tests
+- **SHA1 ETags**: Secure ETag generation using SHA1 hash algorithm
+- **Comprehensive Testing**: 65+ tests covering all operations with both unit and integration tests
 - **Docker Support**: Ready-to-deploy containerized application
 
 ## Quick Start
@@ -173,48 +174,6 @@ curl -X POST "http://localhost:5214/my-bucket/large-file.bin?uploadId=$UPLOAD_ID
 </CompleteMultipartUpload>'
 ```
 
-## Project Structure
-
-```
-S3Test/
-├── Configuration/
-│   └── StorageLimits.cs          # Storage limit configurations
-├── Controllers/
-│   ├── S3BucketsController.cs    # S3-compatible bucket operations
-│   └── S3ObjectsController.cs     # S3-compatible object operations
-├── Middleware/
-│   └── S3AuthenticationMiddleware.cs  # AWS Signature V4 authentication
-├── Models/
-│   ├── Authentication.cs          # Authentication models
-│   ├── Bucket.cs                  # Bucket entity
-│   ├── S3Object.cs                # Object entities and DTOs
-│   ├── MultipartUpload.cs         # Multipart upload models
-│   └── S3XmlResponses.cs          # S3 XML response DTOs
-├── Services/
-│   ├── Facade Services/           # Main service orchestrators
-│   │   ├── BucketServiceFacade.cs
-│   │   ├── ObjectServiceFacade.cs
-│   │   └── MultipartUploadServiceFacade.cs
-│   ├── Data Services/             # Handle actual data storage
-│   │   ├── InMemory*DataService.cs
-│   │   └── Filesystem*DataService.cs
-│   ├── Metadata Services/         # Handle metadata storage
-│   │   ├── InMemory*MetadataService.cs
-│   │   └── Filesystem*MetadataService.cs
-│   ├── AuthenticationService.cs   # AWS Signature V4 implementation
-│   └── FileSystemLockManager.cs   # Thread-safe file operations
-└── Program.cs                     # Application entry point
-
-S3Test.Tests/
-├── Controllers/
-│   ├── BucketsControllerIntegrationTests.cs  # 10 tests
-│   └── ObjectsControllerIntegrationTests.cs  # 16 tests
-└── Services/
-    ├── BucketServiceTests.cs                 # 10 tests
-    ├── ObjectServiceTests.cs                 # 16 tests
-    └── MultipartUploadServiceTests.cs        # 10 tests
-```
-
 ## Technical Details
 
 ### S3 Compatibility
@@ -242,10 +201,11 @@ S3Test.Tests/
 - **Best For**: Production use, persistent storage needs
 
 ### Common Features
-- **ETag Generation**: MD5 hash of object content
+- **ETag Generation**: SHA1 hash of object content (more secure than MD5)
 - **Metadata Support**: Custom metadata with `x-amz-meta-*` headers
 - **Binary Data**: Full support for binary file uploads/downloads
-- **Streaming**: Efficient streaming using System.IO.Pipelines
+- **Streaming**: Efficient streaming for multipart assembly and object transfers
+- **Automatic Cleanup**: Configurable background service for stale upload cleanup
 
 ### Configuration Options
 
@@ -265,27 +225,30 @@ S3Test.Tests/
 {
   "Authentication": {
     "Enabled": false,  // Set to true to enable AWS Signature V4
-    "AccessKeys": [
+    "Users": [
       {
         "AccessKeyId": "your-access-key",
         "SecretAccessKey": "your-secret-key",
-        "UserId": "user1"
+        "Name": "username",
+        "BucketPermissions": [
+          {
+            "BucketName": "*",  // Wildcard for all buckets
+            "Permissions": ["*"]  // Or specific: ["read", "write", "list", "delete"]
+          }
+        ]
       }
     ]
   }
 }
 ```
 
-#### Storage Limits
+#### Multipart Upload Cleanup
 ```json
 {
-  "StorageLimits": {
-    "MaxBuckets": 100,
-    "MaxObjectSizeBytes": 5368709120,        // 5GB
-    "MaxTotalStorageBytes": 107374182400,    // 100GB
-    "MaxObjectsPerBucket": 100000,
-    "MaxConcurrentMultipartUploads": 1000,
-    "MaxPartsPerUpload": 10000
+  "MultipartUploadCleanup": {
+    "Enabled": true,  // Enable/disable automatic cleanup
+    "CleanupIntervalMinutes": 60,  // How often to run cleanup (default: 60)
+    "UploadTimeoutHours": 24  // Uploads older than this are cleaned up (default: 24)
   }
 }
 ```
@@ -333,15 +296,18 @@ dotnet test
 - Use `dotnet test --logger "console;verbosity=detailed"` for detailed test output
 - Check XML namespace compatibility when dealing with different S3 clients
 - Monitor ETag handling - stored without quotes internally, returned with quotes
+- ETags use SHA1 hashing (not MD5) for improved security
+- Check cleanup service logs to monitor stale multipart upload removal
 
 ## Testing Coverage
 
-The project includes 62 comprehensive tests:
+The project includes 65+ comprehensive tests:
 
-- **Unit Tests (36 tests)**
+- **Unit Tests (39 tests)**
   - BucketServiceTests: 10 tests
   - ObjectServiceTests: 16 tests
   - MultipartUploadServiceTests: 10 tests
+  - MultipartUploadCleanupServiceTests: 3 tests
 
 - **Integration Tests (26 tests)**
   - BucketsControllerIntegrationTests: 10 tests

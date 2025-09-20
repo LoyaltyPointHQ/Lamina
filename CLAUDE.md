@@ -16,7 +16,6 @@ Features supported:
 - S3-compliant XML responses
 - AWS Signature V4 authentication (optional, configurable)
 - Thread-safe file operations with FileSystemLockManager
-- Storage limits enforcement (max buckets, max object size, etc.)
 
 ## Development Commands
 
@@ -104,6 +103,11 @@ docker run -p 8080:8080 s3test
   - **Supporting Services**:
     - `IAuthenticationService` / `AuthenticationService`: AWS Signature V4 authentication
     - `IFileSystemLockManager` / `FileSystemLockManager`: Thread-safe file operations
+    - `MultipartUploadCleanupService`: Background service for automatic cleanup of stale multipart uploads
+
+### Helpers
+- **S3Test/Helpers/**:
+  - `ETagHelper.cs`: Centralized ETag computation using SHA1 (supports byte arrays, files, and streams)
 
 ### Tests
 - **S3Test.Tests/**:
@@ -112,6 +116,7 @@ docker run -p 8080:8080 s3test
   - `Services/BucketServiceTests.cs`: Bucket service unit tests
   - `Services/ObjectServiceTests.cs`: Object service unit tests
   - `Services/MultipartUploadServiceTests.cs`: Multipart upload tests
+  - `Services/MultipartUploadCleanupServiceTests.cs`: Cleanup service tests
 
 ## S3 API Implementation Details
 
@@ -135,10 +140,11 @@ docker run -p 8080:8080 s3test
 6. **List Uploads**: `GET /{bucket}?uploads`
 
 ### ETag Handling
-- ETags are computed using MD5 hash of content
+- ETags are computed using SHA1 hash of content (changed from MD5)
 - Stored internally without quotes
 - Returned in responses with quotes (e.g., `"etag-value"`)
 - Comparison normalizes by trimming quotes
+- ETag computation is centralized in `ETagHelper` class
 
 ### Important Implementation Notes
 
@@ -170,7 +176,7 @@ docker run -p 8080:8080 s3test
        "Key": "object-key",
        "BucketName": "bucket-name",
        "LastModified": "2025-09-18T12:23:54.7926647Z",
-       "ETag": "md5-hash",
+       "ETag": "sha1-hash",  // Note: SHA1 hash, not MD5
        "ContentType": "text/plain",
        "UserMetadata": {}
      }
@@ -203,30 +209,52 @@ Configure in `appsettings.json` or `appsettings.Development.json`:
 {
   "Authentication": {
     "Enabled": false,  // Set to true to enable AWS Signature V4 authentication
-    "AccessKeys": [
+    "Users": [  // Note: Changed from "AccessKeys" to "Users"
       {
         "AccessKeyId": "your-access-key",
         "SecretAccessKey": "your-secret-key",
-        "UserId": "user1"
+        "Name": "username",
+        "BucketPermissions": [
+          {
+            "BucketName": "*",  // Wildcard for all buckets
+            "Permissions": ["*"]  // Or specific: ["read", "write", "list", "delete"]
+          }
+        ]
       }
     ]
   }
 }
 ```
 
-### Storage Limits
+### Multipart Upload Cleanup Configuration
 ```json
 {
-  "StorageLimits": {
-    "MaxBuckets": 100,
-    "MaxObjectSizeBytes": 5368709120,
-    "MaxTotalStorageBytes": 107374182400,
-    "MaxObjectsPerBucket": 100000,
-    "MaxConcurrentMultipartUploads": 1000,
-    "MaxPartsPerUpload": 10000
+  "MultipartUploadCleanup": {
+    "Enabled": true,  // Enable/disable automatic cleanup
+    "CleanupIntervalMinutes": 60,  // How often to run cleanup
+    "UploadTimeoutHours": 24  // Uploads older than this are considered stale
   }
 }
 ```
+
+## Recent Updates
+
+### SHA1 Migration (from MD5)
+- All ETag computations now use SHA1 instead of MD5
+- Centralized in `ETagHelper` class for consistency
+- Supports byte arrays, files, and streams
+- Files are processed without loading into memory
+
+### Multipart Upload Cleanup Service
+- Background service that automatically cleans up stale/abandoned multipart uploads
+- Runs periodically (configurable interval)
+- Removes uploads older than configured timeout
+- Helps prevent storage leaks from incomplete uploads
+
+### Streaming Multipart Assembly
+- Multipart uploads are now assembled using streaming to eliminate memory overhead
+- Parts are read directly from storage and written to the final object
+- Significantly reduces memory usage for large multipart uploads
 
 ## Common Development Tasks
 
