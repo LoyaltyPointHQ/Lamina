@@ -24,38 +24,41 @@ public class FilesystemObjectDataService : IObjectDataService
         var dataDir = Path.GetDirectoryName(dataPath)!;
         Directory.CreateDirectory(dataDir);
 
-        // Stream directly to file without buffering in memory
-        await using var fileStream = new FileStream(dataPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
         long bytesWritten = 0;
 
-        while (!cancellationToken.IsCancellationRequested)
+        // Write the data to file, ensuring proper disposal before computing ETag
         {
-            var result = await dataReader.ReadAsync(cancellationToken);
-            var buffer = result.Buffer;
+            await using var fileStream = new FileStream(dataPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
-            if (buffer.IsEmpty && result.IsCompleted)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                break;
+                var result = await dataReader.ReadAsync(cancellationToken);
+                var buffer = result.Buffer;
+
+                if (buffer.IsEmpty && result.IsCompleted)
+                {
+                    break;
+                }
+
+                foreach (var segment in buffer)
+                {
+                    await fileStream.WriteAsync(segment, cancellationToken);
+                    bytesWritten += segment.Length;
+                }
+
+                dataReader.AdvanceTo(buffer.End);
+
+                if (result.IsCompleted)
+                {
+                    break;
+                }
             }
 
-            foreach (var segment in buffer)
-            {
-                await fileStream.WriteAsync(segment, cancellationToken);
-                bytesWritten += segment.Length;
-            }
+            await dataReader.CompleteAsync();
+            await fileStream.FlushAsync(cancellationToken);
+        } // FileStream is fully disposed here
 
-            dataReader.AdvanceTo(buffer.End);
-
-            if (result.IsCompleted)
-            {
-                break;
-            }
-        }
-
-        await dataReader.CompleteAsync();
-        await fileStream.FlushAsync(cancellationToken);
-
-        // Compute ETag from the file on disk
+        // Now compute ETag from the file on disk with a new file handle
         var etag = await ETagHelper.ComputeETagFromFileAsync(dataPath);
 
         return (bytesWritten, etag);
@@ -67,41 +70,44 @@ public class FilesystemObjectDataService : IObjectDataService
         var dataDir = Path.GetDirectoryName(dataPath)!;
         Directory.CreateDirectory(dataDir);
 
-        // Stream all parts directly to the final file
-        await using var fileStream = new FileStream(dataPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
         long totalBytesWritten = 0;
 
-        foreach (var reader in partReaders)
+        // Write all parts to the file, ensuring proper disposal before computing ETag
         {
-            while (!cancellationToken.IsCancellationRequested)
+            await using var fileStream = new FileStream(dataPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
+
+            foreach (var reader in partReaders)
             {
-                var result = await reader.ReadAsync(cancellationToken);
-                var buffer = result.Buffer;
-
-                if (buffer.IsEmpty && result.IsCompleted)
+                while (!cancellationToken.IsCancellationRequested)
                 {
-                    break;
-                }
+                    var result = await reader.ReadAsync(cancellationToken);
+                    var buffer = result.Buffer;
 
-                foreach (var segment in buffer)
-                {
-                    await fileStream.WriteAsync(segment, cancellationToken);
-                    totalBytesWritten += segment.Length;
-                }
+                    if (buffer.IsEmpty && result.IsCompleted)
+                    {
+                        break;
+                    }
 
-                reader.AdvanceTo(buffer.End);
+                    foreach (var segment in buffer)
+                    {
+                        await fileStream.WriteAsync(segment, cancellationToken);
+                        totalBytesWritten += segment.Length;
+                    }
 
-                if (result.IsCompleted)
-                {
-                    break;
+                    reader.AdvanceTo(buffer.End);
+
+                    if (result.IsCompleted)
+                    {
+                        break;
+                    }
                 }
+                await reader.CompleteAsync();
             }
-            await reader.CompleteAsync();
-        }
 
-        await fileStream.FlushAsync(cancellationToken);
+            await fileStream.FlushAsync(cancellationToken);
+        } // FileStream is fully disposed here
 
-        // Compute ETag from the completed file
+        // Now compute ETag from the completed file with a new file handle
         var etag = await ETagHelper.ComputeETagFromFileAsync(dataPath);
 
         return (totalBytesWritten, etag);

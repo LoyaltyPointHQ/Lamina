@@ -26,38 +26,41 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
         var partDir = Path.GetDirectoryName(partPath)!;
         Directory.CreateDirectory(partDir);
 
-        // Stream directly to file without buffering in memory
-        await using var fileStream = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
         long bytesWritten = 0;
 
-        while (!cancellationToken.IsCancellationRequested)
+        // Write the data to file, ensuring proper disposal before computing ETag
         {
-            var result = await dataReader.ReadAsync(cancellationToken);
-            var buffer = result.Buffer;
+            await using var fileStream = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
-            if (buffer.IsEmpty && result.IsCompleted)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                break;
+                var result = await dataReader.ReadAsync(cancellationToken);
+                var buffer = result.Buffer;
+
+                if (buffer.IsEmpty && result.IsCompleted)
+                {
+                    break;
+                }
+
+                foreach (var segment in buffer)
+                {
+                    await fileStream.WriteAsync(segment, cancellationToken);
+                    bytesWritten += segment.Length;
+                }
+
+                dataReader.AdvanceTo(buffer.End);
+
+                if (result.IsCompleted)
+                {
+                    break;
+                }
             }
 
-            foreach (var segment in buffer)
-            {
-                await fileStream.WriteAsync(segment, cancellationToken);
-                bytesWritten += segment.Length;
-            }
+            await dataReader.CompleteAsync();
+            await fileStream.FlushAsync(cancellationToken);
+        } // FileStream is fully disposed here
 
-            dataReader.AdvanceTo(buffer.End);
-
-            if (result.IsCompleted)
-            {
-                break;
-            }
-        }
-
-        await dataReader.CompleteAsync();
-        await fileStream.FlushAsync(cancellationToken);
-
-        // Compute ETag from the file on disk
+        // Now compute ETag from the file on disk with a new file handle
         var etag = await ETagHelper.ComputeETagFromFileAsync(partPath);
 
         var part = new UploadPart
@@ -168,7 +171,8 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
             {
                 try
                 {
-                    await using var fileStream = File.OpenRead(partPath);
+                    // Use FileShare.Read to allow concurrent reads for ETag verification
+                    await using var fileStream = new FileStream(partPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 4096, useAsync: true);
                     const int bufferSize = 4096;
 
                     int bytesRead;
