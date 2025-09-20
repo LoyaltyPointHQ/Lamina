@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Nito.AsyncEx;
 
 namespace S3Test.Services;
 
@@ -6,93 +7,54 @@ public interface IFileSystemLockManager
 {
     Task<T?> ReadFileAsync<T>(string filePath, Func<string, Task<T>> readOperation, CancellationToken cancellationToken = default);
     Task WriteFileAsync(string filePath, string content, CancellationToken cancellationToken = default);
-    bool DeleteFile(string filePath);
+    Task<bool> DeleteFile(string filePath);
 }
 
-public class FileSystemLockManager : IFileSystemLockManager, IDisposable
+public class FileSystemLockManager : IFileSystemLockManager
 {
     private class LockInfo : IDisposable
     {
         private readonly string _filePath;
         private readonly FileSystemLockManager _manager;
-        public ReaderWriterLockSlim Lock { get; }
+        public AsyncReaderWriterLock Lock { get; }
         private int _referenceCount;
 
         public LockInfo(string filePath, FileSystemLockManager manager)
         {
             _filePath = filePath;
             _manager = manager;
-            Lock = new ReaderWriterLockSlim();
+            Lock = new AsyncReaderWriterLock();
         }
 
-        public void Acquire() => _referenceCount++;
+        public void Acquire() => Interlocked.Increment(ref _referenceCount);
 
         public void Dispose()
         {
             lock (_manager._acquireLock)
             {
-                if (--_referenceCount > 0)
+                if (Interlocked.Decrement(ref _referenceCount) > 0)
                     return;
-                Lock.Dispose();
                 _manager._locks.TryRemove(_filePath, out _);
             }
         }
     }
 
     private readonly ConcurrentDictionary<string, LockInfo> _locks = new();
-    private readonly object _acquireLock = new object();
-    private readonly ILogger<FileSystemLockManager> _logger;
-    private readonly TimeSpan _lockTimeout = TimeSpan.FromSeconds(5);
-    private bool _disposed;
-
-    public FileSystemLockManager(ILogger<FileSystemLockManager> logger)
-    {
-        _logger = logger;
-    }
-
+    private readonly object _acquireLock = new();
     public async Task<T?> ReadFileAsync<T>(string filePath, Func<string, Task<T>> readOperation, CancellationToken cancellationToken = default)
     {
         var lockKey = GetNormalizedPath(filePath);
         using var lockInfo = AcquireLockInfo(lockKey);
 
-        var lockAcquired = false;
-        try
+        using var readLock = await lockInfo.Lock.ReaderLockAsync();
+
+        if (!File.Exists(filePath))
         {
-            if (!lockInfo.Lock.TryEnterReadLock(_lockTimeout))
-            {
-                throw new TimeoutException($"Could not acquire read lock for {filePath} within {_lockTimeout.TotalSeconds} seconds");
-            }
-
-            lockAcquired = true;
-
-            if (!File.Exists(filePath))
-            {
-                return default;
-            }
-
-            var content = await File.ReadAllTextAsync(filePath, cancellationToken);
-            return await readOperation(content);
+            return default;
         }
-        finally
-        {
-            if (lockAcquired)
-            {
-                try
-                {
-                    lockInfo.Lock.ExitReadLock();
-                }
-                catch (SynchronizationLockException)
-                {
-                    // Lock was already released or disposed
-                    _logger.LogWarning("Read lock was already released for {FilePath}", filePath);
-                }
-                catch (ObjectDisposedException)
-                {
-                    // Lock was disposed
-                    _logger.LogWarning("Read lock was disposed for {FilePath}", filePath);
-                }
-            }
-        }
+
+        var content = await File.ReadAllTextAsync(filePath, cancellationToken);
+        return await readOperation(content);
     }
 
     public async Task WriteFileAsync(string filePath, string content, CancellationToken cancellationToken = default)
@@ -100,97 +62,39 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
         var lockKey = GetNormalizedPath(filePath);
         using var lockInfo = AcquireLockInfo(lockKey);
 
-        var lockAcquired = false;
-        try
+        using var writeLock = await lockInfo.Lock.WriterLockAsync();
+
+        // Ensure directory exists
+        var directory = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrEmpty(directory))
         {
-            if (!lockInfo.Lock.TryEnterWriteLock(_lockTimeout))
-            {
-                throw new TimeoutException($"Could not acquire write lock for {filePath} within {_lockTimeout.TotalSeconds} seconds");
-            }
-
-            lockAcquired = true;
-
-            // Ensure directory exists
-            var directory = Path.GetDirectoryName(filePath);
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            await File.WriteAllTextAsync(filePath, content, cancellationToken);
+            Directory.CreateDirectory(directory);
         }
-        finally
-        {
-            if (lockAcquired)
-            {
-                try
-                {
-                    lockInfo.Lock.ExitWriteLock();
-                }
-                catch (SynchronizationLockException)
-                {
-                    // Lock was already released or disposed
-                    _logger.LogWarning("Write lock was already released for {FilePath}", filePath);
-                }
-                catch (ObjectDisposedException)
-                {
-                    // Lock was disposed
-                    _logger.LogWarning("Write lock was disposed for {FilePath}", filePath);
-                }
-            }
-        }
+
+        await File.WriteAllTextAsync(filePath, content, cancellationToken);
     }
 
-    public bool DeleteFile(string filePath)
+    public async Task<bool> DeleteFile(string filePath)
     {
         var lockKey = GetNormalizedPath(filePath);
         using var lockInfo = AcquireLockInfo(lockKey);
 
-        var lockAcquired = false;
-        try
+        using var writeLock = await lockInfo.Lock.WriterLockAsync();
+
+        if (File.Exists(filePath))
         {
-            if (!lockInfo.Lock.TryEnterWriteLock(_lockTimeout))
-            {
-                throw new TimeoutException($"Could not acquire write lock for {filePath} within {_lockTimeout.TotalSeconds} seconds");
-            }
-
-            lockAcquired = true;
-
-            if (File.Exists(filePath))
-            {
-                File.Delete(filePath);
-                return true;
-            }
-
-            return false;
+            File.Delete(filePath);
+            return true;
         }
-        finally
-        {
-            if (lockAcquired)
-            {
-                try
-                {
-                    lockInfo.Lock.ExitWriteLock();
-                }
-                catch (SynchronizationLockException)
-                {
-                    // Lock was already released or disposed
-                    _logger.LogWarning("Write lock was already released for delete {FilePath}", filePath);
-                }
-                catch (ObjectDisposedException)
-                {
-                    // Lock was disposed
-                    _logger.LogWarning("Write lock was disposed for delete {FilePath}", filePath);
-                }
-            }
-        }
+
+        return false;
     }
 
     private LockInfo AcquireLockInfo(string lockKey)
     {
         lock (_acquireLock)
         {
-            var lockInfo = _locks.GetOrAdd(lockKey, _ => new LockInfo(lockKey, this));
+            var lockInfo = _locks.GetOrAdd(lockKey, k => new LockInfo(k, this));
             lockInfo.Acquire();
 
             return lockInfo;
@@ -209,28 +113,5 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
             // If path normalization fails, use as-is
             return path.ToLowerInvariant();
         }
-    }
-
-    public void Dispose()
-    {
-        if (_disposed)
-            return;
-
-        _disposed = true;
-
-        // Dispose all locks
-        foreach (var kvp in _locks)
-        {
-            try
-            {
-                kvp.Value.Lock.Dispose();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Error disposing lock for {LockKey}", kvp.Key);
-            }
-        }
-
-        _locks.Clear();
     }
 }

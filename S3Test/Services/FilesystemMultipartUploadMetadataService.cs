@@ -70,7 +70,7 @@ public class FilesystemMultipartUploadMetadataService : IMultipartUploadMetadata
     public Task<bool> DeleteUploadMetadataAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
     {
         var uploadMetadataPath = GetUploadMetadataPath(uploadId);
-        return Task.FromResult(_lockManager.DeleteFile(uploadMetadataPath));
+        return _lockManager.DeleteFile(uploadMetadataPath);
     }
 
     public async Task<List<MultipartUpload>> ListUploadsAsync(string bucketName, CancellationToken cancellationToken = default)

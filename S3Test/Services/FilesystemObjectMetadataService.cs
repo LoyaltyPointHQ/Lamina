@@ -97,10 +97,10 @@ public class FilesystemObjectMetadataService : IObjectMetadataService
         };
     }
 
-    public Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         var metadataPath = GetMetadataPath(bucketName, key);
-        var result = _lockManager.DeleteFile(metadataPath);
+        var result = await _lockManager.DeleteFile(metadataPath);
 
         // Clean up empty directories
         try
@@ -126,7 +126,7 @@ public class FilesystemObjectMetadataService : IObjectMetadataService
             _logger.LogWarning(ex, "Failed to clean up empty directories for path: {MetadataPath}", metadataPath);
         }
 
-        return Task.FromResult(result);
+        return result;
     }
 
     public async Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)

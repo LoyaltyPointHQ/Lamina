@@ -114,7 +114,7 @@ public class FilesystemBucketMetadataService : IBucketMetadataService
             var metadataFile = Path.Combine(_metadataDirectory, "_buckets", $"{bucketName}.json");
             if (File.Exists(metadataFile))
             {
-                return Task.FromResult(_lockManager.DeleteFile(metadataFile));
+                return _lockManager.DeleteFile(metadataFile);
             }
 
             return Task.FromResult(true);
