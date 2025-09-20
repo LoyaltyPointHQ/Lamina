@@ -58,11 +58,7 @@ public class FilesystemObjectMetadataService : IObjectMetadataService
 
         var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
 
-        await _lockManager.WriteFileAsync(metadataPath, async () =>
-        {
-            await File.WriteAllTextAsync(metadataPath, json, cancellationToken);
-            return json;
-        }, cancellationToken);
+        await _lockManager.WriteFileAsync(metadataPath, () => Task.FromResult(json), cancellationToken);
 
         return s3Object;
     }

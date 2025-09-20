@@ -31,7 +31,7 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
         {
             lock (_manager._acquireLock)
             {
-                if (--_referenceCount > 0) 
+                if (--_referenceCount > 0)
                     return;
                 Lock.Dispose();
                 _manager._locks.TryRemove(_filePath, out _);
@@ -62,6 +62,7 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
             {
                 throw new TimeoutException($"Could not acquire read lock for {filePath} within {_lockTimeout.TotalSeconds} seconds");
             }
+
             lockAcquired = true;
 
             if (!File.Exists(filePath))
@@ -91,7 +92,6 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
                     _logger.LogWarning("Read lock was disposed for {FilePath}", filePath);
                 }
             }
-
         }
     }
 
@@ -107,6 +107,7 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
             {
                 throw new TimeoutException($"Could not acquire write lock for {filePath} within {_lockTimeout.TotalSeconds} seconds");
             }
+
             lockAcquired = true;
 
             // Generate new content
@@ -120,7 +121,6 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
             }
 
             await File.WriteAllTextAsync(filePath, newContent, cancellationToken);
-            
         }
         finally
         {
@@ -141,7 +141,6 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
                     _logger.LogWarning("Write lock was disposed for {FilePath}", filePath);
                 }
             }
-
         }
     }
 
@@ -157,6 +156,7 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
             {
                 throw new TimeoutException($"Could not acquire write lock for {filePath} within {_lockTimeout.TotalSeconds} seconds");
             }
+
             lockAcquired = true;
 
             if (File.Exists(filePath))
@@ -164,6 +164,7 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
                 File.Delete(filePath);
                 return true;
             }
+
             return false;
         }
         finally
@@ -192,13 +193,10 @@ public class FileSystemLockManager : IFileSystemLockManager, IDisposable
     {
         lock (_acquireLock)
         {
-            while (true)
-            {
-                var lockInfo = _locks.GetOrAdd(lockKey, _ => new LockInfo(lockKey, this));
-                lockInfo.Acquire();
+            var lockInfo = _locks.GetOrAdd(lockKey, _ => new LockInfo(lockKey, this));
+            lockInfo.Acquire();
 
-                return lockInfo;
-            }
+            return lockInfo;
         }
     }
 

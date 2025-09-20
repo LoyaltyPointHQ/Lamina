@@ -40,11 +40,7 @@ public class FilesystemMultipartUploadMetadataService : IMultipartUploadMetadata
 
         var json = JsonSerializer.Serialize(upload, new JsonSerializerOptions { WriteIndented = true });
 
-        await _lockManager.WriteFileAsync(uploadMetadataPath, async () =>
-        {
-            await File.WriteAllTextAsync(uploadMetadataPath, json, cancellationToken);
-            return json;
-        }, cancellationToken);
+        await _lockManager.WriteFileAsync(uploadMetadataPath, () => Task.FromResult(json), cancellationToken);
 
         return upload;
     }

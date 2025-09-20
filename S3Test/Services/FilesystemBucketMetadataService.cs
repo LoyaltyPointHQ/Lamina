@@ -15,7 +15,8 @@ public class FilesystemBucketMetadataService : IBucketMetadataService
         IConfiguration configuration,
         IFileSystemLockManager lockManager,
         IBucketDataService dataService,
-        ILogger<FilesystemBucketMetadataService> logger)
+        ILogger<FilesystemBucketMetadataService> logger
+    )
     {
         _dataDirectory = configuration["FilesystemStorage:DataDirectory"] ?? "/var/s3test/data";
         _metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"] ?? "/var/s3test/metadata";
@@ -77,22 +78,12 @@ public class FilesystemBucketMetadataService : IBucketMetadataService
         var metadataFile = Path.Combine(_metadataDirectory, "_buckets", $"{bucketName}.json");
         if (File.Exists(metadataFile))
         {
-            try
-            {
-                var metadata = await _lockManager.ReadFileAsync(metadataFile, async content =>
-                {
-                    return await Task.FromResult(JsonSerializer.Deserialize<BucketMetadata>(content));
-                }, cancellationToken);
+             var metadata = await _lockManager.ReadFileAsync(metadataFile, content => Task.FromResult(JsonSerializer.Deserialize<BucketMetadata>(content)), cancellationToken);
 
-                if (metadata != null)
-                {
-                    bucket.Region = metadata.Region ?? "us-east-1";
-                    bucket.Tags = metadata.Tags ?? new Dictionary<string, string>();
-                }
-            }
-            catch (Exception ex)
+            if (metadata != null)
             {
-                _logger.LogWarning(ex, "Failed to load metadata for bucket {BucketName}, using defaults", bucketName);
+                bucket.Region = metadata.Region ?? "us-east-1";
+                bucket.Tags = metadata.Tags ?? new Dictionary<string, string>();
             }
         }
 
@@ -125,6 +116,7 @@ public class FilesystemBucketMetadataService : IBucketMetadataService
             {
                 return await _lockManager.DeleteFileAsync(metadataFile, cancellationToken);
             }
+
             return true;
         }
         catch (Exception ex)

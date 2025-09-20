@@ -83,7 +83,7 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
     public async Task<byte[]?> AssemblePartsAsync(string bucketName, string key, string uploadId, List<CompletedPart> parts, CancellationToken cancellationToken = default)
     {
         var orderedParts = parts.OrderBy(p => p.PartNumber).ToList();
-        var combinedData = new List<byte>();
+        var combinedData = new MemoryStream();
 
         foreach (var part in orderedParts)
         {
@@ -102,7 +102,7 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
                 return null;
             }
 
-            combinedData.AddRange(partData);
+            combinedData.Write(partData);
         }
 
         return combinedData.ToArray();
@@ -178,6 +178,7 @@ public class FilesystemMultipartUploadDataService : IMultipartUploadDataService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to read part data: {PartFile}", partFile);
+                throw;
             }
         }
 
