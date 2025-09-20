@@ -10,10 +10,13 @@ This is a .NET 9.0 ASP.NET Core Web API project called "S3Test" that implements 
 2. **Filesystem Storage**: Stores objects on disk with separate data and metadata directories
 
 Features supported:
-- Bucket operations (create, list, delete)
-- Object operations (put, get, delete, head, list)
+- Bucket operations (create, list, delete, force delete non-empty buckets)
+- Object operations (put, get, delete, head, list with prefix/delimiter support)
 - Multipart uploads (initiate, upload parts, complete, abort, list parts)
 - S3-compliant XML responses
+- AWS Signature V4 authentication (optional, configurable)
+- Thread-safe file operations with FileSystemLockManager
+- Storage limits enforcement (max buckets, max object size, etc.)
 
 ## Development Commands
 
@@ -67,14 +70,40 @@ docker run -p 8080:8080 s3test
   - `S3XmlResponses.cs`: XML response DTOs for S3 API compliance
 
 ### Services
+
+**Architecture**: The service layer uses a Facade pattern with separate Data and Metadata services:
+
 - **S3Test/Services/**:
-  - `IBucketService.cs` / `InMemoryBucketService.cs`: Bucket storage operations
-  - `IObjectService.cs`: Object storage interface
-    - `InMemoryObjectService.cs`: In-memory implementation
-    - `FilesystemObjectService.cs`: Filesystem-based implementation
-  - `IMultipartUploadService.cs`: Multipart upload interface
-    - `InMemoryMultipartUploadService.cs`: In-memory implementation
-    - `FilesystemMultipartUploadService.cs`: Filesystem-based implementation
+  - **Facade Services** (Main entry points):
+    - `IBucketServiceFacade` / `BucketServiceFacade`: Orchestrates bucket operations
+    - `IObjectServiceFacade` / `ObjectServiceFacade`: Orchestrates object operations
+    - `IMultipartUploadServiceFacade` / `MultipartUploadServiceFacade`: Orchestrates multipart uploads
+
+  - **Data Services** (Handle actual data storage):
+    - `IBucketDataService`: Interface for bucket data operations
+      - `InMemoryBucketDataService`: In-memory implementation
+      - `FilesystemBucketDataService`: Filesystem implementation
+    - `IObjectDataService`: Interface for object data operations
+      - `InMemoryObjectDataService`: In-memory implementation
+      - `FilesystemObjectDataService`: Filesystem implementation
+    - `IMultipartUploadDataService`: Interface for multipart data operations
+      - `InMemoryMultipartUploadDataService`: In-memory implementation
+      - `FilesystemMultipartUploadDataService`: Filesystem implementation
+
+  - **Metadata Services** (Handle metadata storage):
+    - `IBucketMetadataService`: Interface for bucket metadata
+      - `InMemoryBucketMetadataService`: In-memory implementation
+      - `FilesystemBucketMetadataService`: Filesystem implementation
+    - `IObjectMetadataService`: Interface for object metadata
+      - `InMemoryObjectMetadataService`: In-memory implementation
+      - `FilesystemObjectMetadataService`: Filesystem implementation
+    - `IMultipartUploadMetadataService`: Interface for multipart metadata
+      - `InMemoryMultipartUploadMetadataService`: In-memory implementation
+      - `FilesystemMultipartUploadMetadataService`: Filesystem implementation
+
+  - **Supporting Services**:
+    - `IAuthenticationService` / `AuthenticationService`: AWS Signature V4 authentication
+    - `IFileSystemLockManager` / `FileSystemLockManager`: Thread-safe file operations
 
 ### Tests
 - **S3Test.Tests/**:
@@ -169,6 +198,22 @@ Configure in `appsettings.json` or `appsettings.Development.json`:
 }
 ```
 
+### Authentication Configuration
+```json
+{
+  "Authentication": {
+    "Enabled": false,  // Set to true to enable AWS Signature V4 authentication
+    "AccessKeys": [
+      {
+        "AccessKeyId": "your-access-key",
+        "SecretAccessKey": "your-secret-key",
+        "UserId": "user1"
+      }
+    ]
+  }
+}
+```
+
 ### Storage Limits
 ```json
 {
@@ -213,7 +258,9 @@ The API is compatible with standard S3 clients. Test with:
 - Object keys with '/' are stored as nested directories on filesystem
 - Metadata files have `.json` extension appended to the object key
 - Both data and metadata directories are created automatically on startup
-- Bucket operations still use in-memory storage (InMemoryBucketService)
+- Thread-safe file operations are ensured through FileSystemLockManager
+- Directory cleanup: Empty directories are automatically removed after object deletion
+- Multipart uploads use temporary directories until completion
 
 **Testing Filesystem Storage:**
 ```bash

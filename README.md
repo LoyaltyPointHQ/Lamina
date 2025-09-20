@@ -1,14 +1,19 @@
 # S3Test - S3-Compatible Storage API
 
-A lightweight, S3-compatible storage API implementation built with .NET 9.0 and ASP.NET Core. This project provides an in-memory storage backend with full support for essential S3 operations, making it ideal for development, testing, and learning purposes.
+A lightweight, S3-compatible storage API implementation built with .NET 9.0 and ASP.NET Core. This project provides both in-memory and filesystem storage backends with full support for essential S3 operations, making it ideal for development, testing, and production use cases.
 
 ## Features
 
 - **Full S3 API Compatibility**: Implements core S3 operations with XML request/response format matching AWS S3 specifications
-- **Bucket Management**: Create, list, delete, and check bucket existence
+- **Dual Storage Backends**:
+  - **In-Memory Storage**: Fast, thread-safe storage using ConcurrentDictionary
+  - **Filesystem Storage**: Persistent storage with separate data and metadata directories
+- **Bucket Management**: Create, list, delete (including force delete), and check bucket existence
 - **Object Operations**: Upload, download, delete, and list objects with metadata support
 - **Multipart Uploads**: Complete support for large file uploads using S3's multipart upload protocol
-- **In-Memory Storage**: Fast, thread-safe storage implementation using ConcurrentDictionary
+- **AWS Signature V4 Authentication**: Optional authentication support compatible with AWS SDKs
+- **Thread-Safe Operations**: FileSystemLockManager ensures concurrent access safety
+- **Storage Limits**: Configurable limits for buckets, object sizes, and total storage
 - **Comprehensive Testing**: 62+ tests covering all operations with both unit and integration tests
 - **Docker Support**: Ready-to-deploy containerized application
 
@@ -74,8 +79,9 @@ This implementation follows the S3 REST API specification with XML responses.
 | Create Bucket | PUT | `/{bucketName}` | Creates a new bucket |
 | List Buckets | GET | `/` | Lists all buckets |
 | Delete Bucket | DELETE | `/{bucketName}` | Deletes an empty bucket |
+| Delete Bucket (Force) | DELETE | `/{bucketName}?force=true` | Deletes bucket and all contents |
 | Head Bucket | HEAD | `/{bucketName}` | Checks if bucket exists |
-| List Objects | GET | `/{bucketName}?prefix=...&max-keys=...` | Lists objects in bucket |
+| List Objects | GET | `/{bucketName}?prefix=...&max-keys=...&delimiter=...` | Lists objects in bucket |
 
 ### Object Operations
 
@@ -171,19 +177,32 @@ curl -X POST "http://localhost:5214/my-bucket/large-file.bin?uploadId=$UPLOAD_ID
 
 ```
 S3Test/
+├── Configuration/
+│   └── StorageLimits.cs          # Storage limit configurations
 ├── Controllers/
 │   ├── S3BucketsController.cs    # S3-compatible bucket operations
 │   └── S3ObjectsController.cs     # S3-compatible object operations
+├── Middleware/
+│   └── S3AuthenticationMiddleware.cs  # AWS Signature V4 authentication
 ├── Models/
+│   ├── Authentication.cs          # Authentication models
 │   ├── Bucket.cs                  # Bucket entity
 │   ├── S3Object.cs                # Object entities and DTOs
 │   ├── MultipartUpload.cs         # Multipart upload models
 │   └── S3XmlResponses.cs          # S3 XML response DTOs
 ├── Services/
-│   ├── IBucketService.cs          # Bucket service interface
-│   ├── InMemoryBucketService.cs   # Bucket implementation
-│   ├── IObjectService.cs          # Object service interface
-│   └── InMemoryObjectService.cs   # Object implementation
+│   ├── Facade Services/           # Main service orchestrators
+│   │   ├── BucketServiceFacade.cs
+│   │   ├── ObjectServiceFacade.cs
+│   │   └── MultipartUploadServiceFacade.cs
+│   ├── Data Services/             # Handle actual data storage
+│   │   ├── InMemory*DataService.cs
+│   │   └── Filesystem*DataService.cs
+│   ├── Metadata Services/         # Handle metadata storage
+│   │   ├── InMemory*MetadataService.cs
+│   │   └── Filesystem*MetadataService.cs
+│   ├── AuthenticationService.cs   # AWS Signature V4 implementation
+│   └── FileSystemLockManager.cs   # Thread-safe file operations
 └── Program.cs                     # Application entry point
 
 S3Test.Tests/
@@ -203,22 +222,83 @@ S3Test.Tests/
 - **HTTP Headers**: Supports standard S3 headers (ETag, Content-Type, x-amz-meta-*, etc.)
 - **Error Responses**: Returns S3-compatible error XML with appropriate HTTP status codes
 - **Namespace Support**: Handles both namespaced and non-namespaced XML for client compatibility
+- **AWS Signature V4**: Optional authentication compatible with AWS SDKs and CLI
 
-### Storage Implementation
+### Storage Implementations
+
+#### In-Memory Storage
 - **Thread-Safe**: Uses `ConcurrentDictionary` for concurrent access
-- **In-Memory**: All data is stored in memory (not persistent across restarts)
+- **Fast Performance**: All data is stored in memory
+- **Non-Persistent**: Data is lost on restart
+- **Best For**: Development, testing, temporary storage
+
+#### Filesystem Storage
+- **Persistent**: Data survives application restarts
+- **Thread-Safe**: FileSystemLockManager ensures safe concurrent access
+- **Scalable**: Limited only by disk space
+- **Directory Structure**:
+  - Data: `/configured/path/data/{bucket}/{key}`
+  - Metadata: `/configured/path/metadata/{bucket}/{key}.json`
+- **Best For**: Production use, persistent storage needs
+
+### Common Features
 - **ETag Generation**: MD5 hash of object content
 - **Metadata Support**: Custom metadata with `x-amz-meta-*` headers
+- **Binary Data**: Full support for binary file uploads/downloads
+- **Streaming**: Efficient streaming using System.IO.Pipelines
 
-### Limitations
-- No authentication/authorization (accepts any credentials)
+### Configuration Options
+
+#### Storage Backend
+```json
+{
+  "StorageType": "InMemory",  // or "Filesystem"
+  "FilesystemStorage": {
+    "DataDirectory": "/tmp/s3tests/data",
+    "MetadataDirectory": "/tmp/s3tests/metadata"
+  }
+}
+```
+
+#### Authentication
+```json
+{
+  "Authentication": {
+    "Enabled": false,  // Set to true to enable AWS Signature V4
+    "AccessKeys": [
+      {
+        "AccessKeyId": "your-access-key",
+        "SecretAccessKey": "your-secret-key",
+        "UserId": "user1"
+      }
+    ]
+  }
+}
+```
+
+#### Storage Limits
+```json
+{
+  "StorageLimits": {
+    "MaxBuckets": 100,
+    "MaxObjectSizeBytes": 5368709120,        // 5GB
+    "MaxTotalStorageBytes": 107374182400,    // 100GB
+    "MaxObjectsPerBucket": 100000,
+    "MaxConcurrentMultipartUploads": 1000,
+    "MaxPartsPerUpload": 10000
+  }
+}
+```
+
+### Current Limitations
 - No versioning support
 - No bucket policies or ACLs
 - No server-side encryption
-- Storage is not persistent (in-memory only)
 - No support for pre-signed URLs
 - No support for object tagging
 - No support for bucket lifecycle rules
+- No cross-region replication
+- No S3 Select or analytics features
 
 ## Development
 
