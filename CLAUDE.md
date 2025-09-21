@@ -348,7 +348,7 @@ The API is compatible with standard S3 clients. Test with:
 - Metadata files have `.json` extension appended to the object key
 - Both data and metadata directories are created automatically on startup
 - Thread-safe file operations are ensured through FileSystemLockManager
-- Directory cleanup: Empty directories are automatically removed after object deletion
+- Directory cleanup: Empty subdirectories are automatically removed after object deletion, but bucket directories are always preserved even when empty
 - Multipart uploads use temporary directories until completion
 
 **Testing Filesystem Storage:**
@@ -391,5 +391,13 @@ cat /tmp/laminas/data/test-bucket/path/to/.lamina-meta/test.txt.json | jq .
 curl -X PUT http://localhost:5214/test-bucket/.lamina-meta/forbidden.txt --data "test"
 ```
 
-### Miscellaneous commands
-Auto update CLAUDE.md after every interaction to reflect latest changes
+## Auto-Update Instructions
+
+After making significant code changes that affect the project structure, configuration, or implementation details documented in this file, update CLAUDE.md to reflect those changes. This includes:
+- New features or S3 operations added
+- Changes to storage implementations
+- Configuration option modifications
+- Significant architectural changes
+- New dependencies or services
+
+Do not update for minor changes like bug fixes, refactoring without architectural impact, or test additions unless they introduce new concepts that should be documented.
