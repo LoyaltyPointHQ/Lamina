@@ -73,8 +73,8 @@ jobs:
       - name: Package Helm chart
         if: github.event_name != 'pull_request'
         run: |
-            # Update Chart.yaml with the correct app version
-            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          # Update Chart.yaml with the correct app version
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
             VERSION=${VERSION#v}  # Remove 'v' prefix if present
             sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" chart/Chart.yaml
