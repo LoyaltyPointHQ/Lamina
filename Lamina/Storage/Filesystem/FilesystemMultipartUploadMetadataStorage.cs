@@ -2,6 +2,7 @@ using System.Text.Json;
 using Lamina.Models;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem.Configuration;
+using Lamina.Storage.Filesystem.Locking;
 using Microsoft.Extensions.Options;
 
 namespace Lamina.Storage.Filesystem;

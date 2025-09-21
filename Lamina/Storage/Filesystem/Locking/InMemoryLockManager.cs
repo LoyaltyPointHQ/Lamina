@@ -1,25 +1,18 @@
 using System.Collections.Concurrent;
 using Nito.AsyncEx;
 
-namespace Lamina.Storage.Filesystem;
+namespace Lamina.Storage.Filesystem.Locking;
 
-public interface IFileSystemLockManager
-{
-    Task<T?> ReadFileAsync<T>(string filePath, Func<string, Task<T>> readOperation, CancellationToken cancellationToken = default);
-    Task WriteFileAsync(string filePath, string content, CancellationToken cancellationToken = default);
-    Task<bool> DeleteFile(string filePath);
-}
-
-public class FileSystemLockManager : IFileSystemLockManager
+public class InMemoryLockManager : IFileSystemLockManager
 {
     private class LockInfo : IDisposable
     {
         private readonly string _filePath;
-        private readonly FileSystemLockManager _manager;
+        private readonly InMemoryLockManager _manager;
         public AsyncReaderWriterLock Lock { get; }
         private int _referenceCount;
 
-        public LockInfo(string filePath, FileSystemLockManager manager)
+        public LockInfo(string filePath, InMemoryLockManager manager)
         {
             _filePath = filePath;
             _manager = manager;
