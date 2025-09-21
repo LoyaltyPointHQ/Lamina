@@ -73,8 +73,8 @@ jobs:
       - name: Package Helm chart
         if: github.event_name != 'pull_request'
         run: |
-          # Update Chart.yaml with the correct app version
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            # Update Chart.yaml with the correct app version
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
             VERSION=${VERSION#v}  # Remove 'v' prefix if present
             sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" chart/Chart.yaml
@@ -94,5 +94,5 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} --username ${{ github.actor }} --password-stdin
 
           # Push the chart
-          CHART_FILE=$(ls lamina-*.tgz)
-          helm push $CHART_FILE oci://${{ env.REGISTRY }}/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          CHART_FILE=$(ls lamina-chart-*.tgz)
+          helm push $CHART_FILE oci://${{ env.REGISTRY }}/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')/lamina-chart
