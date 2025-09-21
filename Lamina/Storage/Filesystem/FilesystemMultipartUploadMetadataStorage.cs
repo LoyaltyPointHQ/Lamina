@@ -1,26 +1,41 @@
 using System.Text.Json;
 using Lamina.Models;
 using Lamina.Storage.Abstract;
+using Lamina.Storage.Filesystem.Configuration;
 
 namespace Lamina.Storage.Filesystem;
 
 public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadataStorage
 {
-    private readonly string _metadataDirectory;
+    private readonly string _dataDirectory;
+    private readonly string? _metadataDirectory;
+    private readonly MetadataStorageMode _metadataMode;
+    private readonly string _inlineMetadataDirectoryName;
     private readonly IFileSystemLockManager _lockManager;
     private readonly ILogger<FilesystemMultipartUploadMetadataStorage> _logger;
 
     public FilesystemMultipartUploadMetadataStorage(
-        IConfiguration configuration,
+        FilesystemStorageSettings settings,
         IFileSystemLockManager lockManager,
         ILogger<FilesystemMultipartUploadMetadataStorage> logger)
     {
-        _metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"]
-            ?? throw new InvalidOperationException("FilesystemStorage:MetadataDirectory configuration is required when using Filesystem storage");
+        _dataDirectory = settings.DataDirectory;
+        _metadataMode = settings.MetadataMode;
+        _metadataDirectory = settings.MetadataDirectory;
+        _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
         _lockManager = lockManager;
         _logger = logger;
 
-        Directory.CreateDirectory(_metadataDirectory);
+        Directory.CreateDirectory(_dataDirectory);
+
+        if (_metadataMode == MetadataStorageMode.SeparateDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(_metadataDirectory))
+            {
+                throw new InvalidOperationException("MetadataDirectory is required when using SeparateDirectory metadata mode");
+            }
+            Directory.CreateDirectory(_metadataDirectory);
+        }
     }
 
     public async Task<MultipartUpload> InitiateUploadAsync(string bucketName, string key, InitiateMultipartUploadRequest request, CancellationToken cancellationToken = default)
@@ -78,7 +93,9 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
     public async Task<List<MultipartUpload>> ListUploadsAsync(string bucketName, CancellationToken cancellationToken = default)
     {
         var uploads = new List<MultipartUpload>();
-        var multipartUploadsDir = Path.Combine(_metadataDirectory, "_multipart_uploads");
+        var multipartUploadsDir = _metadataMode == MetadataStorageMode.SeparateDirectory
+            ? Path.Combine(_metadataDirectory!, "_multipart_uploads")
+            : Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_multipart_uploads");
 
         if (!Directory.Exists(multipartUploadsDir))
         {
@@ -122,6 +139,14 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
 
     private string GetUploadMetadataPath(string uploadId)
     {
-        return Path.Combine(_metadataDirectory, "_multipart_uploads", uploadId, "upload.metadata.json");
+        if (_metadataMode == MetadataStorageMode.SeparateDirectory)
+        {
+            return Path.Combine(_metadataDirectory!, "_multipart_uploads", uploadId, "upload.metadata.json");
+        }
+        else
+        {
+            // For inline mode, store multipart uploads in a special directory at the data root
+            return Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_multipart_uploads", uploadId, "upload.metadata.json");
+        }
     }
 }

@@ -5,6 +5,8 @@ using System.Xml.Serialization;
 using System.IO;
 using System.IO.Pipelines;
 using Lamina.Storage.Abstract;
+using Lamina.Storage.Filesystem.Configuration;
+using Lamina.Helpers;
 
 namespace Lamina.Controllers;
 
@@ -16,18 +18,37 @@ public class S3ObjectsController : ControllerBase
     private readonly IObjectStorageFacade _objectStorage;
     private readonly IMultipartUploadStorageFacade _multipartStorage;
     private readonly IBucketStorageFacade _bucketStorage;
+    private readonly FilesystemStorageSettings? _filesystemSettings;
     private readonly ILogger<S3ObjectsController> _logger;
+    private readonly MetadataStorageMode _metadataMode;
+    private readonly string _inlineMetadataDirectoryName;
 
     public S3ObjectsController(
         IObjectStorageFacade objectStorage,
         IMultipartUploadStorageFacade multipartStorage,
         IBucketStorageFacade bucketStorage,
+        IServiceProvider serviceProvider,
         ILogger<S3ObjectsController> logger)
     {
         _objectStorage = objectStorage;
         _multipartStorage = multipartStorage;
         _bucketStorage = bucketStorage;
         _logger = logger;
+
+        // Try to get FilesystemStorageSettings if we're using filesystem storage
+        _filesystemSettings = serviceProvider.GetService<FilesystemStorageSettings>();
+
+        if (_filesystemSettings != null)
+        {
+            _metadataMode = _filesystemSettings.MetadataMode;
+            _inlineMetadataDirectoryName = _filesystemSettings.InlineMetadataDirectoryName;
+        }
+        else
+        {
+            // Default values for non-filesystem storage
+            _metadataMode = MetadataStorageMode.SeparateDirectory;
+            _inlineMetadataDirectoryName = ".lamina-meta";
+        }
     }
 
     [HttpPut("{*key}")]
@@ -39,6 +60,17 @@ public class S3ObjectsController : ControllerBase
         [FromQuery] string? uploadId,
         CancellationToken cancellationToken = default)
     {
+        // Validate the object key
+        if (!ObjectKeyValidator.IsValidObjectKey(key, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return new ObjectResult(new S3Error
+            {
+                Code = "InvalidObjectName",
+                Message = $"Object key contains forbidden metadata directory name '{_inlineMetadataDirectoryName}'",
+                Resource = $"/{bucketName}/{key}",
+            })
+            { StatusCode = 400 };
+        }
         // If uploadId and partNumber are present, this is a part upload
         if (!string.IsNullOrEmpty(uploadId) && partNumber.HasValue)
         {
@@ -204,6 +236,17 @@ public class S3ObjectsController : ControllerBase
         [FromQuery(Name = "uploadId")] string? uploadId,
         CancellationToken cancellationToken = default)
     {
+        // Validate the object key
+        if (!ObjectKeyValidator.IsValidObjectKey(key, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return new ObjectResult(new S3Error
+            {
+                Code = "InvalidObjectName",
+                Message = $"Object key contains forbidden metadata directory name '{_inlineMetadataDirectoryName}'",
+                Resource = $"/{bucketName}/{key}",
+            })
+            { StatusCode = 400 };
+        }
         // Initiate multipart upload - check if 'uploads' query parameter is present
         if (Request.Query.ContainsKey("uploads"))
         {

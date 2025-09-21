@@ -1,18 +1,22 @@
 using Lamina.Storage.Abstract;
+using Lamina.Storage.Filesystem.Configuration;
 
 namespace Lamina.Storage.Filesystem;
 
 public class FilesystemBucketDataStorage : IBucketDataStorage
 {
     private readonly string _dataDirectory;
+    private readonly string _inlineMetadataDirectoryName;
+    private readonly MetadataStorageMode _metadataMode;
     private readonly ILogger<FilesystemBucketDataStorage> _logger;
 
     public FilesystemBucketDataStorage(
-        IConfiguration configuration,
+        FilesystemStorageSettings settings,
         ILogger<FilesystemBucketDataStorage> logger)
     {
-        _dataDirectory = configuration["FilesystemStorage:DataDirectory"]
-            ?? throw new InvalidOperationException("FilesystemStorage:DataDirectory configuration is required when using Filesystem storage");
+        _dataDirectory = settings.DataDirectory;
+        _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
+        _metadataMode = settings.MetadataMode;
         _logger = logger;
 
         Directory.CreateDirectory(_dataDirectory);
@@ -22,6 +26,12 @@ public class FilesystemBucketDataStorage : IBucketDataStorage
     {
         try
         {
+            // Don't allow creating buckets with the metadata directory name
+            if (_metadataMode == MetadataStorageMode.Inline && bucketName == _inlineMetadataDirectoryName)
+            {
+                return Task.FromResult(false);
+            }
+
             var bucketPath = Path.Combine(_dataDirectory, bucketName);
 
             if (Directory.Exists(bucketPath))
@@ -72,6 +82,12 @@ public class FilesystemBucketDataStorage : IBucketDataStorage
 
     public Task<bool> BucketExistsAsync(string bucketName, CancellationToken cancellationToken = default)
     {
+        // Don't allow bucket names that match the metadata directory
+        if (_metadataMode == MetadataStorageMode.Inline && bucketName == _inlineMetadataDirectoryName)
+        {
+            return Task.FromResult(false);
+        }
+
         var bucketPath = Path.Combine(_dataDirectory, bucketName);
         return Task.FromResult(Directory.Exists(bucketPath));
     }
@@ -88,6 +104,8 @@ public class FilesystemBucketDataStorage : IBucketDataStorage
             var buckets = Directory.GetDirectories(_dataDirectory)
                 .Select(Path.GetFileName)
                 .Where(name => !string.IsNullOrEmpty(name))
+                // Filter out metadata directory in inline mode
+                .Where(name => _metadataMode != MetadataStorageMode.Inline || name != _inlineMetadataDirectoryName)
                 .Select(name => name!)
                 .OrderBy(name => name)
                 .ToList();

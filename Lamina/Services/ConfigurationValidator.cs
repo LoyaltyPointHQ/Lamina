@@ -10,6 +10,8 @@ public static class ConfigurationValidator
         {
             var dataDirectory = configuration["FilesystemStorage:DataDirectory"];
             var metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"];
+            var metadataMode = configuration["FilesystemStorage:MetadataMode"] ?? "SeparateDirectory";
+            var inlineMetadataDirectoryName = configuration["FilesystemStorage:InlineMetadataDirectoryName"] ?? ".lamina-meta";
 
             if (string.IsNullOrWhiteSpace(dataDirectory))
             {
@@ -18,24 +20,42 @@ public static class ConfigurationValidator
                     "Please configure it in appsettings.json or through environment variables.");
             }
 
-            if (string.IsNullOrWhiteSpace(metadataDirectory))
+            // Only require MetadataDirectory in SeparateDirectory mode
+            if (metadataMode.Equals("SeparateDirectory", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(metadataDirectory))
+                {
+                    throw new InvalidOperationException(
+                        "Configuration error: FilesystemStorage:MetadataDirectory is required when using SeparateDirectory metadata mode. " +
+                        "Please configure it in appsettings.json or through environment variables.");
+                }
+
+                // Validate paths are not the same
+                if (dataDirectory.Equals(metadataDirectory, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        "Configuration error: FilesystemStorage:DataDirectory and FilesystemStorage:MetadataDirectory must be different paths.");
+                }
+
+                // Log the configuration
+                Console.WriteLine($"Filesystem Storage Configuration:");
+                Console.WriteLine($"  Mode: SeparateDirectory");
+                Console.WriteLine($"  Data Directory: {dataDirectory}");
+                Console.WriteLine($"  Metadata Directory: {metadataDirectory}");
+            }
+            else if (metadataMode.Equals("Inline", StringComparison.OrdinalIgnoreCase))
+            {
+                // Log the configuration for inline mode
+                Console.WriteLine($"Filesystem Storage Configuration:");
+                Console.WriteLine($"  Mode: Inline");
+                Console.WriteLine($"  Data Directory: {dataDirectory}");
+                Console.WriteLine($"  Inline Metadata Directory Name: {inlineMetadataDirectoryName}");
+            }
+            else
             {
                 throw new InvalidOperationException(
-                    "Configuration error: FilesystemStorage:MetadataDirectory is required when StorageType is 'Filesystem'. " +
-                    "Please configure it in appsettings.json or through environment variables.");
+                    $"Configuration error: Invalid MetadataMode '{metadataMode}'. Valid values are 'SeparateDirectory' or 'Inline'.");
             }
-
-            // Validate paths are not the same
-            if (dataDirectory.Equals(metadataDirectory, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException(
-                    "Configuration error: FilesystemStorage:DataDirectory and FilesystemStorage:MetadataDirectory must be different paths.");
-            }
-
-            // Log the configuration
-            Console.WriteLine($"Filesystem Storage Configuration:");
-            Console.WriteLine($"  Data Directory: {dataDirectory}");
-            Console.WriteLine($"  Metadata Directory: {metadataDirectory}");
         }
         else if (!storageType.Equals("InMemory", StringComparison.OrdinalIgnoreCase))
         {

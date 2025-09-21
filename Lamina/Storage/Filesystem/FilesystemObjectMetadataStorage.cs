@@ -1,29 +1,44 @@
 using System.Text.Json;
 using Lamina.Models;
 using Lamina.Storage.Abstract;
+using Lamina.Storage.Filesystem.Configuration;
 
 namespace Lamina.Storage.Filesystem;
 
 public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
 {
-    private readonly string _metadataDirectory;
+    private readonly string _dataDirectory;
+    private readonly string? _metadataDirectory;
+    private readonly MetadataStorageMode _metadataMode;
+    private readonly string _inlineMetadataDirectoryName;
     private readonly IBucketStorageFacade _bucketStorage;
     private readonly IFileSystemLockManager _lockManager;
     private readonly ILogger<FilesystemObjectMetadataStorage> _logger;
 
     public FilesystemObjectMetadataStorage(
-        IConfiguration configuration,
+        FilesystemStorageSettings settings,
         IBucketStorageFacade bucketStorage,
         IFileSystemLockManager lockManager,
         ILogger<FilesystemObjectMetadataStorage> logger)
     {
-        _metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"]
-            ?? throw new InvalidOperationException("FilesystemStorage:MetadataDirectory configuration is required when using Filesystem storage");
+        _dataDirectory = settings.DataDirectory;
+        _metadataMode = settings.MetadataMode;
+        _metadataDirectory = settings.MetadataDirectory;
+        _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
         _bucketStorage = bucketStorage;
         _lockManager = lockManager;
         _logger = logger;
 
-        Directory.CreateDirectory(_metadataDirectory);
+        Directory.CreateDirectory(_dataDirectory);
+
+        if (_metadataMode == MetadataStorageMode.SeparateDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(_metadataDirectory))
+            {
+                throw new InvalidOperationException("MetadataDirectory is required when using SeparateDirectory metadata mode");
+            }
+            Directory.CreateDirectory(_metadataDirectory);
+        }
     }
 
     public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
@@ -109,9 +124,12 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         try
         {
             var directory = Path.GetDirectoryName(metadataPath);
+            var rootDir = _metadataMode == MetadataStorageMode.SeparateDirectory
+                ? _metadataDirectory
+                : _dataDirectory;
             while (!string.IsNullOrEmpty(directory) &&
-                   directory.StartsWith(_metadataDirectory) &&
-                   directory != _metadataDirectory)
+                   directory.StartsWith(rootDir!) &&
+                   directory != rootDir)
             {
                 if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
                 {
@@ -143,47 +161,108 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             };
         }
 
-        var bucketMetadataDir = Path.Combine(_metadataDirectory, bucketName);
-        var bucketDataDir = Path.Combine(Directory.GetParent(_metadataDirectory)!.FullName, "data", bucketName);
-
-        if (!Directory.Exists(bucketMetadataDir))
-        {
-            return new ListObjectsResponse
-            {
-                IsTruncated = false,
-                Contents = new List<S3ObjectInfo>()
-            };
-        }
-
         var objects = new List<S3ObjectInfo>();
-        var metadataFiles = Directory.GetFiles(bucketMetadataDir, "*.json", SearchOption.AllDirectories);
 
-        foreach (var metadataFile in metadataFiles)
+        if (_metadataMode == MetadataStorageMode.SeparateDirectory)
         {
-            try
+            var bucketMetadataDir = Path.Combine(_metadataDirectory!, bucketName);
+            if (!Directory.Exists(bucketMetadataDir))
             {
-                var relativePath = Path.GetRelativePath(bucketMetadataDir, metadataFile);
-                var key = relativePath.Replace(".json", "").Replace(Path.DirectorySeparatorChar, '/');
-
-                if (!string.IsNullOrEmpty(request?.Prefix) && !key.StartsWith(request.Prefix))
+                return new ListObjectsResponse
                 {
-                    continue;
+                    IsTruncated = false,
+                    Contents = new List<S3ObjectInfo>()
+                };
+            }
+
+            var metadataFiles = Directory.GetFiles(bucketMetadataDir, "*.json", SearchOption.AllDirectories);
+            foreach (var metadataFile in metadataFiles)
+            {
+                try
+                {
+                    var relativePath = Path.GetRelativePath(bucketMetadataDir, metadataFile);
+                    var key = relativePath.Replace(".json", "").Replace(Path.DirectorySeparatorChar, '/');
+
+                    if (!string.IsNullOrEmpty(request?.Prefix) && !key.StartsWith(request.Prefix))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrEmpty(request?.ContinuationToken) && string.Compare(key, request.ContinuationToken, StringComparison.Ordinal) <= 0)
+                    {
+                        continue;
+                    }
+
+                    var metadata = await GetMetadataAsync(bucketName, key, cancellationToken);
+                    if (metadata != null)
+                    {
+                        objects.Add(metadata);
+                    }
                 }
-
-                if (!string.IsNullOrEmpty(request?.ContinuationToken) && string.Compare(key, request.ContinuationToken, StringComparison.Ordinal) <= 0)
+                catch (Exception ex)
                 {
-                    continue;
-                }
-
-                var metadata = await GetMetadataAsync(bucketName, key, cancellationToken);
-                if (metadata != null)
-                {
-                    objects.Add(metadata);
+                    _logger.LogWarning(ex, "Failed to read metadata for file: {MetadataFile}", metadataFile);
                 }
             }
-            catch (Exception ex)
+        }
+        else
+        {
+            // Inline mode: scan for metadata files in .lamina-meta directories
+            var bucketDataDir = Path.Combine(_dataDirectory, bucketName);
+            if (!Directory.Exists(bucketDataDir))
             {
-                _logger.LogWarning(ex, "Failed to read metadata for file: {MetadataFile}", metadataFile);
+                return new ListObjectsResponse
+                {
+                    IsTruncated = false,
+                    Contents = new List<S3ObjectInfo>()
+                };
+            }
+
+            var metadataFiles = Directory.GetFiles(bucketDataDir, "*.json", SearchOption.AllDirectories)
+                .Where(f => f.Contains(Path.DirectorySeparatorChar + _inlineMetadataDirectoryName + Path.DirectorySeparatorChar))
+                .ToList();
+
+            foreach (var metadataFile in metadataFiles)
+            {
+                try
+                {
+                    // Extract the key from the metadata file path
+                    // Example: /data/bucket/path/to/.lamina-meta/object.zip.json
+                    var metadataDir = Path.GetDirectoryName(metadataFile)!;
+                    var metaDirName = Path.GetFileName(metadataDir);
+
+                    if (metaDirName != _inlineMetadataDirectoryName)
+                    {
+                        continue;
+                    }
+
+                    var parentDir = Path.GetDirectoryName(metadataDir)!;
+                    var fileName = Path.GetFileName(metadataFile).Replace(".json", "");
+                    var relativePath = Path.GetRelativePath(bucketDataDir, parentDir);
+                    var key = relativePath == "."
+                        ? fileName
+                        : Path.Combine(relativePath, fileName).Replace(Path.DirectorySeparatorChar, '/');
+
+                    if (!string.IsNullOrEmpty(request?.Prefix) && !key.StartsWith(request.Prefix))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrEmpty(request?.ContinuationToken) && string.Compare(key, request.ContinuationToken, StringComparison.Ordinal) <= 0)
+                    {
+                        continue;
+                    }
+
+                    var metadata = await GetMetadataAsync(bucketName, key, cancellationToken);
+                    if (metadata != null)
+                    {
+                        objects.Add(metadata);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to read metadata for file: {MetadataFile}", metadataFile);
+                }
             }
         }
 
@@ -215,13 +294,23 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
 
     private string GetMetadataPath(string bucketName, string key)
     {
-        return Path.Combine(_metadataDirectory, bucketName, $"{key}.json");
+        if (_metadataMode == MetadataStorageMode.SeparateDirectory)
+        {
+            return Path.Combine(_metadataDirectory!, bucketName, $"{key}.json");
+        }
+        else
+        {
+            // For inline mode: /bucket/path/to/object.zip -> /bucket/path/to/.lamina-meta/object.zip.json
+            var dataPath = Path.Combine(_dataDirectory, bucketName, key);
+            var directory = Path.GetDirectoryName(dataPath) ?? Path.Combine(_dataDirectory, bucketName);
+            var fileName = Path.GetFileName(dataPath);
+            return Path.Combine(directory, _inlineMetadataDirectoryName, $"{fileName}.json");
+        }
     }
 
     private string GetDataPath(string bucketName, string key)
     {
-        var dataDirectory = Directory.GetParent(_metadataDirectory)!.FullName;
-        return Path.Combine(dataDirectory, "data", bucketName, key);
+        return Path.Combine(_dataDirectory, bucketName, key);
     }
 
     private class S3ObjectMetadata

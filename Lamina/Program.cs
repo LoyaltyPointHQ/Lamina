@@ -3,6 +3,7 @@ using Lamina.Models;
 using Lamina.Services;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem;
+using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.InMemory;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -47,6 +48,11 @@ var storageType = builder.Configuration["StorageType"] ?? "InMemory";
 
 if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
 {
+    // Configure and register FilesystemStorageSettings
+    var filesystemSettings = new FilesystemStorageSettings();
+    builder.Configuration.GetSection("FilesystemStorage").Bind(filesystemSettings);
+    builder.Services.AddSingleton(filesystemSettings);
+
     // Register bucket services
     builder.Services.AddSingleton<IBucketDataStorage, FilesystemBucketDataStorage>();
     builder.Services.AddSingleton<IBucketMetadataStorage, FilesystemBucketMetadataStorage>();

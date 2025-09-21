@@ -208,7 +208,38 @@ Configure in `appsettings.json` or `appsettings.Development.json`:
   "StorageType": "InMemory",  // or "Filesystem"
   "FilesystemStorage": {
     "DataDirectory": "/tmp/laminas/data",
-    "MetadataDirectory": "/tmp/laminas/metadata"
+    "MetadataDirectory": "/tmp/laminas/metadata",  // Required for SeparateDirectory mode
+    "MetadataMode": "SeparateDirectory",  // or "Inline" (default: SeparateDirectory)
+    "InlineMetadataDirectoryName": ".lamina-meta"  // Name of metadata directory in inline mode (default: .lamina-meta)
+  }
+}
+```
+
+#### Metadata Storage Modes
+
+**SeparateDirectory Mode** (default):
+- Metadata is stored in a separate directory tree specified by `MetadataDirectory`
+- Data: `/tmp/laminas/data/bucket/key`
+- Metadata: `/tmp/laminas/metadata/bucket/key.json`
+- Multipart uploads: `/tmp/laminas/metadata/_multipart_uploads/`
+
+**Inline Mode**:
+- Metadata is stored alongside data in special directories
+- Data: `/tmp/laminas/data/bucket/path/to/object.zip`
+- Metadata: `/tmp/laminas/data/bucket/path/to/.lamina-meta/object.zip.json`
+- Multipart uploads: `/tmp/laminas/data/.lamina-meta/_multipart_uploads/`
+- The metadata directory name is configurable via `InlineMetadataDirectoryName`
+- Objects with keys containing the metadata directory name are forbidden
+- Metadata directories are automatically excluded from object listings
+
+Example inline mode configuration:
+```json
+{
+  "StorageType": "Filesystem",
+  "FilesystemStorage": {
+    "DataDirectory": "/tmp/laminas/data",
+    "MetadataMode": "Inline",
+    "InlineMetadataDirectoryName": ".lamina-meta"
   }
 }
 ```
@@ -262,6 +293,13 @@ Configure in `appsettings.json` or `appsettings.Development.json`:
 
 ### Streaming Multipart Assembly
 - Multipart uploads are now assembled using streaming to eliminate memory overhead
+
+### Inline Metadata Mode
+- New metadata storage mode where metadata is stored alongside data files
+- Metadata stored in configurable directories (default: `.lamina-meta`) within the data tree
+- Automatic filtering excludes metadata directories from object listings
+- Validation prevents operations on paths containing metadata directory names
+- Supports both inline and separate directory modes for different deployment scenarios
 - Parts are read directly from storage and written to the final object
 - Significantly reduces memory usage for large multipart uploads
 
@@ -300,10 +338,10 @@ The API is compatible with standard S3 clients. Test with:
 - Multipart uploads use temporary directories until completion
 
 **Testing Filesystem Storage:**
-```bash
-# Switch to filesystem storage
-# Edit appsettings.json: "StorageType": "Filesystem"
 
+*SeparateDirectory Mode:*
+```bash
+# Edit appsettings.json: "MetadataMode": "SeparateDirectory"
 # Run the application
 dotnet run --project Lamina/Lamina.csproj
 
@@ -317,6 +355,26 @@ ls -la /tmp/laminas/metadata/test-bucket/
 
 # Verify metadata doesn't contain size
 cat /tmp/laminas/metadata/test-bucket/test.txt.json | jq .
+```
+
+*Inline Mode:*
+```bash
+# Use inline metadata configuration
+dotnet run --project Lamina/Lamina.csproj --launch-profile http -- --config appsettings.InlineMetadata.json
+
+# Create bucket and upload object
+curl -X PUT http://localhost:5214/test-bucket
+echo "test content" | curl -X PUT -H "Content-Type: text/plain" --data-binary @- http://localhost:5214/test-bucket/path/to/test.txt
+
+# Check filesystem - metadata is in .lamina-meta directories
+ls -la /tmp/laminas/data/test-bucket/path/to/
+ls -la /tmp/laminas/data/test-bucket/path/to/.lamina-meta/
+
+# Verify metadata file exists
+cat /tmp/laminas/data/test-bucket/path/to/.lamina-meta/test.txt.json | jq .
+
+# Try to create object with forbidden key (will fail)
+curl -X PUT http://localhost:5214/test-bucket/.lamina-meta/forbidden.txt --data "test"
 ```
 
 ### Miscellaneous commands

@@ -1,20 +1,24 @@
 using System.IO.Pipelines;
 using Lamina.Helpers;
 using Lamina.Storage.Abstract;
+using Lamina.Storage.Filesystem.Configuration;
 
 namespace Lamina.Storage.Filesystem;
 
 public class FilesystemObjectDataStorage : IObjectDataStorage
 {
     private readonly string _dataDirectory;
+    private readonly MetadataStorageMode _metadataMode;
+    private readonly string _inlineMetadataDirectoryName;
     private readonly ILogger<FilesystemObjectDataStorage> _logger;
 
     public FilesystemObjectDataStorage(
-        IConfiguration configuration,
+        FilesystemStorageSettings settings,
         ILogger<FilesystemObjectDataStorage> logger)
     {
-        _dataDirectory = configuration["FilesystemStorage:DataDirectory"]
-            ?? throw new InvalidOperationException("FilesystemStorage:DataDirectory configuration is required when using Filesystem storage");
+        _dataDirectory = settings.DataDirectory;
+        _metadataMode = settings.MetadataMode;
+        _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
         _logger = logger;
 
         Directory.CreateDirectory(_dataDirectory);
@@ -22,6 +26,12 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public async Task<(long size, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, CancellationToken cancellationToken = default)
     {
+        // Validate that the key doesn't contain metadata directory patterns
+        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            throw new InvalidOperationException($"Cannot store data with key containing metadata directory '{_inlineMetadataDirectoryName}'");
+        }
+
         var dataPath = GetDataPath(bucketName, key);
         var dataDir = Path.GetDirectoryName(dataPath)!;
         Directory.CreateDirectory(dataDir);
@@ -92,6 +102,12 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public async Task<(long size, string etag)> StoreMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
     {
+        // Validate that the key doesn't contain metadata directory patterns
+        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            throw new InvalidOperationException($"Cannot store data with key containing metadata directory '{_inlineMetadataDirectoryName}'");
+        }
+
         var dataPath = GetDataPath(bucketName, key);
         var dataDir = Path.GetDirectoryName(dataPath)!;
         Directory.CreateDirectory(dataDir);
@@ -165,6 +181,12 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public async Task<bool> WriteDataToPipeAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default)
     {
+        // Validate that the key doesn't contain metadata directory patterns
+        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return false;  // Return false to indicate object not found
+        }
+
         var dataPath = GetDataPath(bucketName, key);
 
         if (!File.Exists(dataPath))
@@ -191,6 +213,12 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public Task<bool> DeleteDataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
+        // Validate that the key doesn't contain metadata directory patterns
+        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return Task.FromResult(false);  // Cannot delete metadata paths
+        }
+
         var dataPath = GetDataPath(bucketName, key);
         if (!File.Exists(dataPath))
         {
@@ -207,7 +235,19 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                    directory.StartsWith(_dataDirectory) &&
                    directory != _dataDirectory)
             {
-                if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
+                // Check if directory is empty, excluding metadata directories if in inline mode
+                var isEmpty = !Directory.EnumerateFileSystemEntries(directory)
+                    .Any(entry =>
+                    {
+                        if (_metadataMode == MetadataStorageMode.Inline)
+                        {
+                            var entryName = Path.GetFileName(entry);
+                            return entryName != _inlineMetadataDirectoryName;
+                        }
+                        return true;
+                    });
+
+                if (Directory.Exists(directory) && isEmpty)
                 {
                     Directory.Delete(directory);
                     directory = Path.GetDirectoryName(directory);

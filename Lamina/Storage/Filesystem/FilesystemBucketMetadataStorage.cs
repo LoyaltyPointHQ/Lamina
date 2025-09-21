@@ -1,34 +1,52 @@
 using System.Text.Json;
 using Lamina.Models;
 using Lamina.Storage.Abstract;
+using Lamina.Storage.Filesystem.Configuration;
 
 namespace Lamina.Storage.Filesystem;
 
 public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
 {
     private readonly string _dataDirectory;
-    private readonly string _metadataDirectory;
+    private readonly string? _metadataDirectory;
+    private readonly MetadataStorageMode _metadataMode;
+    private readonly string _inlineMetadataDirectoryName;
     private readonly IFileSystemLockManager _lockManager;
     private readonly IBucketDataStorage _dataStorage;
     private readonly ILogger<FilesystemBucketMetadataStorage> _logger;
 
     public FilesystemBucketMetadataStorage(
-        IConfiguration configuration,
+        FilesystemStorageSettings settings,
         IFileSystemLockManager lockManager,
         IBucketDataStorage dataStorage,
         ILogger<FilesystemBucketMetadataStorage> logger
     )
     {
-        _dataDirectory = configuration["FilesystemStorage:DataDirectory"]
-            ?? throw new InvalidOperationException("FilesystemStorage:DataDirectory configuration is required when using Filesystem storage");
-        _metadataDirectory = configuration["FilesystemStorage:MetadataDirectory"]
-            ?? throw new InvalidOperationException("FilesystemStorage:MetadataDirectory configuration is required when using Filesystem storage");
+        _dataDirectory = settings.DataDirectory;
+        _metadataMode = settings.MetadataMode;
+        _metadataDirectory = settings.MetadataDirectory;
+        _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
         _lockManager = lockManager;
         _dataStorage = dataStorage;
         _logger = logger;
 
-        Directory.CreateDirectory(_metadataDirectory);
-        Directory.CreateDirectory(Path.Combine(_metadataDirectory, "_buckets"));
+        Directory.CreateDirectory(_dataDirectory);
+
+        if (_metadataMode == MetadataStorageMode.SeparateDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(_metadataDirectory))
+            {
+                throw new InvalidOperationException("MetadataDirectory is required when using SeparateDirectory metadata mode");
+            }
+            Directory.CreateDirectory(_metadataDirectory);
+            Directory.CreateDirectory(Path.Combine(_metadataDirectory, "_buckets"));
+        }
+        else
+        {
+            // Create the bucket metadata directory for inline mode
+            var inlineBucketMetadataDir = Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_buckets");
+            Directory.CreateDirectory(inlineBucketMetadataDir);
+        }
     }
 
     private class BucketMetadata
@@ -78,7 +96,7 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
         };
 
         // Try to load metadata if it exists
-        var metadataFile = Path.Combine(_metadataDirectory, "_buckets", $"{bucketName}.json");
+        var metadataFile = GetBucketMetadataPath(bucketName);
         if (File.Exists(metadataFile))
         {
              var metadata = await _lockManager.ReadFileAsync(metadataFile, content => Task.FromResult(JsonSerializer.Deserialize<BucketMetadata>(content)), cancellationToken);
@@ -114,7 +132,7 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
     {
         try
         {
-            var metadataFile = Path.Combine(_metadataDirectory, "_buckets", $"{bucketName}.json");
+            var metadataFile = GetBucketMetadataPath(bucketName);
             if (File.Exists(metadataFile))
             {
                 return _lockManager.DeleteFile(metadataFile);
@@ -146,7 +164,7 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
     {
         try
         {
-            var metadataFile = Path.Combine(_metadataDirectory, "_buckets", $"{bucket.Name}.json");
+            var metadataFile = GetBucketMetadataPath(bucket.Name);
             var metadata = new BucketMetadata
             {
                 Region = bucket.Region,
@@ -159,6 +177,18 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to save metadata for bucket {BucketName}", bucket.Name);
+        }
+    }
+
+    private string GetBucketMetadataPath(string bucketName)
+    {
+        if (_metadataMode == MetadataStorageMode.SeparateDirectory)
+        {
+            return Path.Combine(_metadataDirectory!, "_buckets", $"{bucketName}.json");
+        }
+        else
+        {
+            return Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_buckets", $"{bucketName}.json");
         }
     }
 }
