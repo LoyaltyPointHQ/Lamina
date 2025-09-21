@@ -9,4 +9,5 @@ public interface IObjectMetadataStorage
     Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default);
     Task<bool> MetadataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    bool IsValidObjectKey(string key);
 }

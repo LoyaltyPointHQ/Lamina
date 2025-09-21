@@ -19,38 +19,18 @@ public class S3ObjectsController : ControllerBase
     private readonly IObjectStorageFacade _objectStorage;
     private readonly IMultipartUploadStorageFacade _multipartStorage;
     private readonly IBucketStorageFacade _bucketStorage;
-    private readonly IOptions<FilesystemStorageSettings>? _filesystemSettingsOptions;
     private readonly ILogger<S3ObjectsController> _logger;
-    private readonly MetadataStorageMode _metadataMode;
-    private readonly string _inlineMetadataDirectoryName;
 
     public S3ObjectsController(
         IObjectStorageFacade objectStorage,
         IMultipartUploadStorageFacade multipartStorage,
         IBucketStorageFacade bucketStorage,
-        IServiceProvider serviceProvider,
         ILogger<S3ObjectsController> logger)
     {
         _objectStorage = objectStorage;
         _multipartStorage = multipartStorage;
         _bucketStorage = bucketStorage;
         _logger = logger;
-
-        // Try to get FilesystemStorageSettings if we're using filesystem storage
-        _filesystemSettingsOptions = serviceProvider.GetService<IOptions<FilesystemStorageSettings>>();
-
-        if (_filesystemSettingsOptions != null)
-        {
-            var filesystemSettings = _filesystemSettingsOptions.Value;
-            _metadataMode = filesystemSettings.MetadataMode;
-            _inlineMetadataDirectoryName = filesystemSettings.InlineMetadataDirectoryName;
-        }
-        else
-        {
-            // Default values for non-filesystem storage
-            _metadataMode = MetadataStorageMode.SeparateDirectory;
-            _inlineMetadataDirectoryName = ".lamina-meta";
-        }
     }
 
     [HttpPut("{*key}")]
@@ -63,12 +43,12 @@ public class S3ObjectsController : ControllerBase
         CancellationToken cancellationToken = default)
     {
         // Validate the object key
-        if (!ObjectKeyValidator.IsValidObjectKey(key, _metadataMode, _inlineMetadataDirectoryName))
+        if (!_objectStorage.IsValidObjectKey(key))
         {
             return new ObjectResult(new S3Error
             {
                 Code = "InvalidObjectName",
-                Message = $"Object key contains forbidden metadata directory name '{_inlineMetadataDirectoryName}'",
+                Message = $"Object key forbidden",
                 Resource = $"/{bucketName}/{key}",
             })
             { StatusCode = 400 };
@@ -239,12 +219,12 @@ public class S3ObjectsController : ControllerBase
         CancellationToken cancellationToken = default)
     {
         // Validate the object key
-        if (!ObjectKeyValidator.IsValidObjectKey(key, _metadataMode, _inlineMetadataDirectoryName))
+        if (!_objectStorage.IsValidObjectKey(key))
         {
             return new ObjectResult(new S3Error
             {
                 Code = "InvalidObjectName",
-                Message = $"Object key contains forbidden metadata directory name '{_inlineMetadataDirectoryName}'",
+                Message = $"Object key is forbidden",
                 Resource = $"/{bucketName}/{key}",
             })
             { StatusCode = 400 };

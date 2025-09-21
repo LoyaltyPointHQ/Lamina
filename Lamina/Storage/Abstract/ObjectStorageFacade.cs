@@ -131,6 +131,8 @@ public class ObjectStorageFacade : IObjectStorageFacade
         return await _dataStorage.DataExistsAsync(bucketName, key, cancellationToken);
     }
 
+    public bool IsValidObjectKey(string key) => _metadataStorage.IsValidObjectKey(key);
+
     private async Task<S3ObjectInfo?> GenerateMetadataOnTheFlyAsync(string bucketName, string key, long size, DateTime lastModified, CancellationToken cancellationToken)
     {
         // Compute ETag from the data efficiently

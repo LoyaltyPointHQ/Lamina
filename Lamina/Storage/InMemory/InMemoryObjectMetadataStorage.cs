@@ -132,4 +132,6 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
             _metadata.TryGetValue(bucketName, out var bucketMetadata) &&
             bucketMetadata.ContainsKey(key));
     }
+
+    public bool IsValidObjectKey(string key) => true;
 }

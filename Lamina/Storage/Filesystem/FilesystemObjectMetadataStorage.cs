@@ -312,6 +312,41 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         return Task.FromResult(File.Exists(metadataPath));
     }
 
+    public bool IsValidObjectKey(string key)
+    {
+        // Check if key is null or empty
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return false;
+        }
+
+        // In inline mode, check that the key doesn't contain metadata directory patterns
+        if (_metadataMode == MetadataStorageMode.Inline)
+        {
+            var separator = '/';  // S3 keys use forward slashes
+            var metaDirPattern = $"{separator}{_inlineMetadataDirectoryName}{separator}";
+            var metaDirEnd = $"{separator}{_inlineMetadataDirectoryName}";
+
+            // Check if the key contains or ends with the metadata directory
+            if (key.Contains(metaDirPattern) || key.EndsWith(metaDirEnd))
+            {
+                return false;
+            }
+
+            // Also check each segment of the path
+            var segments = key.Split(separator);
+            foreach (var segment in segments)
+            {
+                if (segment == _inlineMetadataDirectoryName)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
     private string GetMetadataPath(string bucketName, string key)
     {
         if (_metadataMode == MetadataStorageMode.SeparateDirectory)
