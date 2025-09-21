@@ -95,4 +95,4 @@ jobs:
 
           # Push the chart
           CHART_FILE=$(ls lamina-*.tgz)
-          helm push $CHART_FILE oci://${{ env.REGISTRY }}/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          helm push $CHART_FILE oci://${{ env.REGISTRY }}/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')/lamina-chart
