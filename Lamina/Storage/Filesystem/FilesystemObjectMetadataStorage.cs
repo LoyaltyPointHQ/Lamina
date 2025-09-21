@@ -133,16 +133,23 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         var metadataPath = GetMetadataPath(bucketName, key);
         var result = await _lockManager.DeleteFile(metadataPath);
 
-        // Clean up empty directories
+        // Clean up empty directories, but preserve the bucket directory
         try
         {
             var directory = Path.GetDirectoryName(metadataPath);
             var rootDir = _metadataMode == MetadataStorageMode.SeparateDirectory
                 ? _metadataDirectory
                 : _dataDirectory;
+
+            // Determine the bucket directory based on the storage mode
+            var bucketDirectory = _metadataMode == MetadataStorageMode.SeparateDirectory
+                ? Path.Combine(_metadataDirectory!, bucketName)
+                : Path.Combine(_dataDirectory, bucketName);
+
             while (!string.IsNullOrEmpty(directory) &&
                    directory.StartsWith(rootDir!) &&
-                   directory != rootDir)
+                   directory != rootDir &&
+                   directory != bucketDirectory)  // Stop at bucket directory
             {
                 if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
                 {

@@ -229,13 +229,16 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
         File.Delete(dataPath);
 
-        // Clean up empty directories
+        // Clean up empty directories, but preserve the bucket directory
         try
         {
+            var bucketDirectory = Path.Combine(_dataDirectory, bucketName);
             var directory = Path.GetDirectoryName(dataPath);
+
             while (!string.IsNullOrEmpty(directory) &&
                    directory.StartsWith(_dataDirectory) &&
-                   directory != _dataDirectory)
+                   directory != _dataDirectory &&
+                   directory != bucketDirectory)  // Stop at bucket directory
             {
                 // Check if directory is empty, excluding metadata directories if in inline mode
                 var isEmpty = !Directory.EnumerateFileSystemEntries(directory)
