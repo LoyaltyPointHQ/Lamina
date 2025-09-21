@@ -2,6 +2,7 @@ using System.Text.Json;
 using Lamina.Models;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace Lamina.Storage.Filesystem;
 
@@ -16,11 +17,12 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
     private readonly ILogger<FilesystemObjectMetadataStorage> _logger;
 
     public FilesystemObjectMetadataStorage(
-        FilesystemStorageSettings settings,
+        IOptions<FilesystemStorageSettings> settingsOptions,
         IBucketStorageFacade bucketStorage,
         IFileSystemLockManager lockManager,
         ILogger<FilesystemObjectMetadataStorage> logger)
     {
+        var settings = settingsOptions.Value;
         _dataDirectory = settings.DataDirectory;
         _metadataMode = settings.MetadataMode;
         _metadataDirectory = settings.MetadataDirectory;

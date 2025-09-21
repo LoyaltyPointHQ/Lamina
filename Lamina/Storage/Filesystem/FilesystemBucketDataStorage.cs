@@ -1,5 +1,6 @@
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace Lamina.Storage.Filesystem;
 
@@ -11,9 +12,10 @@ public class FilesystemBucketDataStorage : IBucketDataStorage
     private readonly ILogger<FilesystemBucketDataStorage> _logger;
 
     public FilesystemBucketDataStorage(
-        FilesystemStorageSettings settings,
+        IOptions<FilesystemStorageSettings> settingsOptions,
         ILogger<FilesystemBucketDataStorage> logger)
     {
+        var settings = settingsOptions.Value;
         _dataDirectory = settings.DataDirectory;
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
         _metadataMode = settings.MetadataMode;

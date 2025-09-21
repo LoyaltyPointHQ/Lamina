@@ -2,6 +2,7 @@ using System.IO.Pipelines;
 using Lamina.Helpers;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace Lamina.Storage.Filesystem;
 
@@ -13,9 +14,10 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
     private readonly ILogger<FilesystemObjectDataStorage> _logger;
 
     public FilesystemObjectDataStorage(
-        FilesystemStorageSettings settings,
+        IOptions<FilesystemStorageSettings> settingsOptions,
         ILogger<FilesystemObjectDataStorage> logger)
     {
+        var settings = settingsOptions.Value;
         _dataDirectory = settings.DataDirectory;
         _metadataMode = settings.MetadataMode;
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;

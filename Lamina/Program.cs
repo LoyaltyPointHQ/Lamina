@@ -48,10 +48,9 @@ var storageType = builder.Configuration["StorageType"] ?? "InMemory";
 
 if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
 {
-    // Configure and register FilesystemStorageSettings
-    var filesystemSettings = new FilesystemStorageSettings();
-    builder.Configuration.GetSection("FilesystemStorage").Bind(filesystemSettings);
-    builder.Services.AddSingleton(filesystemSettings);
+    // Configure and register FilesystemStorageSettings with IOptions
+    builder.Services.Configure<FilesystemStorageSettings>(
+        builder.Configuration.GetSection("FilesystemStorage"));
 
     // Register bucket services
     builder.Services.AddSingleton<IBucketDataStorage, FilesystemBucketDataStorage>();

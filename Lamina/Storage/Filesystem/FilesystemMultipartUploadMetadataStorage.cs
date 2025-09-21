@@ -2,6 +2,7 @@ using System.Text.Json;
 using Lamina.Models;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace Lamina.Storage.Filesystem;
 
@@ -15,10 +16,11 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
     private readonly ILogger<FilesystemMultipartUploadMetadataStorage> _logger;
 
     public FilesystemMultipartUploadMetadataStorage(
-        FilesystemStorageSettings settings,
+        IOptions<FilesystemStorageSettings> settingsOptions,
         IFileSystemLockManager lockManager,
         ILogger<FilesystemMultipartUploadMetadataStorage> logger)
     {
+        var settings = settingsOptions.Value;
         _dataDirectory = settings.DataDirectory;
         _metadataMode = settings.MetadataMode;
         _metadataDirectory = settings.MetadataDirectory;

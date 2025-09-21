@@ -6,6 +6,7 @@ using System.IO;
 using System.IO.Pipelines;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem.Configuration;
+using Microsoft.Extensions.Options;
 using Lamina.Helpers;
 
 namespace Lamina.Controllers;
@@ -18,7 +19,7 @@ public class S3ObjectsController : ControllerBase
     private readonly IObjectStorageFacade _objectStorage;
     private readonly IMultipartUploadStorageFacade _multipartStorage;
     private readonly IBucketStorageFacade _bucketStorage;
-    private readonly FilesystemStorageSettings? _filesystemSettings;
+    private readonly IOptions<FilesystemStorageSettings>? _filesystemSettingsOptions;
     private readonly ILogger<S3ObjectsController> _logger;
     private readonly MetadataStorageMode _metadataMode;
     private readonly string _inlineMetadataDirectoryName;
@@ -36,12 +37,13 @@ public class S3ObjectsController : ControllerBase
         _logger = logger;
 
         // Try to get FilesystemStorageSettings if we're using filesystem storage
-        _filesystemSettings = serviceProvider.GetService<FilesystemStorageSettings>();
+        _filesystemSettingsOptions = serviceProvider.GetService<IOptions<FilesystemStorageSettings>>();
 
-        if (_filesystemSettings != null)
+        if (_filesystemSettingsOptions != null)
         {
-            _metadataMode = _filesystemSettings.MetadataMode;
-            _inlineMetadataDirectoryName = _filesystemSettings.InlineMetadataDirectoryName;
+            var filesystemSettings = _filesystemSettingsOptions.Value;
+            _metadataMode = filesystemSettings.MetadataMode;
+            _inlineMetadataDirectoryName = filesystemSettings.InlineMetadataDirectoryName;
         }
         else
         {
