@@ -37,32 +37,33 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         var metadataDir = Path.GetDirectoryName(metadataPath)!;
         Directory.CreateDirectory(metadataDir);
 
-        var s3Object = new S3Object
-        {
-            Key = key,
-            BucketName = bucketName,
-            Size = size,
-            LastModified = DateTime.UtcNow,
-            ETag = etag,
-            ContentType = request?.ContentType ?? "application/octet-stream",
-            Metadata = request?.Metadata ?? new Dictionary<string, string>()
-        };
-
         var metadata = new S3ObjectMetadata
         {
             Key = key,
             BucketName = bucketName,
-            LastModified = s3Object.LastModified,
             ETag = etag,
-            ContentType = s3Object.ContentType,
-            Metadata = s3Object.Metadata
+            ContentType = request?.ContentType ?? "application/octet-stream",
+            Metadata = request?.Metadata ?? new Dictionary<string, string>()
         };
 
         var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
 
         await _lockManager.WriteFileAsync(metadataPath, json, cancellationToken);
 
-        return s3Object;
+        // Get the actual last modified time from the filesystem
+        var dataPath = GetDataPath(bucketName, key);
+        var fileInfo = new FileInfo(dataPath);
+
+        return new S3Object
+        {
+            Key = key,
+            BucketName = bucketName,
+            Size = size,
+            LastModified = fileInfo.LastWriteTimeUtc,
+            ETag = etag,
+            ContentType = metadata.ContentType,
+            Metadata = metadata.Metadata
+        };
     }
 
     public async Task<S3ObjectInfo?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
@@ -85,13 +86,13 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             return null;
         }
 
-        // Always get size from filesystem
+        // Always get size and last modified from filesystem
         var fileInfo = new FileInfo(dataPath);
 
         return new S3ObjectInfo
         {
             Key = metadata.Key,
-            LastModified = metadata.LastModified,
+            LastModified = fileInfo.LastWriteTimeUtc,
             ETag = metadata.ETag,
             Size = fileInfo.Length,
             ContentType = metadata.ContentType,
@@ -227,7 +228,6 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
     {
         public required string Key { get; set; }
         public required string BucketName { get; set; }
-        public DateTime LastModified { get; set; }
         public required string ETag { get; set; }
         public string ContentType { get; set; } = "application/octet-stream";
         public Dictionary<string, string> Metadata { get; set; } = new();
