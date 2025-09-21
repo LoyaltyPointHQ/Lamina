@@ -1,4 +1,4 @@
-{{- if and (eq .Values.config.storageType "Filesystem") .Values.config.filesystemStorage.persistentVolume.enabled (not .Values.config.filesystemStorage.persistentVolume.existingClaim) }}
+{{- if and .Values.persistentVolume.enabled (empty .Values.persistentVolume.existingClaim) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -7,15 +7,15 @@ metadata:
     {{- include "lamina.labels" . | nindent 4 }}
 spec:
   accessModes:
-    - {{ .Values.config.filesystemStorage.persistentVolume.accessMode }}
+    - {{ .Values.persistentVolume.accessMode }}
   resources:
     requests:
-      storage: {{ .Values.config.filesystemStorage.persistentVolume.size }}
-  {{- if .Values.config.filesystemStorage.persistentVolume.storageClass }}
-  {{- if (eq "-" .Values.config.filesystemStorage.persistentVolume.storageClass) }}
+      storage: {{ .Values.persistentVolume.size }}
+  {{- if .Values.persistentVolume.storageClass }}
+  {{- if (eq "-" .Values.persistentVolume.storageClass) }}
   storageClassName: ""
   {{- else }}
-  storageClassName: {{ .Values.config.filesystemStorage.persistentVolume.storageClass }}
+  storageClassName: {{ .Values.persistentVolume.storageClass }}
   {{- end }}
   {{- end }}
 {{- end }}

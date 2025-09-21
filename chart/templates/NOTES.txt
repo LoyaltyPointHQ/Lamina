@@ -44,34 +44,14 @@
    {{- end }}
 {{- end }}
 
-3. Storage Configuration:
-   Storage Type: {{ .Values.config.storageType }}
-{{- if eq .Values.config.storageType "Filesystem" }}
-   Data Directory: {{ .Values.config.filesystemStorage.dataDirectory }}
-   Metadata Directory: {{ .Values.config.filesystemStorage.metadataDirectory }}
-   {{- if .Values.config.filesystemStorage.persistentVolume.enabled }}
-   Persistent Volume: Enabled ({{ .Values.config.filesystemStorage.persistentVolume.size }})
-   {{- else }}
-   Persistent Volume: Disabled (using emptyDir)
-   {{- end }}
-{{- end }}
-
-4. Authentication:
-{{- if .Values.config.authentication.enabled }}
-   Status: Enabled
-   Users configured: {{ len .Values.config.authentication.users }}
-{{- else }}
-   Status: Disabled
-{{- end }}
-
-5. Testing the S3 API:
+3. Testing the S3 API:
    # Using AWS CLI
    aws s3 --endpoint-url http://{{ include "lamina.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }} ls
 
    # Using curl
    curl -X PUT http://{{ include "lamina.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/test-bucket
 
-6. Monitoring:
+4. Monitoring:
    # Check pod status
    kubectl get pods -n {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "lamina.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
 

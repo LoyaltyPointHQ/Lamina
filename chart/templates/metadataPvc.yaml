@@ -1,0 +1,21 @@
+{{- if and (not .Values.sameVolumeForDataAndMeta) .Values.metadataPersistentVolume.enabled (empty .Values.metadataPersistentVolume.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "lamina.fullname" . }}-metadata
+  labels:
+    {{- include "lamina.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.metadataPersistentVolume.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.metadataPersistentVolume.size }}
+  {{- if .Values.metadataPersistentVolume.storageClass }}
+  {{- if (eq "-" .Values.metadataPersistentVolume.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.metadataPersistentVolume.storageClass }}
+  {{- end }}
+  {{- end }}
+{{- end }}

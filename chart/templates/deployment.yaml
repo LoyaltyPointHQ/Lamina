@@ -61,13 +61,21 @@ spec:
               mountPath: /app/appsettings.Production.json
               subPath: appsettings.Production.json
               readOnly: true
-            {{- if and (eq .Values.config.storageType "Filesystem") .Values.config.filesystemStorage.enabled }}
             - name: data-storage
-              mountPath: {{ .Values.config.filesystemStorage.dataDirectory }}
+              mountPath: "/data"
+              {{- if .Values.sameVolumeForDataAndMeta }}
               subPath: data
+              {{- end }}
+            {{- if or .Values.sameVolumeForDataAndMeta .Values.metadataPersistentVolume.enabled }}
+            {{- if .Values.sameVolumeForDataAndMeta }}
             - name: data-storage
-              mountPath: {{ .Values.config.filesystemStorage.metadataDirectory }}
+            {{- else }}
+            - name: metadata-storage
+            {{- end }}
+              mountPath: {{ "/metadata" }}
+              {{- if .Values.sameVolumeForDataAndMeta }}
               subPath: metadata
+              {{- end }}
             {{- end }}
             {{- range .Values.volumeMounts }}
             - name: {{ .name }}
@@ -83,14 +91,17 @@ spec:
         - name: config
           configMap:
             name: {{ include "lamina.fullname" . }}
-        {{- if and (eq .Values.config.storageType "Filesystem") .Values.config.filesystemStorage.enabled }}
         - name: data-storage
-          {{- if .Values.config.filesystemStorage.persistentVolume.enabled }}
+          {{- if or .Values.persistentVolume.enabled (not (empty .Values.persistentVolume.existingClaim)) }}
           persistentVolumeClaim:
-            claimName: {{ .Values.config.filesystemStorage.persistentVolume.existingClaim | default (printf "%s-data" (include "lamina.fullname" .)) }}
+            claimName: {{ .Values.persistentVolume.existingClaim | default (printf "%s-data" (include "lamina.fullname" .)) }}
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if and (not .Values.sameVolumeForDataAndMeta) .Values.metadataPersistentVolume.enabled }}
+        - name: metadata-storage
+          persistentVolumeClaim:
+            claimName: {{ .Values.metadataPersistentVolume.existingClaim | default (printf "%s-metadata" (include "lamina.fullname" .)) }}
         {{- end }}
         {{- range .Values.volumes }}
         - name: {{ .name }}

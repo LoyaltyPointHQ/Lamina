@@ -6,44 +6,8 @@ metadata:
     {{- include "lamina.labels" . | nindent 4 }}
 data:
   appsettings.Production.json: |
-    {
-      "Logging": {
-        "LogLevel": {
-          "Default": "Information",
-          "Microsoft.AspNetCore": "Warning"
-        }
-      },
-      "AllowedHosts": "*",
-      "StorageType": "{{ .Values.config.storageType }}",
-      {{- if eq .Values.config.storageType "Filesystem" }}
-      "FilesystemStorage": {
-        "DataDirectory": "{{ .Values.config.filesystemStorage.dataDirectory }}",
-        "MetadataDirectory": "{{ .Values.config.filesystemStorage.metadataDirectory }}"
-      },
-      {{- end }}
-      "Authentication": {
-        "Enabled": {{ .Values.config.authentication.enabled }},
-        "Users": {{ .Values.config.authentication.users | toJson }}
-      },
-      "MultipartUploadCleanup": {
-        "Enabled": {{ .Values.config.multipartUploadCleanup.enabled }},
-        "CleanupIntervalMinutes": {{ .Values.config.multipartUploadCleanup.cleanupIntervalMinutes }},
-        "UploadTimeoutHours": {{ .Values.config.multipartUploadCleanup.uploadTimeoutHours }}
-      },
-      "Limits": {
-        "MaxBuckets": {{ .Values.config.limits.maxBuckets }},
-        "MaxObjectsPerBucket": {{ .Values.config.limits.maxObjectsPerBucket }},
-        "MaxObjectSize": {{ .Values.config.limits.maxObjectSize }},
-        "MaxMultipartUploads": {{ .Values.config.limits.maxMultipartUploads }},
-        "MaxPartsPerUpload": {{ .Values.config.limits.maxPartsPerUpload }}
-      },
-      {{- if .Values.config.cors.enabled }}
-      "Cors": {
-        "Origins": {{ .Values.config.cors.origins | toJson }},
-        "Methods": {{ .Values.config.cors.methods | toJson }},
-        "Headers": {{ .Values.config.cors.headers | toJson }},
-        "ExposeHeaders": {{ .Values.config.cors.exposeHeaders | toJson }},
-        "MaxAge": {{ .Values.config.cors.maxAge }}
-      }
-      {{- end }}
-    }
+    {{- if kindIs "string" .Values.config }}
+    {{- .Values.config | nindent 4 }}
+    {{- else }}
+    {{- .Values.config | toPrettyJson | nindent 4 }}
+    {{- end }}

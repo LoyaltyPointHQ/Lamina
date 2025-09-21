@@ -80,7 +80,7 @@ Detect if we're running on OpenShift
 Determine if Ingress should be enabled
 */}}
 {{- define "lamina.ingressEnabled" -}}
-{{- if eq .Values.ingress.enabled "auto" }}
+{{- if eq (toString .Values.ingress.enabled) "auto" }}
 {{- if eq (include "lamina.isOpenShift" .) "true" }}
 {{- false }}
 {{- else }}
@@ -95,7 +95,7 @@ Determine if Ingress should be enabled
 Determine if Route should be enabled
 */}}
 {{- define "lamina.routeEnabled" -}}
-{{- if eq .Values.route.enabled "auto" }}
+{{- if eq (toString .Values.route.enabled) "auto" }}
 {{- if eq (include "lamina.isOpenShift" .) "true" }}
 {{- true }}
 {{- else }}
@@ -110,7 +110,7 @@ Determine if Route should be enabled
 Determine if ImageStream should be enabled
 */}}
 {{- define "lamina.imageStreamEnabled" -}}
-{{- if eq .Values.imageStream.enabled "auto" }}
+{{- if eq (toString .Values.imageStream.enabled) "auto" }}
 {{- if eq (include "lamina.isOpenShift" .) "true" }}
 {{- true }}
 {{- else }}
@@ -125,9 +125,10 @@ Determine if ImageStream should be enabled
 Get the image reference
 */}}
 {{- define "lamina.image" -}}
-{{- if eq (include "lamina.imageStreamEnabled" .) "true" }}
+{{- if eq (toString (include "lamina.imageStreamEnabled" .)) "true" }}
 {{- $namespace := .Values.imageStream.namespace | default .Release.Namespace }}
-{{- printf "%s:latest" (include "lamina.fullname" .) }}
+{{- $imageName := .Values.imageStream.name | default (include "lamina.fullname" .) }}
+{{- printf "image-registry.openshift-image-registry.svc:5000/%s/%s:latest" $namespace $imageName }}
 {{- else }}
 {{- $tag := .Values.image.tag | default .Chart.AppVersion }}
 {{- printf "%s:%s" .Values.image.repository $tag }}
