@@ -266,6 +266,104 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         return Task.FromResult(true);
     }
 
+    public Task<bool> DataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        // Validate that the key doesn't contain metadata directory patterns
+        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return Task.FromResult(false);
+        }
+
+        var dataPath = GetDataPath(bucketName, key);
+        return Task.FromResult(File.Exists(dataPath));
+    }
+
+    public Task<(long size, DateTime lastModified)?> GetDataInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        // Validate that the key doesn't contain metadata directory patterns
+        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return Task.FromResult<(long size, DateTime lastModified)?>(null);
+        }
+
+        var dataPath = GetDataPath(bucketName, key);
+        if (!File.Exists(dataPath))
+        {
+            return Task.FromResult<(long size, DateTime lastModified)?>(null);
+        }
+
+        var fileInfo = new FileInfo(dataPath);
+        return Task.FromResult<(long size, DateTime lastModified)?>((fileInfo.Length, fileInfo.LastWriteTimeUtc));
+    }
+
+    public Task<IEnumerable<string>> ListDataKeysAsync(string bucketName, string? prefix = null, CancellationToken cancellationToken = default)
+    {
+        var bucketPath = Path.Combine(_dataDirectory, bucketName);
+        if (!Directory.Exists(bucketPath))
+        {
+            return Task.FromResult(Enumerable.Empty<string>());
+        }
+
+        var keys = new List<string>();
+        var searchPath = string.IsNullOrEmpty(prefix) ? bucketPath : Path.Combine(bucketPath, prefix);
+
+        if (Directory.Exists(searchPath))
+        {
+            EnumerateDataFiles(searchPath, bucketPath, keys);
+        }
+        else if (!string.IsNullOrEmpty(prefix))
+        {
+            // If prefix doesn't match a directory, search parent directory
+            var parentDir = Path.GetDirectoryName(searchPath);
+            if (Directory.Exists(parentDir))
+            {
+                EnumerateDataFiles(parentDir, bucketPath, keys, prefix);
+            }
+        }
+
+        return Task.FromResult<IEnumerable<string>>(keys);
+    }
+
+    private void EnumerateDataFiles(string directory, string bucketPath, List<string> keys, string? prefixFilter = null)
+    {
+        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(bucketPath, file).Replace(Path.DirectorySeparatorChar, '/');
+
+            // Skip if it's a metadata path
+            if (FilesystemStorageHelper.IsMetadataPath(relativePath, _metadataMode, _inlineMetadataDirectoryName))
+            {
+                continue;
+            }
+
+            // Apply prefix filter if provided
+            if (!string.IsNullOrEmpty(prefixFilter) && !relativePath.StartsWith(prefixFilter))
+            {
+                continue;
+            }
+
+            keys.Add(relativePath);
+        }
+    }
+
+    public async Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        // Validate that the key doesn't contain metadata directory patterns
+        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return null;
+        }
+
+        var dataPath = GetDataPath(bucketName, key);
+        if (!File.Exists(dataPath))
+        {
+            return null;
+        }
+
+        // Use ETagHelper which efficiently computes hash without loading entire file into memory
+        return await ETagHelper.ComputeETagFromFileAsync(dataPath);
+    }
+
     private string GetDataPath(string bucketName, string key)
     {
         return Path.Combine(_dataDirectory, bucketName, key);

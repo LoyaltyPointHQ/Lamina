@@ -16,7 +16,6 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
 
     public FilesystemMultipartUploadDataStorage(
         FilesystemStorageSettings settings,
-        IFileSystemLockManager lockManager,
         ILogger<FilesystemMultipartUploadDataStorage> logger)
     {
         _dataDirectory = settings.DataDirectory;

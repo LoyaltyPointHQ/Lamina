@@ -11,14 +11,18 @@ public static class FilesystemStorageHelper
             return false;
         }
 
-        // Check if the path contains the metadata directory component
-        var separator = Path.DirectorySeparatorChar;
-        var metaDirPattern = $"{separator}{inlineMetadataDirectoryName}{separator}";
+        // Normalize path to use forward slashes for consistent checking
+        var normalizedPath = path.Replace('\\', '/');
 
-        // Also check if the path ends with the metadata directory
-        var metaDirEnd = $"{separator}{inlineMetadataDirectoryName}";
+        // Check if the path contains or starts with the metadata directory component
+        var metaDirPattern = $"/{inlineMetadataDirectoryName}/";
+        var metaDirStart = $"{inlineMetadataDirectoryName}/";
+        var metaDirEnd = $"/{inlineMetadataDirectoryName}";
 
-        return path.Contains(metaDirPattern) || path.EndsWith(metaDirEnd);
+        return normalizedPath.Contains(metaDirPattern) ||
+               normalizedPath.StartsWith(metaDirStart) ||
+               normalizedPath.EndsWith(metaDirEnd) ||
+               normalizedPath == inlineMetadataDirectoryName;
     }
 
     public static bool ShouldExcludeFromListing(string path, MetadataStorageMode mode, string inlineMetadataDirectoryName)

@@ -167,7 +167,13 @@ docker run -p 8080:8080 lamina
 
 3. **Error Responses**: Return S3-compliant error XML with appropriate HTTP status codes
 
-4. **Storage Backends**:
+4. **Data-First Architecture**:
+   - **Data is the source of truth** - object existence is determined by data presence, not metadata
+   - **Metadata is optional** - if metadata doesn't exist but data does, metadata is generated on-the-fly
+   - **Content Type Detection** - automatically detects MIME types based on file extensions
+   - **No forced metadata storage** - missing metadata is generated for read operations but not persisted
+
+5. **Storage Backends**:
 
    **In-Memory Storage**:
    - Uses `ConcurrentDictionary` for thread-safety
@@ -278,6 +284,14 @@ Example inline mode configuration:
 ```
 
 ## Recent Updates
+
+### Data-First Object Storage
+- **Data is now the source of truth** for object existence
+- Metadata is optional and generated on-the-fly when missing
+- Content type is intelligently detected based on file extensions
+- Generated metadata is not persisted to storage
+- `ObjectStorageFacade.ObjectExistsAsync` checks data existence, not metadata
+- List operations include orphaned data files without metadata
 
 ### SHA1 Migration (from MD5)
 - All ETag computations now use SHA1 instead of MD5

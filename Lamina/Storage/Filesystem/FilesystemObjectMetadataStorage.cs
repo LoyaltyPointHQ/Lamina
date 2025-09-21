@@ -86,8 +86,19 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         var metadataPath = GetMetadataPath(bucketName, key);
         var dataPath = GetDataPath(bucketName, key);
 
-        if (!File.Exists(metadataPath) || !File.Exists(dataPath))
+        // Only return metadata if the metadata file exists
+        // The facade will handle generating metadata on-the-fly if data exists without metadata
+        if (!File.Exists(metadataPath))
         {
+            return null;
+        }
+
+        // But still verify data exists
+        if (!File.Exists(dataPath))
+        {
+            // Metadata exists but data doesn't - clean up orphaned metadata
+            _logger.LogWarning("Found orphaned metadata without data for key {Key} in bucket {BucketName}, cleaning up", key, bucketName);
+            await DeleteMetadataAsync(bucketName, key, cancellationToken);
             return null;
         }
 

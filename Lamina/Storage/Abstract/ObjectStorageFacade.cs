@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using Lamina.Models;
+using Microsoft.AspNetCore.StaticFiles;
 
 namespace Lamina.Storage.Abstract;
 
@@ -8,6 +9,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
     private readonly IObjectDataStorage _dataStorage;
     private readonly IObjectMetadataStorage _metadataStorage;
     private readonly ILogger<ObjectStorageFacade> _logger;
+    private readonly IContentTypeProvider _contentTypeProvider;
 
     public ObjectStorageFacade(
         IObjectDataStorage dataStorage,
@@ -17,6 +19,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
         _dataStorage = dataStorage;
         _metadataStorage = metadataStorage;
         _logger = logger;
+        _contentTypeProvider = new FileExtensionContentTypeProvider();
     }
 
     public async Task<S3Object?> PutObjectAsync(string bucketName, string key, PipeReader dataReader, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
@@ -63,16 +66,117 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
     public async Task<S3ObjectInfo?> GetObjectInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        return await _metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
+        // First check if data exists
+        var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+        if (dataInfo == null)
+        {
+            return null;
+        }
+
+        // Try to get metadata
+        var metadata = await _metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
+        if (metadata != null)
+        {
+            return metadata;
+        }
+
+        // If data exists but metadata doesn't, generate metadata on the fly
+        _logger.LogInformation("Generating metadata on-the-fly for object {Key} in bucket {BucketName}", key, bucketName);
+        return await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
     }
 
     public async Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)
     {
-        return await _metadataStorage.ListObjectsAsync(bucketName, request, cancellationToken);
+        // Get objects from metadata storage
+        var metadataResponse = await _metadataStorage.ListObjectsAsync(bucketName, request, cancellationToken);
+
+        // Get data keys to find objects without metadata
+        var dataKeys = await _dataStorage.ListDataKeysAsync(bucketName, request?.Prefix, cancellationToken);
+        var metadataKeys = new HashSet<string>(metadataResponse.Contents.Select(o => o.Key));
+
+        // Find objects that exist in data but not in metadata
+        var missingMetadataKeys = dataKeys.Where(k => !metadataKeys.Contains(k));
+
+        foreach (var key in missingMetadataKeys)
+        {
+            var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+            if (dataInfo != null)
+            {
+                _logger.LogInformation("Found orphaned data without metadata for key {Key} in bucket {BucketName}", key, bucketName);
+
+                var generatedMetadata = await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
+                if (generatedMetadata != null)
+                {
+                    metadataResponse.Contents.Add(generatedMetadata);
+                }
+            }
+        }
+
+        // Re-sort and apply any necessary filtering
+        metadataResponse.Contents = metadataResponse.Contents.OrderBy(o => o.Key).ToList();
+
+        // Apply max keys limit if specified
+        if (request?.MaxKeys != null && metadataResponse.Contents.Count > request.MaxKeys)
+        {
+            metadataResponse.Contents = metadataResponse.Contents.Take(request.MaxKeys).ToList();
+            metadataResponse.IsTruncated = true;
+        }
+
+        return metadataResponse;
     }
 
     public async Task<bool> ObjectExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        return await _metadataStorage.MetadataExistsAsync(bucketName, key, cancellationToken);
+        // Check data existence first (source of truth)
+        return await _dataStorage.DataExistsAsync(bucketName, key, cancellationToken);
+    }
+
+    private async Task<S3ObjectInfo?> GenerateMetadataOnTheFlyAsync(string bucketName, string key, long size, DateTime lastModified, CancellationToken cancellationToken)
+    {
+        // Compute ETag from the data efficiently
+        var etag = await _dataStorage.ComputeETagAsync(bucketName, key, cancellationToken);
+        if (etag == null)
+        {
+            _logger.LogWarning("Failed to compute ETag for object {Key} in bucket {BucketName}", key, bucketName);
+            return null;
+        }
+
+        // Determine content type based on file extension
+        var contentType = GetContentTypeFromKey(key);
+
+        return new S3ObjectInfo
+        {
+            Key = key,
+            LastModified = lastModified,
+            ETag = etag,
+            Size = size,
+            ContentType = contentType,
+            Metadata = new Dictionary<string, string>()
+        };
+    }
+
+    private string GetContentTypeFromKey(string key)
+    {
+        // Try to determine content type from file extension
+        if (_contentTypeProvider.TryGetContentType(key, out var contentType))
+        {
+            return contentType;
+        }
+
+        // Check for some common extensions that might not be in the default provider
+        var extension = Path.GetExtension(key).ToLowerInvariant();
+        return extension switch
+        {
+            ".log" => "text/plain",
+            ".yaml" or ".yml" => "text/yaml",
+            ".toml" => "text/plain",
+            ".env" => "text/plain",
+            ".dockerfile" => "text/plain",
+            ".gitignore" => "text/plain",
+            ".editorconfig" => "text/plain",
+            ".properties" => "text/plain",
+            ".conf" or ".config" => "text/plain",
+            _ => "application/octet-stream" // Default fallback
+        };
     }
 }
