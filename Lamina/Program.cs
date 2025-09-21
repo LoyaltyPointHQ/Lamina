@@ -3,6 +3,7 @@ using Lamina.Models;
 using Lamina.Services;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem;
+using Lamina.Storage.Filesystem.Locking;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.InMemory;
 
@@ -33,6 +34,9 @@ builder.Services.AddControllers(options =>
 .AddXmlDataContractSerializerFormatters();
 builder.Services.AddOpenApi();
 
+// Add health checks
+builder.Services.AddHealthChecks();
+
 // Configure authentication
 builder.Services.Configure<AuthenticationSettings>(
     builder.Configuration.GetSection("Authentication"));
@@ -41,7 +45,7 @@ builder.Services.Configure<AuthenticationSettings>(
 builder.Services.AddSingleton<IAuthenticationService, AuthenticationService>();
 
 // Register FileSystemLockManager for thread-safe file operations
-builder.Services.AddSingleton<IFileSystemLockManager, FileSystemLockManager>();
+builder.Services.AddSingleton<IFileSystemLockManager, InMemoryLockManager>();
 
 // Register S3 services based on configuration
 var storageType = builder.Configuration["StorageType"] ?? "InMemory";
@@ -105,6 +109,9 @@ if (app.Environment.IsDevelopment())
 app.UseS3Authentication();
 
 app.MapControllers();
+
+// Map health check endpoint (bypasses authentication)
+app.MapHealthChecks("/health");
 
 app.Run();
 
