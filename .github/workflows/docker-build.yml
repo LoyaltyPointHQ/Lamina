@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build and Push Docker Image & Helm Chart
 
 on:
   push:
@@ -63,3 +63,36 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
+
+      - name: Install Helm
+        if: github.event_name != 'pull_request'
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+
+      - name: Package Helm chart
+        if: github.event_name != 'pull_request'
+        run: |
+          # Update Chart.yaml with the correct app version
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+            VERSION=${VERSION#v}  # Remove 'v' prefix if present
+            sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" chart/Chart.yaml
+            sed -i "s/^version:.*/version: $VERSION/" chart/Chart.yaml
+          else
+            # For branches, use the commit SHA
+            sed -i "s/^appVersion:.*/appVersion: \"${{ github.sha }}\"/" chart/Chart.yaml
+          fi
+
+          # Package the chart
+          helm package chart/
+
+      - name: Push Helm chart to GHCR
+        if: github.event_name != 'pull_request'
+        run: |
+          # Login to GHCR with Helm
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} --username ${{ github.actor }} --password-stdin
+
+          # Push the chart
+          CHART_FILE=$(ls lamina-*.tgz)
+          helm push $CHART_FILE oci://${{ env.REGISTRY }}/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
