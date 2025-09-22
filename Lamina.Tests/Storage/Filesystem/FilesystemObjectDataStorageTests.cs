@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Lamina.Storage.Filesystem;
 using Lamina.Storage.Filesystem.Configuration;
+using Lamina.Storage.Filesystem.Helpers;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -26,10 +27,12 @@ public class FilesystemObjectDataStorageTests : IDisposable
             DataDirectory = _testDataDirectory,
             MetadataDirectory = _testMetadataDirectory,
             MetadataMode = MetadataStorageMode.SeparateDirectory,
-            InlineMetadataDirectoryName = ".lamina-meta"
+            InlineMetadataDirectoryName = ".lamina-meta",
+            NetworkMode = NetworkFileSystemMode.None
         });
 
-        _storage = new FilesystemObjectDataStorage(settings, NullLogger<FilesystemObjectDataStorage>.Instance);
+        var networkHelper = new NetworkFileSystemHelper(settings, NullLogger<NetworkFileSystemHelper>.Instance);
+        _storage = new FilesystemObjectDataStorage(settings, networkHelper, NullLogger<FilesystemObjectDataStorage>.Instance);
     }
 
     [Fact]
@@ -145,10 +148,12 @@ public class FilesystemObjectDataStorageTests : IDisposable
         {
             DataDirectory = _testDataDirectory,
             MetadataMode = MetadataStorageMode.Inline,
-            InlineMetadataDirectoryName = ".lamina-meta"
+            InlineMetadataDirectoryName = ".lamina-meta",
+            NetworkMode = NetworkFileSystemMode.None
         });
 
-        var inlineStorage = new FilesystemObjectDataStorage(settings, NullLogger<FilesystemObjectDataStorage>.Instance);
+        var networkHelper = new NetworkFileSystemHelper(settings, NullLogger<NetworkFileSystemHelper>.Instance);
+        var inlineStorage = new FilesystemObjectDataStorage(settings, networkHelper, NullLogger<FilesystemObjectDataStorage>.Instance);
 
         const string bucketName = "test-bucket";
         const string key = "test-object.txt";

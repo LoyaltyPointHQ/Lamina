@@ -216,7 +216,12 @@ Configure in `appsettings.json` or `appsettings.Development.json`:
     "DataDirectory": "/tmp/laminas/data",
     "MetadataDirectory": "/tmp/laminas/metadata",  // Required for SeparateDirectory mode
     "MetadataMode": "SeparateDirectory",  // or "Inline" (default: SeparateDirectory)
-    "InlineMetadataDirectoryName": ".lamina-meta"  // Name of metadata directory in inline mode (default: .lamina-meta)
+    "InlineMetadataDirectoryName": ".lamina-meta",  // Name of metadata directory in inline mode (default: .lamina-meta)
+    "NetworkMode": "None",  // or "CIFS" or "NFS" for network filesystem support
+    "RetryCount": 3,  // Number of retries for file operations (used with CIFS/NFS)
+    "RetryDelayMs": 100,  // Initial delay between retries in milliseconds
+    "DirectoryCleanupDelayMs": 500,  // Delay before directory cleanup (useful for CIFS)
+    "DisableMetadataCaching": false  // Set to true for CIFS to avoid stale cache issues
   }
 }
 ```
@@ -249,6 +254,60 @@ Example inline mode configuration:
   }
 }
 ```
+
+#### Network Filesystem Support (CIFS/NFS)
+
+Lamina includes special support for network filesystems to handle their unique characteristics:
+
+**CIFS Configuration Example** (`appsettings.CIFS.json`):
+```json
+{
+  "StorageType": "Filesystem",
+  "FilesystemStorage": {
+    "DataDirectory": "/mnt/cifs/lamina/data",
+    "MetadataDirectory": "/mnt/cifs/lamina/metadata",
+    "MetadataMode": "SeparateDirectory",
+    "NetworkMode": "CIFS",
+    "RetryCount": 5,  // More retries for CIFS
+    "RetryDelayMs": 200,  // Longer initial delay
+    "DirectoryCleanupDelayMs": 1000,  // Wait for file handles to release
+    "DisableMetadataCaching": true  // Avoid stale cache issues
+  }
+}
+```
+
+**NFS Configuration Example** (`appsettings.NFS.json`):
+```json
+{
+  "StorageType": "Filesystem",
+  "FilesystemStorage": {
+    "DataDirectory": "/mnt/nfs/lamina/data",
+    "MetadataDirectory": "/mnt/nfs/lamina/metadata",
+    "MetadataMode": "SeparateDirectory",
+    "NetworkMode": "NFS",
+    "RetryCount": 3,
+    "RetryDelayMs": 100,
+    "DirectoryCleanupDelayMs": 0,  // Not needed for NFS
+    "DisableMetadataCaching": false
+  }
+}
+```
+
+**Network Filesystem Features**:
+- **Retry Logic**: Automatic retry with exponential backoff for transient network errors
+- **CIFS-Safe Atomic Moves**: Special handling for file overwrites on CIFS
+- **Directory Cleanup Delays**: Configurable delays to handle CIFS file handle release
+- **ESTALE Error Handling**: Automatic detection and retry of stale NFS file handles
+- **Network-Aware Error Detection**: Recognizes network-specific error patterns
+
+**Important Limitations**:
+- The in-memory lock manager only protects within a single Lamina instance
+- For multi-instance deployments on network filesystems, implement distributed locking
+- Recommended: Use single instance or implement Redis/database-based locking
+
+**Recommended Mount Options**:
+- **NFS**: `mount -t nfs4 -o vers=4.2,hard,timeo=600,retrans=2,rsize=1048576,wsize=1048576`
+- **CIFS**: `mount -t cifs -o vers=3.0,cache=none,actimeo=0`
 
 ### Authentication Configuration
 ```json

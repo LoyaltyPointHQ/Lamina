@@ -3,8 +3,9 @@ using Lamina.Models;
 using Lamina.Services;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem;
-using Lamina.Storage.Filesystem.Locking;
 using Lamina.Storage.Filesystem.Configuration;
+using Lamina.Storage.Filesystem.Helpers;
+using Lamina.Storage.Filesystem.Locking;
 using Lamina.Storage.InMemory;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -55,6 +56,9 @@ if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
     // Configure and register FilesystemStorageSettings with IOptions
     builder.Services.Configure<FilesystemStorageSettings>(
         builder.Configuration.GetSection("FilesystemStorage"));
+
+    // Register NetworkFileSystemHelper for CIFS/NFS support
+    builder.Services.AddSingleton<NetworkFileSystemHelper>();
 
     // Register bucket services
     builder.Services.AddSingleton<IBucketDataStorage, FilesystemBucketDataStorage>();

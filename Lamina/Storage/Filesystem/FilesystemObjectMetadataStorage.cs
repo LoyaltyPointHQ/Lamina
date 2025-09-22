@@ -2,6 +2,7 @@ using System.Text.Json;
 using Lamina.Models;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem.Configuration;
+using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.Filesystem.Locking;
 using Microsoft.Extensions.Options;
 
@@ -15,12 +16,14 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
     private readonly string _inlineMetadataDirectoryName;
     private readonly IBucketStorageFacade _bucketStorage;
     private readonly IFileSystemLockManager _lockManager;
+    private readonly NetworkFileSystemHelper _networkHelper;
     private readonly ILogger<FilesystemObjectMetadataStorage> _logger;
 
     public FilesystemObjectMetadataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
         IBucketStorageFacade bucketStorage,
         IFileSystemLockManager lockManager,
+        NetworkFileSystemHelper networkHelper,
         ILogger<FilesystemObjectMetadataStorage> logger)
     {
         var settings = settingsOptions.Value;
@@ -30,6 +33,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
         _bucketStorage = bucketStorage;
         _lockManager = lockManager;
+        _networkHelper = networkHelper;
         _logger = logger;
 
         Directory.CreateDirectory(_dataDirectory);
@@ -147,20 +151,12 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
                 ? Path.Combine(_metadataDirectory!, bucketName)
                 : Path.Combine(_dataDirectory, bucketName);
 
-            while (!string.IsNullOrEmpty(directory) &&
-                   directory.StartsWith(rootDir!) &&
-                   directory != rootDir &&
-                   directory != bucketDirectory)  // Stop at bucket directory
+            if (!string.IsNullOrEmpty(directory) &&
+                directory.StartsWith(rootDir!) &&
+                directory != rootDir &&
+                directory != bucketDirectory)
             {
-                if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
-                {
-                    Directory.Delete(directory);
-                    directory = Path.GetDirectoryName(directory);
-                }
-                else
-                {
-                    break;
-                }
+                await _networkHelper.DeleteDirectoryIfEmptyAsync(directory, bucketDirectory);
             }
         }
         catch (Exception ex)

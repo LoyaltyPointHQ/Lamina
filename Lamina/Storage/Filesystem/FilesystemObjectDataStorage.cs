@@ -2,6 +2,7 @@ using System.IO.Pipelines;
 using Lamina.Helpers;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem.Configuration;
+using Lamina.Storage.Filesystem.Helpers;
 using Microsoft.Extensions.Options;
 
 namespace Lamina.Storage.Filesystem;
@@ -11,16 +12,19 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
     private readonly string _dataDirectory;
     private readonly MetadataStorageMode _metadataMode;
     private readonly string _inlineMetadataDirectoryName;
+    private readonly NetworkFileSystemHelper _networkHelper;
     private readonly ILogger<FilesystemObjectDataStorage> _logger;
 
     public FilesystemObjectDataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
+        NetworkFileSystemHelper networkHelper,
         ILogger<FilesystemObjectDataStorage> logger)
     {
         var settings = settingsOptions.Value;
         _dataDirectory = settings.DataDirectory;
         _metadataMode = settings.MetadataMode;
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
+        _networkHelper = networkHelper;
         _logger = logger;
 
         Directory.CreateDirectory(_dataDirectory);
@@ -80,7 +84,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
 
             // Atomically move the temp file to the final location
-            File.Move(tempPath, dataPath, overwrite: true);
+            await _networkHelper.AtomicMoveAsync(tempPath, dataPath, overwrite: true);
 
             return (bytesWritten, etag);
         }
@@ -159,7 +163,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
 
             // Atomically move the temp file to the final location
-            File.Move(tempPath, dataPath, overwrite: true);
+            await _networkHelper.AtomicMoveAsync(tempPath, dataPath, overwrite: true);
 
             return (totalBytesWritten, etag);
         }
@@ -213,21 +217,25 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         return true;
     }
 
-    public Task<bool> DeleteDataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteDataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         // Validate that the key doesn't contain metadata directory patterns
         if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
         {
-            return Task.FromResult(false);  // Cannot delete metadata paths
+            return false;  // Cannot delete metadata paths
         }
 
         var dataPath = GetDataPath(bucketName, key);
         if (!File.Exists(dataPath))
         {
-            return Task.FromResult(false);
+            return false;
         }
 
-        File.Delete(dataPath);
+        await _networkHelper.ExecuteWithRetryAsync(() =>
+        {
+            File.Delete(dataPath);
+            return Task.FromResult(true);
+        }, "DeleteFile");
 
         // Clean up empty directories, but preserve the bucket directory
         try
@@ -235,32 +243,13 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             var bucketDirectory = Path.Combine(_dataDirectory, bucketName);
             var directory = Path.GetDirectoryName(dataPath);
 
-            while (!string.IsNullOrEmpty(directory) &&
-                   directory.StartsWith(_dataDirectory) &&
-                   directory != _dataDirectory &&
-                   directory != bucketDirectory)  // Stop at bucket directory
+            if (!string.IsNullOrEmpty(directory) &&
+                directory.StartsWith(_dataDirectory) &&
+                directory != _dataDirectory &&
+                directory != bucketDirectory)
             {
-                // Check if directory is empty, excluding metadata directories if in inline mode
-                var isEmpty = !Directory.EnumerateFileSystemEntries(directory)
-                    .Any(entry =>
-                    {
-                        if (_metadataMode == MetadataStorageMode.Inline)
-                        {
-                            var entryName = Path.GetFileName(entry);
-                            return entryName != _inlineMetadataDirectoryName;
-                        }
-                        return true;
-                    });
-
-                if (Directory.Exists(directory) && isEmpty)
-                {
-                    Directory.Delete(directory);
-                    directory = Path.GetDirectoryName(directory);
-                }
-                else
-                {
-                    break;
-                }
+                // Use helper for directory cleanup with network filesystem support
+                await _networkHelper.DeleteDirectoryIfEmptyAsync(directory, bucketDirectory);
             }
         }
         catch (Exception ex)
@@ -268,7 +257,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             _logger.LogWarning(ex, "Failed to clean up empty directories for path: {DataPath}", dataPath);
         }
 
-        return Task.FromResult(true);
+        return true;
     }
 
     public Task<bool> DataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
