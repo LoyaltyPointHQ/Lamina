@@ -288,19 +288,57 @@ namespace Lamina.Services
             if (string.IsNullOrEmpty(uri))
                 return "/";
 
-            // Split the path into segments
-            var segments = uri.TrimStart('/').Split('/');
+            // AWS Signature V4 canonical URI encoding rules:
+            // - Don't encode forward slashes (/)
+            // - Encode unreserved characters according to RFC 3986
+            // - Double-encode already encoded characters
+            
+            // Split the path into segments, but preserve empty segments for consecutive slashes
+            var segments = uri.TrimStart('/').Split('/', StringSplitOptions.None);
             var encodedSegments = new string[segments.Length];
 
             for (int i = 0; i < segments.Length; i++)
             {
-                // Encode each segment using Uri.EscapeDataString
-                // This handles special characters and spaces correctly
-                encodedSegments[i] = Uri.EscapeDataString(segments[i]);
+                // AWS Signature V4 specific encoding for each segment
+                encodedSegments[i] = AwsUriEncode(segments[i]);
             }
 
             // Rejoin with "/" and ensure it starts with "/"
             return "/" + string.Join("/", encodedSegments);
+        }
+
+        private string AwsUriEncode(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return value;
+
+            var result = new StringBuilder();
+            foreach (char c in value)
+            {
+                if (IsUnreservedCharacter(c))
+                {
+                    result.Append(c);
+                }
+                else
+                {
+                    // Convert to bytes and encode each byte as %XX
+                    var bytes = Encoding.UTF8.GetBytes(c.ToString());
+                    foreach (byte b in bytes)
+                    {
+                        result.Append($"%{b:X2}");
+                    }
+                }
+            }
+            return result.ToString();
+        }
+
+        private bool IsUnreservedCharacter(char c)
+        {
+            // RFC 3986 unreserved characters: A-Z a-z 0-9 - . _ ~
+            return (c >= 'A' && c <= 'Z') ||
+                   (c >= 'a' && c <= 'z') ||
+                   (c >= '0' && c <= '9') ||
+                   c == '-' || c == '.' || c == '_' || c == '~';
         }
     }
 }

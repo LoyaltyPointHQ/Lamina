@@ -517,5 +517,31 @@ namespace Lamina.Tests.Services
             Assert.NotNull(user);
             Assert.Equal("Invalid signature", error);
         }
+
+        [Fact]
+        public async Task ValidateRequestAsync_HandlesSpecialCharactersInUri()
+        {
+            // Test that the URI encoding fix handles special characters properly
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            // Test with a path that has special characters like in the error (dots in filename)
+            context.Request.Method = "PUT";
+            context.Request.Path = "/oadp/velro/kopia/levelup/kopia.blobcfg";
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTACCESSKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcd1234";
+            context.Request.Headers["x-amz-date"] = amzDate;
+            context.Request.Headers["Host"] = "lamina.openshift-adp.svc";
+            context.Request.ContentType = "application/x-kopia";
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(context.Request, "oadp", "velro/kopia/levelup/kopia.blobcfg", "PUT");
+
+            // Should fail with signature mismatch (expected since we used dummy signature)
+            // But the important thing is that URI encoding should not cause parsing errors
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Invalid signature", error);
+        }
     }
 }
