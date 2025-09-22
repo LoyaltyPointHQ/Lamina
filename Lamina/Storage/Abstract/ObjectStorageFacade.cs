@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using Lamina.Models;
+using Lamina.Services;
 using Microsoft.AspNetCore.StaticFiles;
 
 namespace Lamina.Storage.Abstract;
@@ -45,6 +46,42 @@ public class ObjectStorageFacade : IObjectStorageFacade
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error storing object {Key} in bucket {BucketName}", key, bucketName);
+            // Try to clean up any partial data
+            await _dataStorage.DeleteDataAsync(bucketName, key, cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<S3Object?> PutObjectAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Store data with chunk validation and get ETag
+            var (size, etag) = await _dataStorage.StoreDataAsync(bucketName, key, dataReader, chunkValidator, cancellationToken);
+
+            // Check if validation failed (indicated by empty etag)
+            if (string.IsNullOrEmpty(etag))
+            {
+                _logger.LogWarning("Chunk signature validation failed for object {Key} in bucket {BucketName}", key, bucketName);
+                return null;
+            }
+
+            // Store metadata
+            var s3Object = await _metadataStorage.StoreMetadataAsync(bucketName, key, etag, size, request, cancellationToken);
+
+            if (s3Object == null)
+            {
+                // Rollback data if metadata storage failed
+                await _dataStorage.DeleteDataAsync(bucketName, key, cancellationToken);
+                _logger.LogError("Failed to store metadata for object {Key} in bucket {BucketName}", key, bucketName);
+                return null;
+            }
+
+            return s3Object;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error storing object {Key} in bucket {BucketName} with chunk validation", key, bucketName);
             // Try to clean up any partial data
             await _dataStorage.DeleteDataAsync(bucketName, key, cancellationToken);
             throw;

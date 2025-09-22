@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using Lamina.Helpers;
+using Lamina.Services;
 using Lamina.Storage.Abstract;
 
 namespace Lamina.Storage.InMemory;
@@ -56,6 +57,50 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         bucketData[key] = combinedData;
 
         return (totalSize, etag);
+    }
+
+    public async Task<(long size, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, CancellationToken cancellationToken = default)
+    {
+        // If no chunk validator is provided, use the standard method
+        if (chunkValidator == null)
+        {
+            return await StoreDataAsync(bucketName, key, dataReader, cancellationToken);
+        }
+
+        var bucketData = _data.GetOrAdd(bucketName, _ => new ConcurrentDictionary<string, byte[]>());
+
+        // Parse AWS chunked encoding and collect decoded data with signature validation
+        var decodedData = new List<byte[]>();
+        long totalDecodedSize = 0;
+
+        try
+        {
+            await foreach (var chunk in AwsChunkedEncodingHelper.ParseChunkedDataAsync(dataReader, chunkValidator, cancellationToken))
+            {
+                var chunkArray = chunk.ToArray();
+                decodedData.Add(chunkArray);
+                totalDecodedSize += chunkArray.Length;
+            }
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Invalid") && ex.Message.Contains("signature"))
+        {
+            // Invalid chunk signature - return null to indicate failure
+            return (0, string.Empty);
+        }
+
+        // Combine all decoded chunks
+        var combinedData = new byte[totalDecodedSize];
+        var offset = 0;
+        foreach (var chunk in decodedData)
+        {
+            Buffer.BlockCopy(chunk, 0, combinedData, offset, chunk.Length);
+            offset += chunk.Length;
+        }
+
+        var etag = ETagHelper.ComputeETag(combinedData);
+        bucketData[key] = combinedData;
+
+        return (totalDecodedSize, etag);
     }
 
     public async Task<(long size, string etag)> StoreMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)

@@ -9,12 +9,14 @@ namespace Lamina.Middleware
     {
         private readonly RequestDelegate _next;
         private readonly IAuthenticationService _authService;
+        private readonly IStreamingAuthenticationService _streamingAuthService;
         private readonly ILogger<S3AuthenticationMiddleware> _logger;
 
-        public S3AuthenticationMiddleware(RequestDelegate next, IAuthenticationService authService, ILogger<S3AuthenticationMiddleware> logger)
+        public S3AuthenticationMiddleware(RequestDelegate next, IAuthenticationService authService, IStreamingAuthenticationService streamingAuthService, ILogger<S3AuthenticationMiddleware> logger)
         {
             _next = next;
             _authService = authService;
+            _streamingAuthService = streamingAuthService;
             _logger = logger;
         }
 
@@ -70,22 +72,58 @@ namespace Lamina.Middleware
                 objectKey = pathSegments.Length > 1 ? string.Join("/", pathSegments.Skip(1)) : null;
             }
 
-            var (isValid, user, error) = await _authService.ValidateRequestAsync(
-                context.Request,
-                bucketName,
-                objectKey,
-                context.Request.Method);
+            // Check if this is a streaming request
+            var contentSha256 = context.Request.Headers["x-amz-content-sha256"].FirstOrDefault();
+            var isStreamingPayload = contentSha256 == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
 
-            if (!isValid)
+            if (isStreamingPayload)
             {
-                _logger.LogWarning("Authentication failed: {Error}", error);
-                await WriteErrorResponse(context, error ?? "Access Denied");
-                return;
+                // For streaming requests, validate the initial signature and set up chunk validation
+                var (isValid, user, error) = await _authService.ValidateRequestAsync(
+                    context.Request,
+                    bucketName,
+                    objectKey,
+                    context.Request.Method);
+
+                if (!isValid)
+                {
+                    _logger.LogWarning("Streaming authentication failed: {Error}", error);
+                    await WriteErrorResponse(context, error ?? "Access Denied");
+                    return;
+                }
+
+                if (user != null)
+                {
+                    context.Items["AuthenticatedUser"] = user;
+                    
+                    // Create chunk validator for downstream processing
+                    var chunkValidator = await _streamingAuthService.CreateChunkValidatorAsync(context.Request, user);
+                    if (chunkValidator != null)
+                    {
+                        context.Items["ChunkValidator"] = chunkValidator;
+                    }
+                }
             }
-
-            if (user != null)
+            else
             {
-                context.Items["AuthenticatedUser"] = user;
+                // Regular non-streaming authentication
+                var (isValid, user, error) = await _authService.ValidateRequestAsync(
+                    context.Request,
+                    bucketName,
+                    objectKey,
+                    context.Request.Method);
+
+                if (!isValid)
+                {
+                    _logger.LogWarning("Authentication failed: {Error}", error);
+                    await WriteErrorResponse(context, error ?? "Access Denied");
+                    return;
+                }
+
+                if (user != null)
+                {
+                    context.Items["AuthenticatedUser"] = user;
+                }
             }
 
             await _next(context);

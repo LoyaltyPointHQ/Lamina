@@ -89,9 +89,27 @@ public class S3ObjectsController : ControllerBase
 
         _logger.LogInformation("Putting object {Key} in bucket {BucketName}", key, bucketName);
 
-        var s3Object = await _objectStorage.PutObjectAsync(bucketName, key, reader, putRequest, cancellationToken);
+        // Check if there's a chunk validator from the authentication middleware
+        var chunkValidator = HttpContext.Items["ChunkValidator"] as IChunkSignatureValidator;
+        
+        var s3Object = chunkValidator != null
+            ? await _objectStorage.PutObjectAsync(bucketName, key, reader, chunkValidator, putRequest, cancellationToken)
+            : await _objectStorage.PutObjectAsync(bucketName, key, reader, putRequest, cancellationToken);
         if (s3Object == null)
         {
+            // If we had a chunk validator and the operation failed, it's likely due to invalid signature
+            if (chunkValidator != null)
+            {
+                _logger.LogWarning("Chunk signature validation failed for object {Key} in bucket {BucketName}", key, bucketName);
+                return StatusCode(403, new S3Error
+                {
+                    Code = "SignatureDoesNotMatch",
+                    Message = "The request signature we calculated does not match the signature you provided.",
+                    Resource = $"/{bucketName}/{key}",
+                    RequestId = HttpContext.TraceIdentifier
+                });
+            }
+
             _logger.LogError("Failed to put object {Key} in bucket {BucketName}", key, bucketName);
             return StatusCode(500);
         }
@@ -303,7 +321,33 @@ public class S3ObjectsController : ControllerBase
         {
             // Use PipeReader from the request body
             var reader = Request.BodyReader;
-            var part = await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, cancellationToken);
+
+            // Check if there's a chunk validator from the authentication middleware (for streaming uploads)
+            var chunkValidator = HttpContext.Items["ChunkValidator"] as IChunkSignatureValidator;
+
+            var part = chunkValidator != null
+                ? await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, chunkValidator, cancellationToken)
+                : await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, cancellationToken);
+
+            if (part == null)
+            {
+                // If we had a chunk validator and the operation failed, it's likely due to invalid signature
+                if (chunkValidator != null)
+                {
+                    _logger.LogWarning("Chunk signature validation failed for part {PartNumber} of upload {UploadId}", partNumber, uploadId);
+                    return StatusCode(403, new S3Error
+                    {
+                        Code = "SignatureDoesNotMatch",
+                        Message = "The request signature we calculated does not match the signature you provided.",
+                        Resource = $"/{bucketName}/{key}",
+                        RequestId = HttpContext.TraceIdentifier
+                    });
+                }
+
+                // Otherwise, generic error
+                return StatusCode(500);
+            }
+
             Response.Headers.Append("ETag", $"\"{part.ETag}\"");
             return Ok();
         }

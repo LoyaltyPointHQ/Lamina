@@ -1,5 +1,7 @@
 using System.IO.Pipelines;
+using Microsoft.Extensions.Logging;
 using Lamina.Models;
+using Lamina.Services;
 
 namespace Lamina.Storage.Abstract;
 
@@ -39,6 +41,49 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         }
 
         return await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, cancellationToken);
+    }
+
+    public async Task<UploadPart?> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, CancellationToken cancellationToken = default)
+    {
+        // If no chunk validator, use the non-validating version
+        if (chunkValidator == null)
+        {
+            return await UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, cancellationToken);
+        }
+
+        // Verify upload exists
+        var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
+        if (upload == null)
+        {
+            throw new InvalidOperationException($"Upload '{uploadId}' not found");
+        }
+
+        // For streaming validation, parse and validate chunks while streaming to storage
+        using var tempStream = new MemoryStream();
+        try
+        {
+            await Helpers.AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(dataReader, tempStream, chunkValidator, cancellationToken);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Invalid") && ex.Message.Contains("signature"))
+        {
+            // Invalid chunk signature
+            _logger.LogWarning("Chunk signature validation failed for part {PartNumber} of upload {UploadId}", partNumber, uploadId);
+            return null;
+        }
+
+        // Create a pipe reader from the validated decoded data
+        tempStream.Position = 0;
+        var pipe = new System.IO.Pipelines.Pipe();
+        var writeTask = Task.Run(async () =>
+        {
+            await tempStream.CopyToAsync(pipe.Writer.AsStream(), cancellationToken);
+            await pipe.Writer.CompleteAsync();
+        });
+
+        var result = await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, pipe.Reader, cancellationToken);
+        await writeTask;
+
+        return result;
     }
 
     public async Task<CompleteMultipartUploadResponse> CompleteMultipartUploadAsync(string bucketName, string key, CompleteMultipartUploadRequest request, CancellationToken cancellationToken = default)

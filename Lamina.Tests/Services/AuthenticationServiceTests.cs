@@ -543,5 +543,65 @@ namespace Lamina.Tests.Services
             Assert.NotNull(user);
             Assert.Equal("Invalid signature", error);
         }
+
+        [Fact]
+        public async Task ValidateRequestAsync_HandlesStreamingPayloadHash()
+        {
+            // Test that the streaming payload hash is handled correctly
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            // Test with streaming payload hash as seen in the error logs
+            context.Request.Method = "PUT";
+            context.Request.Path = "/oadp/velro/kopia/levelup/kopia.blobcfg";
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTACCESSKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=content-md5;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length, Signature=abcd1234";
+            context.Request.Headers["x-amz-date"] = amzDate;
+            context.Request.Headers["Host"] = "lamina.openshift-adp.svc";
+            context.Request.Headers["x-amz-content-sha256"] = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
+            context.Request.Headers["x-amz-decoded-content-length"] = "30";
+            context.Request.Headers["content-md5"] = "oxRdWklwGX760oPlOWA2ow==";
+            context.Request.ContentType = "application/x-kopia";
+            context.Request.ContentLength = 203;
+
+            // Add test payload
+            var testPayload = new byte[203];
+            context.Request.Body = new MemoryStream(testPayload);
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(context.Request, "oadp", "velro/kopia/levelup/kopia.blobcfg", "PUT");
+
+            // Should fail with signature mismatch (expected since we used dummy signature)
+            // But the important thing is that streaming payload hash should not cause parsing errors
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Invalid signature", error);
+
+            // Verify that the service can calculate signature with streaming payload
+            var sigRequest = new SignatureV4Request
+            {
+                Method = "PUT",
+                CanonicalUri = "/oadp/velro/kopia/levelup/kopia.blobcfg",
+                CanonicalQueryString = "",
+                Headers = new Dictionary<string, string>
+                {
+                    {"content-md5", "oxRdWklwGX760oPlOWA2ow=="},
+                    {"host", "lamina.openshift-adp.svc"},
+                    {"x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"},
+                    {"x-amz-date", amzDate},
+                    {"x-amz-decoded-content-length", "30"}
+                },
+                Payload = testPayload,
+                Region = "us-east-1",
+                Service = "s3",
+                RequestDateTime = dateTime,
+                AccessKeyId = "TESTACCESSKEY",
+                SignedHeaders = "content-md5;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length"
+            };
+
+            var calculatedSig = await _authService.CalculateSignatureV4(sigRequest, "testsecretkey");
+            Assert.NotNull(calculatedSig);
+            Assert.NotEmpty(calculatedSig);
+        }
     }
 }

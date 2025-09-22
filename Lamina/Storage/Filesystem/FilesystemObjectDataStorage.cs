@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using Lamina.Helpers;
+using Lamina.Services;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
@@ -77,6 +78,77 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                 }
 
                 await dataReader.CompleteAsync();
+                await fileStream.FlushAsync(cancellationToken);
+            } // FileStream is fully disposed here
+
+            // Now compute ETag from the temp file on disk with a new file handle
+            var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
+
+            // Atomically move the temp file to the final location
+            await _networkHelper.AtomicMoveAsync(tempPath, dataPath, overwrite: true);
+
+            return (bytesWritten, etag);
+        }
+        catch
+        {
+            // Clean up temp file if something went wrong
+            try
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to clean up temporary file: {TempPath}", tempPath);
+            }
+            throw;
+        }
+    }
+
+    public async Task<(long size, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, CancellationToken cancellationToken = default)
+    {
+        // If no chunk validator is provided, use the standard method
+        if (chunkValidator == null)
+        {
+            return await StoreDataAsync(bucketName, key, dataReader, cancellationToken);
+        }
+
+        // Validate that the key doesn't contain metadata directory patterns
+        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            throw new InvalidOperationException($"Cannot store data with key containing metadata directory '{_inlineMetadataDirectoryName}'");
+        }
+
+        var dataPath = GetDataPath(bucketName, key);
+        var dataDir = Path.GetDirectoryName(dataPath)!;
+        Directory.CreateDirectory(dataDir);
+
+        // Create a temporary file in the same directory to ensure atomic move
+        var tempPath = Path.Combine(dataDir, $".tmp_{Guid.NewGuid():N}");
+        long bytesWritten = 0;
+
+        try
+        {
+            // Write the decoded data to temp file
+            {
+                await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
+
+                // Parse AWS chunked encoding and write decoded data directly to file with signature validation
+                try
+                {
+                    bytesWritten = await AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, cancellationToken);
+                }
+                catch (InvalidOperationException ex) when (ex.Message.Contains("Invalid") && ex.Message.Contains("signature"))
+                {
+                    // Invalid chunk signature - clean up and return failure
+                    await fileStream.FlushAsync(cancellationToken);
+                    fileStream.Close();
+                    File.Delete(tempPath);
+                    return (0, string.Empty);
+                }
+
                 await fileStream.FlushAsync(cancellationToken);
             } // FileStream is fully disposed here
 

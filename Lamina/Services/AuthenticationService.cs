@@ -126,7 +126,7 @@ namespace Lamina.Services
 
         private async Task<SignatureV4Request?> ParseSignatureV4Request(HttpRequest request, string authHeader)
         {
-            var match = Regex.Match(authHeader, @"AWS4-HMAC-SHA256\s+Credential=([^/]+)/([^/]+)/([^/]+)/s3/aws4_request,\s*SignedHeaders=([^,]+),\s*Signature=([a-f0-9]+)");
+            var match = Regex.Match(authHeader, @"AWS4-HMAC-SHA256\s+Credential=([^/]+)/([^/]+)/([^/]+)/s3/aws4_request,\s*SignedHeaders=([^,]+),\s*Signature=([a-fA-F0-9]+)");
             if (!match.Success)
             {
                 return null;
@@ -144,16 +144,23 @@ namespace Lamina.Services
                 return null;
             }
 
-            request.EnableBuffering();
             byte[] payload = Array.Empty<byte>();
-            if (request.Body != null)
+            
+            // Check if this is a streaming request - if so, don't buffer the payload
+            var contentSha256 = request.Headers["x-amz-content-sha256"].FirstOrDefault();
+            var isStreamingPayload = contentSha256 == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
+            
+            if (!isStreamingPayload && request.Body != null)
             {
+                // Only buffer non-streaming requests
+                request.EnableBuffering();
                 request.Body.Position = 0;
                 using var memoryStream = new MemoryStream();
                 await request.Body.CopyToAsync(memoryStream);
                 payload = memoryStream.ToArray();
                 request.Body.Position = 0;
             }
+            // For streaming payloads, we leave payload empty and handle validation differently
 
             var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var header in request.Headers)
@@ -195,6 +202,8 @@ namespace Lamina.Services
                 var value = kvp.Value.FirstOrDefault() ?? "";
                 parameters[key] = Uri.EscapeDataString(value);
             }
+            // S3 API specification: always include equals sign for query parameters
+            // This matches real AWS client behavior (AWS CLI, rclone send ?uploads=)
             return string.Join("&", parameters.Select(p => $"{p.Key}={p.Value}"));
         }
 
@@ -205,11 +214,14 @@ namespace Lamina.Services
 
             var canonicalHeaders = GetCanonicalHeaders(request.Headers, request.SignedHeaders);
 
-            // Check for unsigned payload
-            var payloadHash = request.Headers.ContainsKey("x-amz-content-sha256") &&
-                              request.Headers["x-amz-content-sha256"] == "UNSIGNED-PAYLOAD"
-                ? "UNSIGNED-PAYLOAD"
-                : GetHash(request.Payload);
+            // Check for special payload hash values
+            var payloadHash = request.Headers.ContainsKey("x-amz-content-sha256") switch
+            {
+                true when request.Headers["x-amz-content-sha256"] == "UNSIGNED-PAYLOAD" => "UNSIGNED-PAYLOAD",
+                true when request.Headers["x-amz-content-sha256"] == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD" => "STREAMING-AWS4-HMAC-SHA256-PAYLOAD",
+                true => request.Headers["x-amz-content-sha256"], // Use provided hash
+                false => GetHash(request.Payload) // Calculate from payload
+            };
 
             // Encode the URI path segments for the canonical request
             var encodedUri = EncodeUri(request.CanonicalUri);

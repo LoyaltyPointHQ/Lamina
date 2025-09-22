@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a .NET 9.0 ASP.NET Core Web API project called "Lamina" that implements an S3-compatible storage API.
 
+**IMPORTANT**: This project implements the official Amazon S3 REST API specification and must maintain strict compliance with it. Any deviations from the S3 specification are considered bugs and should be fixed. All API endpoints, request/response formats, headers, status codes, and behaviors must exactly match the official S3 API documentation.
+
 **GitHub Repository**: https://github.com/LoyaltyPointHQ/Lamina
 **Docker Image**: `ghcr.io/loyaltypointhq/lamina:latest`
 
@@ -116,7 +118,7 @@ docker run -p 8080:8080 lamina
 
 ### Helpers
 - **Lamina/Helpers/**:
-  - `ETagHelper.cs`: Centralized ETag computation using SHA1 (supports byte arrays, files, and streams)
+  - `ETagHelper.cs`: Centralized ETag computation using MD5 (supports byte arrays, files, and streams)
 
 ### Tests
 - **Lamina.Tests/**:
@@ -149,7 +151,7 @@ docker run -p 8080:8080 lamina
 6. **List Uploads**: `GET /{bucket}?uploads`
 
 ### ETag Handling
-- ETags are computed using SHA1 hash of content (changed from MD5)
+- ETags are computed using MD5 hash of content (S3 standard)
 - Stored internally without quotes
 - Returned in responses with quotes (e.g., `"etag-value"`)
 - Comparison normalizes by trimming quotes
@@ -191,7 +193,7 @@ docker run -p 8080:8080 lamina
        "Key": "object-key",
        "BucketName": "bucket-name",
        "LastModified": "2025-09-18T12:23:54.7926647Z",
-       "ETag": "sha1-hash",  // Note: SHA1 hash, not MD5
+       "ETag": "md5-hash",  // Note: MD5 hash for S3 compatibility
        "ContentType": "text/plain",
        "UserMetadata": {}
      }
@@ -352,8 +354,8 @@ Lamina includes special support for network filesystems to handle their unique c
 - `ObjectStorageFacade.ObjectExistsAsync` checks data existence, not metadata
 - List operations include orphaned data files without metadata
 
-### SHA1 Migration (from MD5)
-- All ETag computations now use SHA1 instead of MD5
+### MD5 ETags (S3 Standard)
+- All ETag computations use MD5 hash for S3 compatibility
 - Centralized in `ETagHelper` class for consistency
 - Supports byte arrays, files, and streams
 - Files are processed without loading into memory
@@ -379,12 +381,13 @@ Lamina includes special support for network filesystems to handle their unique c
 ## Common Development Tasks
 
 ### Adding New S3 Operations
-1. Check S3 API documentation for request/response format
-2. Add XML models to `S3XmlResponses.cs` if needed
-3. Update controller with new endpoint/query parameter handling
-4. Add corresponding storage interface methods in `Storage/Abstract/`
-5. Implement in both `Storage/InMemory/` and `Storage/Filesystem/`
-6. Add integration and unit tests
+1. **Always consult the official S3 API documentation** for exact request/response format
+2. Ensure strict compliance with S3 specification - no custom extensions or deviations
+3. Add XML models to `S3XmlResponses.cs` matching S3's exact XML schema
+4. Update controller with new endpoint/query parameter handling per S3 spec
+5. Add corresponding storage interface methods in `Storage/Abstract/`
+6. Implement in both `Storage/InMemory/` and `Storage/Filesystem/`
+7. Add integration and unit tests that verify S3 specification compliance
 
 ### Debugging XML Issues
 1. Enable console logging in controller to see raw XML
