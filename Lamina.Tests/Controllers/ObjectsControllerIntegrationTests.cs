@@ -2,29 +2,20 @@ using System.Net;
 using System.Text;
 using System.Xml.Serialization;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.AspNetCore.Hosting;
 using Lamina.Models;
 
 namespace Lamina.Tests.Controllers;
 
-public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFactory<Program>>
+public class ObjectsControllerIntegrationTests : IntegrationTestBase
 {
-    private readonly WebApplicationFactory<Program> _factory;
-    private readonly HttpClient _client;
-
-    public ObjectsControllerIntegrationTests(WebApplicationFactory<Program> factory)
+    public ObjectsControllerIntegrationTests(WebApplicationFactory<Program> factory) : base(factory)
     {
-        _factory = factory.WithWebHostBuilder(builder =>
-        {
-            builder.UseEnvironment("Test");
-        });
-        _client = _factory.CreateClient();
     }
 
     private async Task<string> CreateTestBucketAsync()
     {
         var bucketName = $"test-bucket-{Guid.NewGuid()}";
-        await _client.PutAsync($"/{bucketName}", null);
+        await Client.PutAsync($"/{bucketName}", null);
         return bucketName;
     }
 
@@ -34,7 +25,7 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
         var bucketName = await CreateTestBucketAsync();
         var content = new StringContent("Test content", Encoding.UTF8, "text/plain");
 
-        var response = await _client.PutAsync($"/{bucketName}/test.txt", content);
+        var response = await Client.PutAsync($"/{bucketName}/test.txt", content);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("ETag", response.Headers.Select(h => h.Key));
@@ -46,7 +37,7 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
     {
         var content = new StringContent("Test content", Encoding.UTF8, "text/plain");
 
-        var response = await _client.PutAsync($"/non-existing-{Guid.NewGuid()}/test.txt", content);
+        var response = await Client.PutAsync($"/non-existing-{Guid.NewGuid()}/test.txt", content);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
@@ -61,9 +52,9 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
         var bucketName = await CreateTestBucketAsync();
         var contentText = "Get test content";
         var content = new StringContent(contentText, Encoding.UTF8, "text/plain");
-        await _client.PutAsync($"/{bucketName}/get-test.txt", content);
+        await Client.PutAsync($"/{bucketName}/get-test.txt", content);
 
-        var response = await _client.GetAsync($"/{bucketName}/get-test.txt");
+        var response = await Client.GetAsync($"/{bucketName}/get-test.txt");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var responseContent = await response.Content.ReadAsStringAsync();
@@ -80,7 +71,7 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
     {
         var bucketName = await CreateTestBucketAsync();
 
-        var response = await _client.GetAsync($"/{bucketName}/non-existing.txt");
+        var response = await Client.GetAsync($"/{bucketName}/non-existing.txt");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
@@ -94,13 +85,13 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
     {
         var bucketName = await CreateTestBucketAsync();
         var content = new StringContent("Delete test", Encoding.UTF8, "text/plain");
-        await _client.PutAsync($"/{bucketName}/delete.txt", content);
+        await Client.PutAsync($"/{bucketName}/delete.txt", content);
 
-        var response = await _client.DeleteAsync($"/{bucketName}/delete.txt");
+        var response = await Client.DeleteAsync($"/{bucketName}/delete.txt");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
 
-        var getResponse = await _client.GetAsync($"/{bucketName}/delete.txt");
+        var getResponse = await Client.GetAsync($"/{bucketName}/delete.txt");
         Assert.Equal(HttpStatusCode.NotFound, getResponse.StatusCode);
     }
 
@@ -109,7 +100,7 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
     {
         var bucketName = await CreateTestBucketAsync();
 
-        var response = await _client.DeleteAsync($"/{bucketName}/non-existing.txt");
+        var response = await Client.DeleteAsync($"/{bucketName}/non-existing.txt");
 
         // S3 returns 204 even for non-existing objects
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
@@ -119,12 +110,12 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
     public async Task ListObjects_ReturnsObjects()
     {
         var bucketName = await CreateTestBucketAsync();
-        await _client.PutAsync($"/{bucketName}/file1.txt",
+        await Client.PutAsync($"/{bucketName}/file1.txt",
             new StringContent("Content 1", Encoding.UTF8, "text/plain"));
-        await _client.PutAsync($"/{bucketName}/file2.txt",
+        await Client.PutAsync($"/{bucketName}/file2.txt",
             new StringContent("Content 2", Encoding.UTF8, "text/plain"));
 
-        var response = await _client.GetAsync($"/{bucketName}");
+        var response = await Client.GetAsync($"/{bucketName}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
@@ -149,14 +140,14 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
     public async Task ListObjects_WithPrefix_FiltersResults()
     {
         var bucketName = await CreateTestBucketAsync();
-        await _client.PutAsync($"/{bucketName}/doc1.txt",
+        await Client.PutAsync($"/{bucketName}/doc1.txt",
             new StringContent("Doc 1", Encoding.UTF8, "text/plain"));
-        await _client.PutAsync($"/{bucketName}/doc2.txt",
+        await Client.PutAsync($"/{bucketName}/doc2.txt",
             new StringContent("Doc 2", Encoding.UTF8, "text/plain"));
-        await _client.PutAsync($"/{bucketName}/image.png",
+        await Client.PutAsync($"/{bucketName}/image.png",
             new StringContent("Image", Encoding.UTF8, "image/png"));
 
-        var response = await _client.GetAsync($"/{bucketName}?prefix=doc");
+        var response = await Client.GetAsync($"/{bucketName}?prefix=doc");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
@@ -180,11 +171,11 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
     public async Task HeadObject_ExistingObject_Returns200()
     {
         var bucketName = await CreateTestBucketAsync();
-        await _client.PutAsync($"/{bucketName}/head.txt",
+        await Client.PutAsync($"/{bucketName}/head.txt",
             new StringContent("Head test", Encoding.UTF8, "text/plain"));
 
         var request = new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}/head.txt");
-        var response = await _client.SendAsync(request);
+        var response = await Client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var allHeaders = response.Headers.Concat(response.Content.Headers).Select(h => h.Key);
@@ -199,7 +190,7 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
         var bucketName = await CreateTestBucketAsync();
 
         var request = new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}/non-existing.txt");
-        var response = await _client.SendAsync(request);
+        var response = await Client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -209,7 +200,7 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
     {
         var bucketName = await CreateTestBucketAsync();
 
-        var response = await _client.PostAsync($"/{bucketName}/multipart.bin?uploads", null);
+        var response = await Client.PostAsync($"/{bucketName}/multipart.bin?uploads", null);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
@@ -235,7 +226,7 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
         var bucketName = await CreateTestBucketAsync();
 
         // Initiate multipart upload
-        var initResponse = await _client.PostAsync($"/{bucketName}/complete.bin?uploads", null);
+        var initResponse = await Client.PostAsync($"/{bucketName}/complete.bin?uploads", null);
         var initXml = await initResponse.Content.ReadAsStringAsync();
         var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
         using var initReader = new StringReader(initXml);
@@ -243,13 +234,13 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
         Assert.NotNull(initResult);
 
         // Upload parts
-        var part1Response = await _client.PutAsync(
+        var part1Response = await Client.PutAsync(
             $"/{bucketName}/complete.bin?partNumber=1&uploadId={initResult.UploadId}",
             new StringContent("Part 1 ", Encoding.UTF8));
         Assert.Equal(HttpStatusCode.OK, part1Response.StatusCode);
         var part1ETag = part1Response.Headers.GetValues("ETag").First().Trim('"');
 
-        var part2Response = await _client.PutAsync(
+        var part2Response = await Client.PutAsync(
             $"/{bucketName}/complete.bin?partNumber=2&uploadId={initResult.UploadId}",
             new StringContent("Part 2", Encoding.UTF8));
         Assert.Equal(HttpStatusCode.OK, part2Response.StatusCode);
@@ -269,7 +260,7 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
 </CompleteMultipartUpload>";
 
 
-        var completeResponse = await _client.PostAsync(
+        var completeResponse = await Client.PostAsync(
             $"/{bucketName}/complete.bin?uploadId={initResult.UploadId}",
             new StringContent(completeRequestXml, Encoding.UTF8, "application/xml"));
 
@@ -280,7 +271,7 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
         Assert.Contains("CompleteMultipartUploadResult", completeXml);
         Assert.Contains("complete.bin", completeXml);
 
-        var getResponse = await _client.GetAsync($"/{bucketName}/complete.bin");
+        var getResponse = await Client.GetAsync($"/{bucketName}/complete.bin");
         Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
         var content = await getResponse.Content.ReadAsStringAsync();
         var contentLength = getResponse.Content.Headers.ContentLength;
@@ -293,14 +284,14 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
     {
         var bucketName = await CreateTestBucketAsync();
 
-        var initResponse = await _client.PostAsync($"/{bucketName}/abort.bin?uploads", null);
+        var initResponse = await Client.PostAsync($"/{bucketName}/abort.bin?uploads", null);
         var initXml = await initResponse.Content.ReadAsStringAsync();
         var serializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
         using var reader = new StringReader(initXml);
         var initResult = (InitiateMultipartUploadResult?)serializer.Deserialize(reader);
         Assert.NotNull(initResult);
 
-        var response = await _client.DeleteAsync(
+        var response = await Client.DeleteAsync(
             $"/{bucketName}/abort.bin?uploadId={initResult.UploadId}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
@@ -311,21 +302,21 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
     {
         var bucketName = await CreateTestBucketAsync();
 
-        var initResponse = await _client.PostAsync($"/{bucketName}/parts.bin?uploads", null);
+        var initResponse = await Client.PostAsync($"/{bucketName}/parts.bin?uploads", null);
         var initXml = await initResponse.Content.ReadAsStringAsync();
         var serializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
         using var reader = new StringReader(initXml);
         var initResult = (InitiateMultipartUploadResult?)serializer.Deserialize(reader);
         Assert.NotNull(initResult);
 
-        await _client.PutAsync(
+        await Client.PutAsync(
             $"/{bucketName}/parts.bin?partNumber=1&uploadId={initResult.UploadId}",
             new StringContent("Part 1", Encoding.UTF8));
-        await _client.PutAsync(
+        await Client.PutAsync(
             $"/{bucketName}/parts.bin?partNumber=2&uploadId={initResult.UploadId}",
             new StringContent("Part 2", Encoding.UTF8));
 
-        var response = await _client.GetAsync(
+        var response = await Client.GetAsync(
             $"/{bucketName}/parts.bin?uploadId={initResult.UploadId}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -349,10 +340,10 @@ public class ObjectsControllerIntegrationTests : IClassFixture<WebApplicationFac
     {
         var bucketName = await CreateTestBucketAsync();
 
-        await _client.PostAsync($"/{bucketName}/upload1.bin?uploads", null);
-        await _client.PostAsync($"/{bucketName}/upload2.bin?uploads", null);
+        await Client.PostAsync($"/{bucketName}/upload1.bin?uploads", null);
+        await Client.PostAsync($"/{bucketName}/upload2.bin?uploads", null);
 
-        var response = await _client.GetAsync($"/{bucketName}?uploads");
+        var response = await Client.GetAsync($"/{bucketName}?uploads");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);

@@ -2,23 +2,14 @@ using System.Net;
 using System.Text;
 using System.Xml.Serialization;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.AspNetCore.Hosting;
 using Lamina.Models;
 
 namespace Lamina.Tests.Controllers;
 
-public class BucketsControllerIntegrationTests : IClassFixture<WebApplicationFactory<Program>>
+public class BucketsControllerIntegrationTests : IntegrationTestBase
 {
-    private readonly WebApplicationFactory<Program> _factory;
-    private readonly HttpClient _client;
-
-    public BucketsControllerIntegrationTests(WebApplicationFactory<Program> factory)
+    public BucketsControllerIntegrationTests(WebApplicationFactory<Program> factory) : base(factory)
     {
-        _factory = factory.WithWebHostBuilder(builder =>
-        {
-            builder.UseEnvironment("Test");
-        });
-        _client = _factory.CreateClient();
     }
 
     [Fact]
@@ -26,7 +17,7 @@ public class BucketsControllerIntegrationTests : IClassFixture<WebApplicationFac
     {
         var bucketName = $"test-bucket-{Guid.NewGuid()}";
 
-        var response = await _client.PutAsync($"/{bucketName}", null);
+        var response = await Client.PutAsync($"/{bucketName}", null);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("Location", response.Headers.Select(h => h.Key));
@@ -37,8 +28,8 @@ public class BucketsControllerIntegrationTests : IClassFixture<WebApplicationFac
     {
         var bucketName = $"duplicate-{Guid.NewGuid()}";
 
-        var response1 = await _client.PutAsync($"/{bucketName}", null);
-        var response2 = await _client.PutAsync($"/{bucketName}", null);
+        var response1 = await Client.PutAsync($"/{bucketName}", null);
+        var response2 = await Client.PutAsync($"/{bucketName}", null);
 
         Assert.Equal(HttpStatusCode.OK, response1.StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, response2.StatusCode);
@@ -52,9 +43,9 @@ public class BucketsControllerIntegrationTests : IClassFixture<WebApplicationFac
     public async Task ListObjects_ExistingBucket_Returns200()
     {
         var bucketName = $"get-test-{Guid.NewGuid()}";
-        await _client.PutAsync($"/{bucketName}", null);
+        await Client.PutAsync($"/{bucketName}", null);
 
-        var response = await _client.GetAsync($"/{bucketName}");
+        var response = await Client.GetAsync($"/{bucketName}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
@@ -67,7 +58,7 @@ public class BucketsControllerIntegrationTests : IClassFixture<WebApplicationFac
     [Fact]
     public async Task ListObjects_NonExistingBucket_Returns404()
     {
-        var response = await _client.GetAsync($"/non-existing-{Guid.NewGuid()}");
+        var response = await Client.GetAsync($"/non-existing-{Guid.NewGuid()}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
@@ -81,10 +72,10 @@ public class BucketsControllerIntegrationTests : IClassFixture<WebApplicationFac
     {
         var bucket1 = $"list-test-1-{Guid.NewGuid()}";
         var bucket2 = $"list-test-2-{Guid.NewGuid()}";
-        await _client.PutAsync($"/{bucket1}", null);
-        await _client.PutAsync($"/{bucket2}", null);
+        await Client.PutAsync($"/{bucket1}", null);
+        await Client.PutAsync($"/{bucket2}", null);
 
-        var response = await _client.GetAsync("/");
+        var response = await Client.GetAsync("/");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
@@ -108,20 +99,20 @@ public class BucketsControllerIntegrationTests : IClassFixture<WebApplicationFac
     public async Task DeleteBucket_ExistingBucket_Returns204()
     {
         var bucketName = $"delete-test-{Guid.NewGuid()}";
-        await _client.PutAsync($"/{bucketName}", null);
+        await Client.PutAsync($"/{bucketName}", null);
 
-        var response = await _client.DeleteAsync($"/{bucketName}");
+        var response = await Client.DeleteAsync($"/{bucketName}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
 
-        var getResponse = await _client.GetAsync($"/{bucketName}");
+        var getResponse = await Client.GetAsync($"/{bucketName}");
         Assert.Equal(HttpStatusCode.NotFound, getResponse.StatusCode);
     }
 
     [Fact]
     public async Task DeleteBucket_NonExistingBucket_Returns404()
     {
-        var response = await _client.DeleteAsync($"/non-existing-delete-{Guid.NewGuid()}");
+        var response = await Client.DeleteAsync($"/non-existing-delete-{Guid.NewGuid()}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
@@ -136,18 +127,18 @@ public class BucketsControllerIntegrationTests : IClassFixture<WebApplicationFac
         var bucketName = $"delete-with-files-{Guid.NewGuid()}";
 
         // Create bucket
-        await _client.PutAsync($"/{bucketName}", null);
+        await Client.PutAsync($"/{bucketName}", null);
 
         // Add one simple file to the bucket
-        var putResponse = await _client.PutAsync($"/{bucketName}/file1.txt", new StringContent("content1"));
+        var putResponse = await Client.PutAsync($"/{bucketName}/file1.txt", new StringContent("content1"));
         Assert.Equal(HttpStatusCode.OK, putResponse.StatusCode);
 
         // Delete bucket (should delete all files)
-        var deleteResponse = await _client.DeleteAsync($"/{bucketName}");
+        var deleteResponse = await Client.DeleteAsync($"/{bucketName}");
         Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
 
         // Verify bucket is gone
-        var bucketResponse = await _client.GetAsync($"/{bucketName}");
+        var bucketResponse = await Client.GetAsync($"/{bucketName}");
         Assert.Equal(HttpStatusCode.NotFound, bucketResponse.StatusCode);
     }
 
@@ -155,10 +146,10 @@ public class BucketsControllerIntegrationTests : IClassFixture<WebApplicationFac
     public async Task HeadBucket_ExistingBucket_Returns200()
     {
         var bucketName = $"head-test-{Guid.NewGuid()}";
-        await _client.PutAsync($"/{bucketName}", null);
+        await Client.PutAsync($"/{bucketName}", null);
 
         var request = new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}");
-        var response = await _client.SendAsync(request);
+        var response = await Client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -167,7 +158,7 @@ public class BucketsControllerIntegrationTests : IClassFixture<WebApplicationFac
     public async Task HeadBucket_NonExistingBucket_Returns404()
     {
         var request = new HttpRequestMessage(HttpMethod.Head, $"/non-existing-head-{Guid.NewGuid()}");
-        var response = await _client.SendAsync(request);
+        var response = await Client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
