@@ -49,7 +49,7 @@ metadataPersistentVolume:
   size: 10Gi
   existingClaim: ""
 
-sameVolumeForDataAndMeta: true
+sameVolumeForDataAndMeta: false
 
 securityContext:
   capabilities:
