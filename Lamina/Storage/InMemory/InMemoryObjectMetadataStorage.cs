@@ -65,67 +65,6 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
         return Task.FromResult(false);
     }
 
-    public async Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)
-    {
-        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
-        {
-            return new ListObjectsResponse
-            {
-                IsTruncated = false,
-                Contents = new List<S3ObjectInfo>()
-            };
-        }
-
-        if (!_metadata.TryGetValue(bucketName, out var bucketMetadata))
-        {
-            return new ListObjectsResponse
-            {
-                IsTruncated = false,
-                Contents = new List<S3ObjectInfo>()
-            };
-        }
-
-        var query = bucketMetadata.Values.AsEnumerable();
-
-        if (!string.IsNullOrEmpty(request?.Prefix))
-        {
-            query = query.Where(o => o.Key.StartsWith(request.Prefix));
-        }
-
-        // Use ContinuationToken instead of Marker
-        if (!string.IsNullOrEmpty(request?.ContinuationToken))
-        {
-            query = query.Where(o => string.Compare(o.Key, request.ContinuationToken, StringComparison.Ordinal) > 0);
-        }
-
-        var ordered = query.OrderBy(o => o.Key);
-        var maxKeys = request?.MaxKeys ?? 1000;
-        var objects = ordered.Take(maxKeys + 1).ToList();
-
-        var isTruncated = objects.Count > maxKeys;
-        if (isTruncated)
-        {
-            objects = objects.Take(maxKeys).ToList();
-        }
-
-        return new ListObjectsResponse
-        {
-            Prefix = request?.Prefix,
-            MaxKeys = maxKeys,
-            IsTruncated = isTruncated,
-            NextContinuationToken = isTruncated ? objects.Last().Key : null,
-            Contents = objects.Select(o => new S3ObjectInfo
-            {
-                Key = o.Key,
-                LastModified = o.LastModified,
-                ETag = o.ETag,
-                Size = o.Size,
-                ContentType = o.ContentType,
-                Metadata = o.Metadata
-            }).ToList()
-        };
-    }
-
     public Task<bool> MetadataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         return Task.FromResult(

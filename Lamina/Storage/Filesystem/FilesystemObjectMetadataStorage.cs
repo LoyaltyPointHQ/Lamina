@@ -167,122 +167,112 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         return result;
     }
 
-    public async Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)
+    private ListObjectsResponse CreateEmptyResponse()
     {
-        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
+        return new ListObjectsResponse
         {
-            return new ListObjectsResponse
-            {
-                IsTruncated = false,
-                Contents = new List<S3ObjectInfo>()
-            };
-        }
+            IsTruncated = false,
+            Contents = new List<S3ObjectInfo>()
+        };
+    }
 
-        var objects = new List<S3ObjectInfo>();
-
+    private List<string>? GetMetadataFilesForBucket(string bucketName)
+    {
         if (_metadataMode == MetadataStorageMode.SeparateDirectory)
         {
             var bucketMetadataDir = Path.Combine(_metadataDirectory!, bucketName);
             if (!Directory.Exists(bucketMetadataDir))
             {
-                return new ListObjectsResponse
-                {
-                    IsTruncated = false,
-                    Contents = new List<S3ObjectInfo>()
-                };
+                return null;
             }
-
-            var metadataFiles = Directory.GetFiles(bucketMetadataDir, "*.json", SearchOption.AllDirectories);
-            foreach (var metadataFile in metadataFiles)
-            {
-                try
-                {
-                    var relativePath = Path.GetRelativePath(bucketMetadataDir, metadataFile);
-                    var key = relativePath.Replace(".json", "").Replace(Path.DirectorySeparatorChar, '/');
-
-                    if (!string.IsNullOrEmpty(request?.Prefix) && !key.StartsWith(request.Prefix))
-                    {
-                        continue;
-                    }
-
-                    if (!string.IsNullOrEmpty(request?.ContinuationToken) && string.Compare(key, request.ContinuationToken, StringComparison.Ordinal) <= 0)
-                    {
-                        continue;
-                    }
-
-                    var metadata = await GetMetadataAsync(bucketName, key, cancellationToken);
-                    if (metadata != null)
-                    {
-                        objects.Add(metadata);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to read metadata for file: {MetadataFile}", metadataFile);
-                }
-            }
+            return Directory.GetFiles(bucketMetadataDir, "*.json", SearchOption.AllDirectories).ToList();
         }
         else
         {
-            // Inline mode: scan for metadata files in .lamina-meta directories
             var bucketDataDir = Path.Combine(_dataDirectory, bucketName);
             if (!Directory.Exists(bucketDataDir))
             {
-                return new ListObjectsResponse
-                {
-                    IsTruncated = false,
-                    Contents = new List<S3ObjectInfo>()
-                };
+                return null;
             }
-
-            var metadataFiles = Directory.GetFiles(bucketDataDir, "*.json", SearchOption.AllDirectories)
+            return Directory.GetFiles(bucketDataDir, "*.json", SearchOption.AllDirectories)
                 .Where(f => f.Contains(Path.DirectorySeparatorChar + _inlineMetadataDirectoryName + Path.DirectorySeparatorChar))
                 .ToList();
+        }
+    }
 
-            foreach (var metadataFile in metadataFiles)
+    private async Task ProcessMetadataFilesAsync(string bucketName, List<string> metadataFiles, List<S3ObjectInfo> objects, ListObjectsRequest? request, CancellationToken cancellationToken)
+    {
+        foreach (var metadataFile in metadataFiles)
+        {
+            try
             {
-                try
+                var key = ExtractKeyFromMetadataFile(bucketName, metadataFile);
+                
+                if (key == null || !ShouldIncludeObject(key, request))
                 {
-                    // Extract the key from the metadata file path
-                    // Example: /data/bucket/path/to/.lamina-meta/object.zip.json
-                    var metadataDir = Path.GetDirectoryName(metadataFile)!;
-                    var metaDirName = Path.GetFileName(metadataDir);
-
-                    if (metaDirName != _inlineMetadataDirectoryName)
-                    {
-                        continue;
-                    }
-
-                    var parentDir = Path.GetDirectoryName(metadataDir)!;
-                    var fileName = Path.GetFileName(metadataFile).Replace(".json", "");
-                    var relativePath = Path.GetRelativePath(bucketDataDir, parentDir);
-                    var key = relativePath == "."
-                        ? fileName
-                        : Path.Combine(relativePath, fileName).Replace(Path.DirectorySeparatorChar, '/');
-
-                    if (!string.IsNullOrEmpty(request?.Prefix) && !key.StartsWith(request.Prefix))
-                    {
-                        continue;
-                    }
-
-                    if (!string.IsNullOrEmpty(request?.ContinuationToken) && string.Compare(key, request.ContinuationToken, StringComparison.Ordinal) <= 0)
-                    {
-                        continue;
-                    }
-
-                    var metadata = await GetMetadataAsync(bucketName, key, cancellationToken);
-                    if (metadata != null)
-                    {
-                        objects.Add(metadata);
-                    }
+                    continue;
                 }
-                catch (Exception ex)
+
+                var metadata = await GetMetadataAsync(bucketName, key, cancellationToken);
+                if (metadata != null)
                 {
-                    _logger.LogWarning(ex, "Failed to read metadata for file: {MetadataFile}", metadataFile);
+                    objects.Add(metadata);
                 }
             }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to read metadata for file: {MetadataFile}", metadataFile);
+            }
+        }
+    }
+
+    private string? ExtractKeyFromMetadataFile(string bucketName, string metadataFile)
+    {
+        if (_metadataMode == MetadataStorageMode.SeparateDirectory)
+        {
+            var bucketMetadataDir = Path.Combine(_metadataDirectory!, bucketName);
+            var relativePath = Path.GetRelativePath(bucketMetadataDir, metadataFile);
+            return relativePath.Replace(".json", "").Replace(Path.DirectorySeparatorChar, '/');
+        }
+        else
+        {
+            // Extract the key from the metadata file path for inline mode
+            var metadataDir = Path.GetDirectoryName(metadataFile)!;
+            var metaDirName = Path.GetFileName(metadataDir);
+
+            if (metaDirName != _inlineMetadataDirectoryName)
+            {
+                return null;
+            }
+
+            var bucketDataDir = Path.Combine(_dataDirectory, bucketName);
+            var parentDir = Path.GetDirectoryName(metadataDir)!;
+            var fileName = Path.GetFileName(metadataFile).Replace(".json", "");
+            var relativePath = Path.GetRelativePath(bucketDataDir, parentDir);
+            
+            return relativePath == "."
+                ? fileName
+                : Path.Combine(relativePath, fileName).Replace(Path.DirectorySeparatorChar, '/');
+        }
+    }
+
+    private static bool ShouldIncludeObject(string key, ListObjectsRequest? request)
+    {
+        if (!string.IsNullOrEmpty(request?.Prefix) && !key.StartsWith(request.Prefix))
+        {
+            return false;
         }
 
+        if (!string.IsNullOrEmpty(request?.ContinuationToken) && string.Compare(key, request.ContinuationToken, StringComparison.Ordinal) <= 0)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static ListObjectsResponse CreateListObjectsResponse(List<S3ObjectInfo> objects, ListObjectsRequest? request)
+    {
         var ordered = objects.OrderBy(o => o.Key).ToList();
         var maxKeys = request?.MaxKeys ?? 1000;
         var objectsToReturn = ordered.Take(maxKeys + 1).ToList();

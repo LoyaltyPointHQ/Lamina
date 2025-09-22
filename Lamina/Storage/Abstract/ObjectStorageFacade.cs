@@ -87,42 +87,35 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
     public async Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)
     {
-        // Get objects from metadata storage
-        var metadataResponse = await _metadataStorage.ListObjectsAsync(bucketName, request, cancellationToken);
-
         // Get data keys to find objects without metadata
         var dataKeys = await _dataStorage.ListDataKeysAsync(bucketName, request?.Prefix, cancellationToken);
-        var metadataKeys = new HashSet<string>(metadataResponse.Contents.Select(o => o.Key));
-
-        // Find objects that exist in data but not in metadata
-        var missingMetadataKeys = dataKeys.Where(k => !metadataKeys.Contains(k));
-
-        foreach (var key in missingMetadataKeys)
+        var response = new ListObjectsResponse
         {
-            var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-            if (dataInfo != null)
-            {
-                _logger.LogInformation("Found orphaned data without metadata for key {Key} in bucket {BucketName}", key, bucketName);
+            Prefix = request?.Prefix,
+            MaxKeys = request?.MaxKeys ?? 1000,
+            IsTruncated = false,
+            NextContinuationToken = null
+        };
 
-                var generatedMetadata = await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
-                if (generatedMetadata != null)
+        foreach (var key in dataKeys)
+        {
+            var meta = await _metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
+            if (meta == null)
+            {
+                var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+                if (dataInfo != null)
                 {
-                    metadataResponse.Contents.Add(generatedMetadata);
+                    _logger.LogInformation("Found orphaned data without metadata for key {Key} in bucket {BucketName}", key, bucketName);
+
+                    meta = await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
+                    
                 }
             }
+            if (meta != null)
+                response.Contents.Add(meta);
         }
 
-        // Re-sort and apply any necessary filtering
-        metadataResponse.Contents = metadataResponse.Contents.OrderBy(o => o.Key).ToList();
-
-        // Apply max keys limit if specified
-        if (request?.MaxKeys != null && metadataResponse.Contents.Count > request.MaxKeys)
-        {
-            metadataResponse.Contents = metadataResponse.Contents.Take(request.MaxKeys).ToList();
-            metadataResponse.IsTruncated = true;
-        }
-
-        return metadataResponse;
+        return response;
     }
 
     public async Task<bool> ObjectExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)

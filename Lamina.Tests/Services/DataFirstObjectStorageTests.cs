@@ -111,27 +111,24 @@ public class DataFirstObjectStorageTests
         var testData = Encoding.UTF8.GetBytes("Test content");
         var expectedEtag = ETagHelper.ComputeETag(testData);
 
-        // Metadata storage returns one object
-        var metadataResponse = new ListObjectsResponse
-        {
-            Contents = new List<S3ObjectInfo>
-            {
-                new S3ObjectInfo
-                {
-                    Key = "file-with-metadata.txt",
-                    Size = 100,
-                    LastModified = DateTime.UtcNow,
-                    ETag = "etag1",
-                    ContentType = "text/plain"
-                }
-            }
-        };
-        _metadataStorageMock.Setup(x => x.ListObjectsAsync(bucketName, null, default))
-            .ReturnsAsync(metadataResponse);
-
         // Data storage returns additional keys (one with metadata, one without)
         _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, null, default))
             .ReturnsAsync(new[] { "file-with-metadata.txt", "file-without-metadata.txt" });
+
+        // Setup metadata for first file (with metadata)
+        _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "file-with-metadata.txt", default))
+            .ReturnsAsync(new S3ObjectInfo
+            {
+                Key = "file-with-metadata.txt",
+                Size = 100,
+                LastModified = DateTime.UtcNow,
+                ETag = "etag1",
+                ContentType = "text/plain"
+            });
+
+        // Setup metadata for second file (without metadata - returns null)
+        _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "file-without-metadata.txt", default))
+            .ReturnsAsync((S3ObjectInfo?)null);
 
         // Setup info for file without metadata
         _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, "file-without-metadata.txt", default))
