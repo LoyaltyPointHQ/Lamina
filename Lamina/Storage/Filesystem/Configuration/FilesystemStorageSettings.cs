@@ -11,8 +11,6 @@ public class FilesystemStorageSettings
     public NetworkFileSystemMode NetworkMode { get; set; } = NetworkFileSystemMode.None;
     public int RetryCount { get; set; } = 3;
     public int RetryDelayMs { get; set; } = 100;
-    public int DirectoryCleanupDelayMs { get; set; } = 500;
-    public bool DisableMetadataCaching { get; set; } = false;
 }
 
 public enum MetadataStorageMode

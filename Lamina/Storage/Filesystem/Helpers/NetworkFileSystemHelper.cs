@@ -9,7 +9,6 @@ public class NetworkFileSystemHelper
     private readonly NetworkFileSystemMode _mode;
     private readonly int _retryCount;
     private readonly int _retryDelayMs;
-    private readonly int _directoryCleanupDelayMs;
     private readonly ILogger<NetworkFileSystemHelper> _logger;
 
     public NetworkFileSystemHelper(
@@ -20,7 +19,6 @@ public class NetworkFileSystemHelper
         _mode = settings.NetworkMode;
         _retryCount = settings.RetryCount;
         _retryDelayMs = settings.RetryDelayMs;
-        _directoryCleanupDelayMs = settings.DirectoryCleanupDelayMs;
         _logger = logger;
     }
 
