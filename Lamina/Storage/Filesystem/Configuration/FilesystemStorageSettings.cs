@@ -2,8 +2,8 @@ namespace Lamina.Storage.Filesystem.Configuration;
 
 public class FilesystemStorageSettings
 {
-    public string DataDirectory { get; set; } = "/tmp/lamina";
-    public string? MetadataDirectory { get; set; }
+    public string DataDirectory { get; set; } = "/data";
+    public string? MetadataDirectory { get; set; } = "/metadata";
     public MetadataStorageMode MetadataMode { get; set; } = MetadataStorageMode.Inline;
     public string InlineMetadataDirectoryName { get; set; } = ".lamina-meta";
 
