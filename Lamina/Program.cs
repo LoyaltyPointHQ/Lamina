@@ -1,3 +1,4 @@
+using Lamina.Configuration;
 using Lamina.Middleware;
 using Lamina.Models;
 using Lamina.Services;
@@ -42,8 +43,15 @@ builder.Services.AddHealthChecks();
 builder.Services.Configure<AuthenticationSettings>(
     builder.Configuration.GetSection("Authentication"));
 
+// Configure auto bucket creation
+builder.Services.Configure<AutoBucketCreationSettings>(
+    builder.Configuration.GetSection("AutoBucketCreation"));
+
 // Register authentication service
 builder.Services.AddSingleton<IAuthenticationService, AuthenticationService>();
+
+// Register auto bucket creation service
+builder.Services.AddSingleton<IAutoBucketCreationService, AutoBucketCreationService>();
 
 // Register FileSystemLockManager for thread-safe file operations
 builder.Services.AddSingleton<IFileSystemLockManager, InMemoryLockManager>();
@@ -102,6 +110,13 @@ if (cleanupEnabled)
 }
 
 var app = builder.Build();
+
+// Create configured buckets on startup
+using (var scope = app.Services.CreateScope())
+{
+    var autoBucketService = scope.ServiceProvider.GetRequiredService<IAutoBucketCreationService>();
+    await autoBucketService.CreateConfiguredBucketsAsync();
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
