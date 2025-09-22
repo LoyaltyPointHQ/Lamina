@@ -176,7 +176,7 @@ namespace Lamina.Services
 
                 if (isValid)
                 {
-                    _previousSignature = chunkSignature;
+                    _previousSignature = expectedSignature;  // Use our calculated signature, not the client's
                     _chunkIndex++;
                 }
                 else
@@ -203,7 +203,7 @@ namespace Lamina.Services
 
                 if (isValid)
                 {
-                    _previousSignature = chunkSignature;
+                    _previousSignature = expectedSignature;  // Use our calculated signature, not the client's
                     _chunkIndex++;
                 }
                 else

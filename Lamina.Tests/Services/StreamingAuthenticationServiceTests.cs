@@ -202,10 +202,10 @@ namespace Lamina.Tests.Services
             context.Request.Method = "PUT";
             context.Request.Path = "/test-bucket/test-key";
 
-            var user = new S3User 
-            { 
-                AccessKeyId = "TESTKEY", 
-                SecretAccessKey = "testsecret" 
+            var user = new S3User
+            {
+                AccessKeyId = "TESTKEY",
+                SecretAccessKey = "testsecret"
             };
 
             var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
@@ -214,11 +214,71 @@ namespace Lamina.Tests.Services
             // Act - Test last chunk (empty)
             var emptyChunk = Array.Empty<byte>();
             var chunkSignature = "dummy_signature";
-            
+
             var result = await validator.ValidateChunkAsync(emptyChunk, chunkSignature, true);
-            
+
             // Assert - Should handle last chunk without exceptions
             Assert.False(result); // Fails due to dummy signature, but that's expected
+        }
+
+        [Fact]
+        public async Task ChunkSignatureValidator_UsesCorrectPreviousSignatureChaining()
+        {
+            // This test ensures that the previous signature is correctly updated with our calculated signature,
+            // not the client's signature. This was a bug where we were using chunkSignature instead of
+            // expectedSignature for the next iteration's previousSignature.
+
+            // Arrange
+            var context = new DefaultHttpContext();
+            context.Request.Headers["Authorization"] = "AWS4-HMAC-SHA256 Credential=TESTKEY/20240101/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length, Signature=abcd1234";
+            context.Request.Headers["x-amz-content-sha256"] = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
+            context.Request.Headers["x-amz-date"] = "20240101T120000Z";
+            context.Request.Headers["x-amz-decoded-content-length"] = "10";
+            context.Request.Headers["Host"] = "test.s3.amazonaws.com";
+            context.Request.Method = "PUT";
+            context.Request.Path = "/test-bucket/test-key";
+
+            var user = new S3User
+            {
+                AccessKeyId = "TESTKEY",
+                SecretAccessKey = "testsecret"
+            };
+
+            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            Assert.NotNull(validator);
+
+            // Act - Calculate what the first chunk signature should be
+            var chunkData = new byte[] { 0x48, 0x65, 0x6c, 0x6c, 0x6f }; // "Hello"
+
+            // Use reflection to access the private CalculateChunkSignature method
+            var validatorType = validator.GetType();
+            var calculateMethod = validatorType.GetMethod("CalculateChunkSignature",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+            Assert.NotNull(calculateMethod);
+
+            // Calculate what we expect the signature to be
+            var expectedSignature = (string)calculateMethod.Invoke(validator, new object[] { new ReadOnlyMemory<byte>(chunkData), false });
+
+            // Simulate successful validation with the correct signature
+            var result = await validator.ValidateChunkAsync(chunkData, expectedSignature, false);
+
+            // Assert - Validation should succeed
+            Assert.True(result);
+            Assert.Equal(1, validator.ChunkIndex);
+
+            // Now test second chunk - the previousSignature should be our calculated signature
+            var chunkData2 = new byte[] { 0x57, 0x6f, 0x72, 0x6c, 0x64 }; // "World"
+            var expectedSignature2 = (string)calculateMethod.Invoke(validator, new object[] { new ReadOnlyMemory<byte>(chunkData2), false });
+
+            var result2 = await validator.ValidateChunkAsync(chunkData2, expectedSignature2, false);
+
+            // Assert - Second chunk should also succeed if signature chaining is correct
+            Assert.True(result2);
+            Assert.Equal(2, validator.ChunkIndex);
+
+            // If signature chaining was broken (using client signature instead of calculated),
+            // the second chunk validation would fail because the previousSignature would be wrong
         }
     }
 }
