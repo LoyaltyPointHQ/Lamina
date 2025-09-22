@@ -20,6 +20,13 @@ namespace Lamina.Middleware
 
         public async Task InvokeAsync(HttpContext context)
         {
+            // Skip authentication for health endpoint
+            if (context.Request.Path.StartsWithSegments("/health"))
+            {
+                await _next(context);
+                return;
+            }
+
             if (!_authService.IsAuthenticationEnabled())
             {
                 await _next(context);
