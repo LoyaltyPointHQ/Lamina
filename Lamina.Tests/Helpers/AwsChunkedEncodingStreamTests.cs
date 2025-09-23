@@ -3,7 +3,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
-using Lamina.Helpers;
+using Lamina.Streaming.Chunked;
 using Lamina.Streaming.Validation;
 
 namespace Lamina.Tests.Helpers
@@ -12,6 +12,7 @@ namespace Lamina.Tests.Helpers
     {
         private readonly Mock<ILogger> _loggerMock;
         private readonly Mock<IChunkSignatureValidator> _chunkValidatorMock;
+        private readonly IChunkedDataParser _chunkedDataParser;
 
         public AwsChunkedEncodingStreamTests()
         {
@@ -30,6 +31,8 @@ namespace Lamina.Tests.Helpers
                 {
                     Console.WriteLine($"[DEBUG] {formatter.DynamicInvoke(state, exception)}");
                 });
+
+            _chunkedDataParser = new ChunkedDataParser(_loggerMock.Object);
         }
 
         [Fact]
@@ -47,8 +50,8 @@ namespace Lamina.Tests.Helpers
                 .ReturnsAsync(true);
 
             // Act
-            var totalBytes = await AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(
-                pipeReader, destinationStream, _chunkValidatorMock.Object, _loggerMock.Object);
+            var totalBytes = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
+                pipeReader, destinationStream, _chunkValidatorMock.Object);
 
             // Assert
             Assert.Equal(11, totalBytes); // "Hello World"
@@ -67,8 +70,8 @@ namespace Lamina.Tests.Helpers
             var destinationStream = new MemoryStream();
 
             // Act
-            var totalBytes = await AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(
-                pipeReader, destinationStream, null, _loggerMock.Object);
+            var totalBytes = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
+                pipeReader, destinationStream, null);
 
             // Assert
             Assert.Equal(0, totalBytes);
@@ -93,8 +96,8 @@ namespace Lamina.Tests.Helpers
                 .ReturnsAsync(true);
 
             // Act
-            var totalBytes = await AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(
-                pipeReader, destinationStream, _chunkValidatorMock.Object, _loggerMock.Object);
+            var totalBytes = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
+                pipeReader, destinationStream, _chunkValidatorMock.Object);
 
             // Assert
             Assert.Equal(34, totalBytes); // 21 + 13 bytes
@@ -115,8 +118,8 @@ namespace Lamina.Tests.Helpers
 
             // Act & Assert
             await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-                await AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(
-                    pipeReader, destinationStream, null, _loggerMock.Object));
+                await _chunkedDataParser.ParseChunkedDataToStreamAsync(
+                    pipeReader, destinationStream, null));
         }
 
         [Fact]
@@ -134,8 +137,8 @@ namespace Lamina.Tests.Helpers
 
             // Act & Assert
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-                await AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(
-                    pipeReader, destinationStream, _chunkValidatorMock.Object, _loggerMock.Object));
+                await _chunkedDataParser.ParseChunkedDataToStreamAsync(
+                    pipeReader, destinationStream, _chunkValidatorMock.Object));
 
             Assert.Contains("Invalid chunk signature at chunk 1", exception.Message);
         }

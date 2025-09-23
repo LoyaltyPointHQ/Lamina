@@ -1,6 +1,7 @@
 using System.IO.Pipelines;
 using Microsoft.Extensions.Logging;
 using Lamina.Models;
+using Lamina.Streaming.Chunked;
 using Lamina.Streaming.Validation;
 
 namespace Lamina.Storage.Abstract;
@@ -12,19 +13,22 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
     private readonly IObjectDataStorage _objectDataStorage;
     private readonly IObjectMetadataStorage _objectMetadataStorage;
     private readonly ILogger<MultipartUploadStorageFacade> _logger;
+    private readonly IChunkedDataParser _chunkedDataParser;
 
     public MultipartUploadStorageFacade(
         IMultipartUploadDataStorage dataStorage,
         IMultipartUploadMetadataStorage metadataStorage,
         IObjectDataStorage objectDataStorage,
         IObjectMetadataStorage objectMetadataStorage,
-        ILogger<MultipartUploadStorageFacade> logger)
+        ILogger<MultipartUploadStorageFacade> logger,
+        IChunkedDataParser chunkedDataParser)
     {
         _dataStorage = dataStorage;
         _metadataStorage = metadataStorage;
         _objectDataStorage = objectDataStorage;
         _objectMetadataStorage = objectMetadataStorage;
         _logger = logger;
+        _chunkedDataParser = chunkedDataParser;
     }
 
     public async Task<MultipartUpload> InitiateMultipartUploadAsync(string bucketName, string key, InitiateMultipartUploadRequest request, CancellationToken cancellationToken = default)
@@ -62,7 +66,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         using var tempStream = new MemoryStream();
         try
         {
-            await Helpers.AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(dataReader, tempStream, chunkValidator, _logger, cancellationToken);
+            await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, tempStream, chunkValidator, cancellationToken);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("Invalid") && ex.Message.Contains("signature"))
         {

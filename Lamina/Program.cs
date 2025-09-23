@@ -3,6 +3,7 @@ using Lamina.Middleware;
 using Lamina.Models;
 using Lamina.Services;
 using Lamina.Streaming;
+using Lamina.Streaming.Chunked;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem;
 using Lamina.Storage.Filesystem.Configuration;
@@ -51,6 +52,9 @@ builder.Services.Configure<AutoBucketCreationSettings>(
 // Register authentication service
 builder.Services.AddSingleton<IAuthenticationService, AuthenticationService>();
 builder.Services.AddSingleton<IStreamingAuthenticationService, StreamingAuthenticationService>();
+
+// Register chunked data parser for streaming support
+builder.Services.AddSingleton<IChunkedDataParser, ChunkedDataParser>();
 
 // Register auto bucket creation service
 builder.Services.AddSingleton<IAutoBucketCreationService, AutoBucketCreationService>();

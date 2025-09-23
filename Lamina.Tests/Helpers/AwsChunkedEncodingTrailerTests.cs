@@ -3,8 +3,8 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
-using Lamina.Helpers;
 using Lamina.Models;
+using Lamina.Streaming.Chunked;
 using Lamina.Streaming.Validation;
 
 namespace Lamina.Tests.Helpers
@@ -13,11 +13,13 @@ namespace Lamina.Tests.Helpers
     {
         private readonly Mock<ILogger> _loggerMock;
         private readonly Mock<IChunkSignatureValidator> _chunkValidatorMock;
+        private readonly IChunkedDataParser _chunkedDataParser;
 
         public AwsChunkedEncodingTrailerTests()
         {
             _loggerMock = new Mock<ILogger>();
             _chunkValidatorMock = new Mock<IChunkSignatureValidator>();
+            _chunkedDataParser = new ChunkedDataParser(_loggerMock.Object);
         }
 
         [Fact]
@@ -50,8 +52,8 @@ namespace Lamina.Tests.Helpers
                 .ReturnsAsync(expectedTrailerResult);
 
             // Act
-            var result = await AwsChunkedEncodingHelper.ParseChunkedDataWithTrailersToStreamAsync(
-                pipeReader, destinationStream, _chunkValidatorMock.Object, _loggerMock.Object);
+            var result = await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(
+                pipeReader, destinationStream, _chunkValidatorMock.Object);
 
             // Assert
             Assert.Equal(11, result.TotalBytesWritten); // "Hello World"
@@ -94,8 +96,8 @@ namespace Lamina.Tests.Helpers
                 .ReturnsAsync(invalidTrailerResult);
 
             // Act
-            var result = await AwsChunkedEncodingHelper.ParseChunkedDataWithTrailersToStreamAsync(
-                pipeReader, destinationStream, _chunkValidatorMock.Object, _loggerMock.Object);
+            var result = await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(
+                pipeReader, destinationStream, _chunkValidatorMock.Object);
 
             // Assert
             Assert.Equal(11, result.TotalBytesWritten); // Data still written
@@ -120,8 +122,8 @@ namespace Lamina.Tests.Helpers
                 .ReturnsAsync(true);
 
             // Act
-            var result = await AwsChunkedEncodingHelper.ParseChunkedDataWithTrailersToStreamAsync(
-                pipeReader, destinationStream, _chunkValidatorMock.Object, _loggerMock.Object);
+            var result = await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(
+                pipeReader, destinationStream, _chunkValidatorMock.Object);
 
             // Assert
             Assert.Equal(11, result.TotalBytesWritten); // "Hello World"
@@ -166,8 +168,8 @@ namespace Lamina.Tests.Helpers
                 .ReturnsAsync(expectedTrailerResult);
 
             // Act
-            var result = await AwsChunkedEncodingHelper.ParseChunkedDataWithTrailersToStreamAsync(
-                pipeReader, destinationStream, _chunkValidatorMock.Object, _loggerMock.Object);
+            var result = await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(
+                pipeReader, destinationStream, _chunkValidatorMock.Object);
 
             // Assert
             Assert.Equal(5, result.TotalBytesWritten); // "Hello"
@@ -194,8 +196,8 @@ namespace Lamina.Tests.Helpers
 
             // Act & Assert
             await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-                await AwsChunkedEncodingHelper.ParseChunkedDataWithTrailersToStreamAsync(
-                    pipeReader, destinationStream, _chunkValidatorMock.Object, _loggerMock.Object));
+                await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(
+                    pipeReader, destinationStream, _chunkValidatorMock.Object));
         }
 
         [Fact]
@@ -206,8 +208,8 @@ namespace Lamina.Tests.Helpers
             var destinationStream = new MemoryStream();
 
             // Act
-            var result = await AwsChunkedEncodingHelper.ParseChunkedDataWithTrailersToStreamAsync(
-                pipeReader, destinationStream, null, _loggerMock.Object);
+            var result = await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(
+                pipeReader, destinationStream, null);
 
             // Assert
             Assert.Equal(0, result.TotalBytesWritten);

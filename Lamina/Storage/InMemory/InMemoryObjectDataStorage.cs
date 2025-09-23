@@ -2,20 +2,20 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using Lamina.Helpers;
+using Lamina.Streaming.Chunked;
 using Lamina.Streaming.Validation;
 using Lamina.Storage.Abstract;
-using Microsoft.Extensions.Logging;
 
 namespace Lamina.Storage.InMemory;
 
 public class InMemoryObjectDataStorage : IObjectDataStorage
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte[]>> _data = new();
-    private readonly ILogger<InMemoryObjectDataStorage> _logger;
+    private readonly IChunkedDataParser _chunkedDataParser;
 
-    public InMemoryObjectDataStorage(ILogger<InMemoryObjectDataStorage> logger)
+    public InMemoryObjectDataStorage(IChunkedDataParser chunkedDataParser)
     {
-        _logger = logger;
+        _chunkedDataParser = chunkedDataParser;
     }
 
     public async Task<(long size, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, CancellationToken cancellationToken = default)
@@ -82,7 +82,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
 
         try
         {
-            await foreach (var chunk in AwsChunkedEncodingHelper.ParseChunkedDataAsync(dataReader, chunkValidator, _logger, cancellationToken))
+            await foreach (var chunk in _chunkedDataParser.ParseChunkedDataAsync(dataReader, chunkValidator, cancellationToken))
             {
                 var chunkArray = chunk.ToArray();
                 decodedData.Add(chunkArray);

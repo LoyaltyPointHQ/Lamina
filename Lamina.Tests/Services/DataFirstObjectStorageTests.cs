@@ -5,6 +5,7 @@ using Moq;
 using Lamina.Models;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.InMemory;
+using Lamina.Streaming.Chunked;
 using Lamina.Helpers;
 
 namespace Lamina.Tests.Services;
@@ -235,8 +236,8 @@ public class DataFirstObjectStorageTests
     public async Task InMemoryDataStorage_ImplementsNewMethods()
     {
         // Test that InMemoryObjectDataStorage properly implements the new interface methods
-        var loggerMock = new Mock<ILogger<InMemoryObjectDataStorage>>();
-        var storage = new InMemoryObjectDataStorage(loggerMock.Object);
+        var mockChunkedDataParser = new Mock<IChunkedDataParser>();
+        var storage = new InMemoryObjectDataStorage(mockChunkedDataParser.Object);
         var bucketName = "test-bucket";
         var key = "test-key";
         var testData = Encoding.UTF8.GetBytes("Test content");

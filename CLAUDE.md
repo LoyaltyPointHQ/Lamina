@@ -123,7 +123,7 @@ docker run -p 8080:8080 lamina
     - `ChunkConstants.cs`: Constants for AWS chunked encoding
     - `ChunkHeader.cs`: Models chunk header information
     - `ChunkBuffer.cs`: Manages chunk data buffering
-    - `IChunkedDataParser` / `ChunkedDataParser`: Parses AWS chunked encoding format
+    - `IChunkedDataParser` / `ChunkedDataParser`: Parses AWS chunked encoding format (registered as DI service)
 
   - **Signature Validation** (`Lamina/Streaming/Validation/`):
     - `IChunkSignatureValidator` / `ChunkSignatureValidator`: Validates chunk signatures
@@ -141,7 +141,6 @@ docker run -p 8080:8080 lamina
 ### Helpers
 - **Lamina/Helpers/**:
   - `ETagHelper.cs`: Centralized ETag computation using MD5 (supports byte arrays, files, and streams)
-  - `AwsChunkedEncodingHelper.cs`: Facade for AWS chunked encoding operations (delegates to Streaming components)
 
 ### Tests
 - **Lamina.Tests/**:

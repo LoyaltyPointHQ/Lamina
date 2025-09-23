@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using Lamina.Helpers;
+using Lamina.Streaming.Chunked;
 using Lamina.Streaming.Validation;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem.Configuration;
@@ -16,11 +17,13 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
     private readonly string _tempFilePrefix;
     private readonly NetworkFileSystemHelper _networkHelper;
     private readonly ILogger<FilesystemObjectDataStorage> _logger;
+    private readonly IChunkedDataParser _chunkedDataParser;
 
     public FilesystemObjectDataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
         NetworkFileSystemHelper networkHelper,
-        ILogger<FilesystemObjectDataStorage> logger)
+        ILogger<FilesystemObjectDataStorage> logger,
+        IChunkedDataParser chunkedDataParser)
     {
         var settings = settingsOptions.Value;
         _dataDirectory = settings.DataDirectory;
@@ -29,6 +32,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         _tempFilePrefix = settings.TempFilePrefix;
         _networkHelper = networkHelper;
         _logger = logger;
+        _chunkedDataParser = chunkedDataParser;
 
         Directory.CreateDirectory(_dataDirectory);
     }
@@ -140,7 +144,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                 // Parse AWS chunked encoding and write decoded data directly to file with signature validation
                 try
                 {
-                    bytesWritten = await AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, _logger, cancellationToken);
+                    bytesWritten = await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, cancellationToken);
                 }
                 catch (InvalidOperationException ex) when (ex.Message.Contains("Invalid") && ex.Message.Contains("signature"))
                 {
