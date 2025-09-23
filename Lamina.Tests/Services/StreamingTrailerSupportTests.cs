@@ -28,6 +28,7 @@ namespace Lamina.Tests.Services
             // Arrange
             var dateTime = new DateTime(2024, 1, 1, 12, 0, 0, DateTimeKind.Utc);
             var context = new DefaultHttpContext();
+            context.Request.Headers["Host"] = "test.s3.amazonaws.com";
             context.Request.Headers["x-amz-content-sha256"] = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER";
             context.Request.Headers["x-amz-date"] = "20240101T120000Z";
             context.Request.Headers["x-amz-decoded-content-length"] = "1024";
@@ -83,6 +84,7 @@ namespace Lamina.Tests.Services
             // Arrange
             var dateTime = new DateTime(2024, 1, 1, 12, 0, 0, DateTimeKind.Utc);
             var context = new DefaultHttpContext();
+            context.Request.Headers["Host"] = "test.s3.amazonaws.com";
             context.Request.Headers["x-amz-content-sha256"] = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER";
             context.Request.Headers["x-amz-date"] = "20240101T120000Z";
             context.Request.Headers["x-amz-decoded-content-length"] = "1024";
@@ -134,6 +136,7 @@ namespace Lamina.Tests.Services
             // Arrange
             var dateTime = new DateTime(2024, 1, 1, 12, 0, 0, DateTimeKind.Utc);
             var context = new DefaultHttpContext();
+            context.Request.Headers["Host"] = "test.s3.amazonaws.com";
             context.Request.Headers["x-amz-content-sha256"] = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
             context.Request.Headers["x-amz-date"] = "20240101T120000Z";
             context.Request.Headers["x-amz-decoded-content-length"] = "1024";

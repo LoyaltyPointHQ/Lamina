@@ -186,6 +186,7 @@ namespace Lamina.Tests.Helpers
             var destinationStream = new MemoryStream();
 
             _chunkValidatorMock.Setup(v => v.ExpectsTrailers).Returns(true);
+            _chunkValidatorMock.SetupGet(v => v.ChunkIndex).Returns(1);
 
             // First chunk fails validation
             _chunkValidatorMock.Setup(v => v.ValidateChunkStreamAsync(It.IsAny<Stream>(), It.IsAny<long>(), It.IsAny<string>(), false))

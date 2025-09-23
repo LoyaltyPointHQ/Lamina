@@ -252,6 +252,11 @@ namespace Lamina.Helpers
 
                 return result;
             }
+            catch (InvalidOperationException)
+            {
+                // Re-throw validation/parsing errors - these are security/integrity issues
+                throw;
+            }
             catch (Exception ex)
             {
                 logger?.LogError(ex, "Error parsing chunked data with trailers");
@@ -514,6 +519,10 @@ namespace Lamina.Helpers
                             var headerLine = System.Text.Encoding.ASCII.GetString(dataBuffer, position, headerEnd - position);
                             position = headerEnd + 2; // Skip \r\n
 
+                            // Debug logging
+                            logger?.LogDebug("Parsing chunk header at position {Position}, headerEnd {HeaderEnd}, headerLine: '{HeaderLine}'",
+                                position - headerEnd - 2, headerEnd, headerLine);
+
                             // Parse chunk size and signature
                             var parts = headerLine.Split(';');
                             if (parts.Length < 2 || !parts[1].StartsWith("chunk-signature="))
@@ -554,13 +563,23 @@ namespace Lamina.Helpers
                             // Check if we have enough data for the chunk
                             if (position + chunkSize + 2 > dataLength) // +2 for trailing \r\n
                             {
-                                // Not enough data, save everything from header start
-                                var headerStartPos = position - headerEnd - 2 - headerLine.Length;
+                                // Not enough data, save everything from the start of the current header
+                                // We need to recalculate the header start position correctly:
+                                // - headerEnd points to the position of the '\r' in '\r\n'
+                                // - headerLine.Length is the length of the header text (without \r\n)
+                                // - So header start is: headerEnd - headerLine.Length
+                                var headerStartPos = headerEnd - headerLine.Length;
+
+                                logger?.LogDebug("Not enough data for chunk {ChunkSize}, saving from headerStartPos {HeaderStartPos} (headerEnd: {HeaderEnd}, headerLine.Length: {HeaderLength})",
+                                    chunkSize, headerStartPos, headerEnd, headerLine.Length);
+
                                 if (headerStartPos >= 0 && headerStartPos < dataLength)
                                 {
                                     var remainingLength = dataLength - headerStartPos;
                                     remainingBuffer = new byte[remainingLength];
                                     Array.Copy(dataBuffer, headerStartPos, remainingBuffer, 0, remainingLength);
+
+                                    logger?.LogDebug("Saved {RemainingLength} bytes to remaining buffer", remainingLength);
                                 }
                                 break;
                             }
