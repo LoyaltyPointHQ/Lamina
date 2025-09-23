@@ -378,7 +378,7 @@ public class S3ObjectsController : ControllerBase
             // Read the XML request body using PipeReader
             List<CompletedPart> parts = new();
 
-            var xmlContent = await PipeReaderHelper.ReadAllTextAsync(Request.BodyReader, true, cancellationToken);
+            var xmlContent = await PipeReaderHelper.ReadAllTextAsync(Request.BodyReader, false, cancellationToken);
 
             // Try to deserialize - first without namespace (most common), then with namespace
             try

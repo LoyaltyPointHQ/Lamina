@@ -105,6 +105,7 @@ namespace Lamina.Streaming.Chunked
 
                     if (processingResult.finalChunkReached)
                     {
+                        dataReader.AdvanceTo(buffer.End);
                         break;
                     }
 
@@ -167,6 +168,7 @@ namespace Lamina.Streaming.Chunked
                             result.TrailerValidationResult = trailerResult.isValid;
                             result.ErrorMessage = trailerResult.errorMessage;
                         }
+                        dataReader.AdvanceTo(buffer.End);
                         break;
                     }
 
