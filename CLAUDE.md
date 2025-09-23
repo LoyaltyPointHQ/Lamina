@@ -137,6 +137,7 @@ docker run -p 8080:8080 lamina
 - **Lamina/Services/**:
   - `IAuthenticationService` / `AuthenticationService`: AWS Signature V4 authentication
   - `MultipartUploadCleanupService`: Background service for automatic cleanup of stale multipart uploads
+  - `MetadataCleanupService`: Background service for automatic cleanup of orphaned metadata (metadata without corresponding data)
 
 ### Helpers
 - **Lamina/Helpers/**:
@@ -153,6 +154,7 @@ docker run -p 8080:8080 lamina
   - `Services/ObjectServiceTests.cs`: Object storage unit tests
   - `Services/MultipartUploadServiceTests.cs`: Multipart upload tests
   - `Services/MultipartUploadCleanupServiceTests.cs`: Cleanup service tests
+  - `Services/MetadataCleanupServiceTests.cs`: Metadata cleanup service tests
   - `Services/StreamingAuthenticationServiceTests.cs`: Streaming authentication service tests
   - `Services/StreamingTrailerSupportTests.cs`: Streaming trailer support tests
   - `Helpers/AwsChunkedEncodingStreamTests.cs`: Chunked encoding stream processing tests
@@ -369,7 +371,27 @@ Lamina includes special support for network filesystems to handle their unique c
 }
 ```
 
+### Metadata Cleanup Configuration
+```json
+{
+  "MetadataCleanup": {
+    "Enabled": true,  // Enable/disable automatic metadata cleanup
+    "CleanupIntervalMinutes": 120,  // How often to run cleanup (default: every 2 hours)
+    "BatchSize": 1000  // Number of metadata entries to process per batch
+  }
+}
+```
+
 ## Recent Updates
+
+### Metadata Cleanup Service
+- **Automated orphaned metadata cleanup**: Background service that periodically scans for and removes metadata entries that no longer have corresponding data files
+- **Provider-agnostic design**: Works with both InMemory and Filesystem storage implementations through storage interfaces
+- **Configurable intervals and batch processing**: Customizable cleanup frequency and batch sizes for optimal performance
+- **Comprehensive error handling**: Resilient to errors during cleanup operations, continues processing remaining entries
+- **Data-first approach**: Respects the data-first architecture where data existence is the source of truth
+- **Memory-efficient scanning**: Uses `IAsyncEnumerable` for streaming metadata enumeration without loading everything into memory
+- **Support for both metadata modes**: Handles both SeparateDirectory and Inline metadata storage modes in filesystem storage
 
 ### Optimized Metadata Storage
 - **Storage optimization**: Metadata is only stored when it differs from auto-generated defaults

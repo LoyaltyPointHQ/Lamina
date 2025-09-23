@@ -115,6 +115,13 @@ if (cleanupEnabled)
     builder.Services.AddHostedService<MultipartUploadCleanupService>();
 }
 
+// Register metadata cleanup service if enabled
+var metadataCleanupEnabled = builder.Configuration.GetValue<bool>("MetadataCleanup:Enabled", true);
+if (metadataCleanupEnabled)
+{
+    builder.Services.AddHostedService<MetadataCleanupService>();
+}
+
 var app = builder.Build();
 
 // Create configured buckets on startup

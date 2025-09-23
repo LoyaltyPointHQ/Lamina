@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Lamina.Models;
 using Lamina.Storage.Abstract;
 
@@ -70,6 +71,22 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
         return Task.FromResult(
             _metadata.TryGetValue(bucketName, out var bucketMetadata) &&
             bucketMetadata.ContainsKey(key));
+    }
+
+    public async IAsyncEnumerable<(string bucketName, string key)> ListAllMetadataKeysAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        foreach (var bucket in _metadata)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var key in bucket.Value.Keys)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return (bucket.Key, key);
+            }
+        }
+
+        await Task.CompletedTask; // Satisfy async requirement
     }
 
     public bool IsValidObjectKey(string key) => true;

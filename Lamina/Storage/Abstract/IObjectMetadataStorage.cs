@@ -8,5 +8,6 @@ public interface IObjectMetadataStorage
     Task<S3ObjectInfo?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     Task<bool> MetadataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    IAsyncEnumerable<(string bucketName, string key)> ListAllMetadataKeysAsync(CancellationToken cancellationToken = default);
     bool IsValidObjectKey(string key);
 }

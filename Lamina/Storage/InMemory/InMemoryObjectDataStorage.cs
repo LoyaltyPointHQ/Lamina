@@ -103,16 +103,6 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         return (totalSize, etag);
     }
 
-    public Task<byte[]?> GetDataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
-    {
-        if (_data.TryGetValue(bucketName, out var bucketData) &&
-            bucketData.TryGetValue(key, out var data))
-        {
-            return Task.FromResult<byte[]?>(data);
-        }
-        return Task.FromResult<byte[]?>(null);
-    }
-
     public async Task<bool> WriteDataToPipeAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default)
     {
         if (!_data.TryGetValue(bucketName, out var bucketData) ||
