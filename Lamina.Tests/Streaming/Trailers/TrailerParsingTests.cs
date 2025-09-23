@@ -7,15 +7,15 @@ using Lamina.Models;
 using Lamina.Streaming.Chunked;
 using Lamina.Streaming.Validation;
 
-namespace Lamina.Tests.Helpers
+namespace Lamina.Tests.Streaming.Trailers
 {
-    public class AwsChunkedEncodingTrailerTests
+    public class TrailerParsingTests
     {
         private readonly Mock<ILogger> _loggerMock;
         private readonly Mock<IChunkSignatureValidator> _chunkValidatorMock;
         private readonly IChunkedDataParser _chunkedDataParser;
 
-        public AwsChunkedEncodingTrailerTests()
+        public TrailerParsingTests()
         {
             _loggerMock = new Mock<ILogger>();
             _chunkValidatorMock = new Mock<IChunkSignatureValidator>();

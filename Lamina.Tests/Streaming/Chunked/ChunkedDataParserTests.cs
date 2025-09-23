@@ -6,15 +6,15 @@ using Xunit;
 using Lamina.Streaming.Chunked;
 using Lamina.Streaming.Validation;
 
-namespace Lamina.Tests.Helpers
+namespace Lamina.Tests.Streaming.Chunked
 {
-    public class AwsChunkedEncodingStreamTests
+    public class ChunkedDataParserTests
     {
         private readonly Mock<ILogger> _loggerMock;
         private readonly Mock<IChunkSignatureValidator> _chunkValidatorMock;
         private readonly IChunkedDataParser _chunkedDataParser;
 
-        public AwsChunkedEncodingStreamTests()
+        public ChunkedDataParserTests()
         {
             _loggerMock = new Mock<ILogger>();
             _chunkValidatorMock = new Mock<IChunkSignatureValidator>();

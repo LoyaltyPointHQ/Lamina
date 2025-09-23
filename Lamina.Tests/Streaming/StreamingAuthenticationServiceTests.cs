@@ -9,7 +9,7 @@ using Lamina.Streaming;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Lamina.Tests.Services
+namespace Lamina.Tests.Streaming
 {
     public class StreamingAuthenticationServiceTests
     {

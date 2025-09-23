@@ -9,7 +9,7 @@ using Lamina.Streaming;
 using Lamina.Streaming.Validation;
 using System.Security.Cryptography;
 
-namespace Lamina.Tests.Services
+namespace Lamina.Tests.Streaming.Trailers
 {
     public class StreamingTrailerSupportTests
     {

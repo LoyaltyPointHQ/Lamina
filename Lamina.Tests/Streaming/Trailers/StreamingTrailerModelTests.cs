@@ -1,7 +1,7 @@
 using Xunit;
 using Lamina.Models;
 
-namespace Lamina.Tests.Models
+namespace Lamina.Tests.Streaming.Trailers
 {
     public class StreamingTrailerModelTests
     {
