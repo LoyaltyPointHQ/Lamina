@@ -61,7 +61,6 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
 
         var metadata = new S3ObjectMetadata
         {
-            Key = key,
             BucketName = bucketName,
             ETag = etag,
             ContentType = request?.ContentType ?? "application/octet-stream",
@@ -124,7 +123,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
 
         return new S3ObjectInfo
         {
-            Key = metadata.Key,
+            Key = key,
             LastModified = fileInfo.LastWriteTimeUtc,
             ETag = metadata.ETag,
             Size = fileInfo.Length,
@@ -357,7 +356,6 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
 
     private class S3ObjectMetadata
     {
-        public required string Key { get; set; }
         public required string BucketName { get; set; }
         public required string ETag { get; set; }
         public string ContentType { get; set; } = "application/octet-stream";
