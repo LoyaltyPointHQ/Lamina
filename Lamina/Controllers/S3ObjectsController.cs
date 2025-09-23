@@ -75,7 +75,7 @@ public class S3ObjectsController : ControllerBase
             return new ObjectResult(error);
         }
 
-        var contentType = Request.ContentType ?? "application/octet-stream";
+        var contentType = Request.ContentType;
 
         var putRequest = new PutObjectRequest
         {

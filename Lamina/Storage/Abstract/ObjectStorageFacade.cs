@@ -226,14 +226,14 @@ public class ObjectStorageFacade : IObjectStorageFacade
         var autoDetectedContentType = GetContentTypeFromKey(key);
 
         // Check if provided content type differs from auto-detected
-        var providedContentType = request.ContentType ?? "application/octet-stream";
+        var providedContentType = request.ContentType ?? autoDetectedContentType;
         if (!string.Equals(providedContentType, autoDetectedContentType, StringComparison.OrdinalIgnoreCase))
         {
             return true; // Content type is custom, store metadata
         }
 
         // Check if there's any user metadata
-        if (request.Metadata != null && request.Metadata.Count > 0)
+        if (request.Metadata is { Count: > 0 })
         {
             return true; // User metadata exists, store metadata
         }
