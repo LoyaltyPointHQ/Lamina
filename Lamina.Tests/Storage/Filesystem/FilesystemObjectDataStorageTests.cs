@@ -191,6 +191,256 @@ public class FilesystemObjectDataStorageTests : IDisposable
         Assert.True(Directory.Exists(bucketDirectory)); // Bucket directory should still exist even after metadata cleanup
     }
 
+    [Fact]
+    public async Task StoreDataAsync_ThrowsException_WhenKeyMatchesTempFilePrefix()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string key = ".lamina-tmp-test-object.txt"; // Uses default temp file prefix
+        var content = "test content"u8.ToArray();
+
+        var pipe = new Pipe();
+        await pipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
+        await pipe.Writer.CompleteAsync();
+
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _storage.StoreDataAsync(bucketName, key, pipe.Reader));
+
+        Assert.Contains("conflicts with temporary file pattern", exception.Message);
+        Assert.Contains(".lamina-tmp-", exception.Message);
+    }
+
+    [Fact]
+    public async Task StoreDataAsync_ThrowsException_WhenKeyPathContainsTempFilePrefix()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string key = "path/.lamina-tmp-partial/object.txt"; // Temp file prefix in path
+        var content = "test content"u8.ToArray();
+
+        var pipe = new Pipe();
+        await pipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
+        await pipe.Writer.CompleteAsync();
+
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _storage.StoreDataAsync(bucketName, key, pipe.Reader));
+
+        Assert.Contains("conflicts with temporary file pattern", exception.Message);
+    }
+
+    [Fact]
+    public async Task ListDataKeysAsync_ExcludesTemporaryFiles()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string normalKey = "normal-object.txt";
+        var content = "test content"u8.ToArray();
+
+        // Store a normal object
+        var pipe = new Pipe();
+        await pipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
+        await pipe.Writer.CompleteAsync();
+        await _storage.StoreDataAsync(bucketName, normalKey, pipe.Reader);
+
+        // Manually create a temporary file to simulate what happens during write operations
+        var bucketDirectory = Path.Combine(_testDataDirectory, bucketName);
+        var tempFilePath = Path.Combine(bucketDirectory, ".lamina-tmp-abc123");
+        File.WriteAllText(tempFilePath, "temporary content");
+
+        // Act
+        var keys = await _storage.ListDataKeysAsync(bucketName);
+
+        // Assert
+        var keyList = keys.ToList();
+        Assert.Single(keyList); // Only the normal object should be listed
+        Assert.Contains(normalKey, keyList);
+        Assert.DoesNotContain(".lamina-tmp-abc123", keyList);
+    }
+
+    [Fact]
+    public async Task DataExistsAsync_ReturnsFalse_ForTemporaryFiles()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string tempKey = ".lamina-tmp-test123";
+
+        // Manually create a temporary file to simulate what happens during write operations
+        var bucketDirectory = Path.Combine(_testDataDirectory, bucketName);
+        Directory.CreateDirectory(bucketDirectory);
+        var tempFilePath = Path.Combine(bucketDirectory, tempKey);
+        File.WriteAllText(tempFilePath, "temporary content");
+
+        // Act
+        var exists = await _storage.DataExistsAsync(bucketName, tempKey);
+
+        // Assert
+        Assert.False(exists); // Temporary files should be invisible
+    }
+
+    [Fact]
+    public async Task WriteDataToPipeAsync_ReturnsFalse_ForTemporaryFiles()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string tempKey = ".lamina-tmp-test123";
+
+        // Manually create a temporary file to simulate what happens during write operations
+        var bucketDirectory = Path.Combine(_testDataDirectory, bucketName);
+        Directory.CreateDirectory(bucketDirectory);
+        var tempFilePath = Path.Combine(bucketDirectory, tempKey);
+        File.WriteAllText(tempFilePath, "temporary content");
+
+        var pipe = new Pipe();
+
+        // Act
+        var result = await _storage.WriteDataToPipeAsync(bucketName, tempKey, pipe.Writer);
+
+        // Assert
+        Assert.False(result); // Should return false as if file doesn't exist
+    }
+
+    [Fact]
+    public async Task GetDataInfoAsync_ReturnsNull_ForTemporaryFiles()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string tempKey = ".lamina-tmp-test123";
+
+        // Manually create a temporary file to simulate what happens during write operations
+        var bucketDirectory = Path.Combine(_testDataDirectory, bucketName);
+        Directory.CreateDirectory(bucketDirectory);
+        var tempFilePath = Path.Combine(bucketDirectory, tempKey);
+        File.WriteAllText(tempFilePath, "temporary content");
+
+        // Act
+        var info = await _storage.GetDataInfoAsync(bucketName, tempKey);
+
+        // Assert
+        Assert.Null(info); // Should return null as if file doesn't exist
+    }
+
+    [Fact]
+    public async Task DeleteDataAsync_ReturnsFalse_ForTemporaryFiles()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string tempKey = ".lamina-tmp-test123";
+
+        // Manually create a temporary file to simulate what happens during write operations
+        var bucketDirectory = Path.Combine(_testDataDirectory, bucketName);
+        Directory.CreateDirectory(bucketDirectory);
+        var tempFilePath = Path.Combine(bucketDirectory, tempKey);
+        File.WriteAllText(tempFilePath, "temporary content");
+
+        // Act
+        var result = await _storage.DeleteDataAsync(bucketName, tempKey);
+
+        // Assert
+        Assert.False(result); // Should return false as if file doesn't exist
+    }
+
+    [Fact]
+    public async Task ComputeETagAsync_ReturnsNull_ForTemporaryFiles()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string tempKey = ".lamina-tmp-test123";
+
+        // Manually create a temporary file to simulate what happens during write operations
+        var bucketDirectory = Path.Combine(_testDataDirectory, bucketName);
+        Directory.CreateDirectory(bucketDirectory);
+        var tempFilePath = Path.Combine(bucketDirectory, tempKey);
+        File.WriteAllText(tempFilePath, "temporary content");
+
+        // Act
+        var etag = await _storage.ComputeETagAsync(bucketName, tempKey);
+
+        // Assert
+        Assert.Null(etag); // Should return null as if file doesn't exist
+    }
+
+    [Fact]
+    public async Task CustomTempFilePrefix_FiltersCorrectly()
+    {
+        // Arrange - Create storage with custom temp file prefix
+        var settings = Options.Create(new FilesystemStorageSettings
+        {
+            DataDirectory = _testDataDirectory,
+            MetadataDirectory = _testMetadataDirectory,
+            MetadataMode = MetadataStorageMode.SeparateDirectory,
+            TempFilePrefix = ".custom-temp-",
+            NetworkMode = NetworkFileSystemMode.None
+        });
+
+        var networkHelper = new NetworkFileSystemHelper(settings, NullLogger<NetworkFileSystemHelper>.Instance);
+        var customStorage = new FilesystemObjectDataStorage(settings, networkHelper, NullLogger<FilesystemObjectDataStorage>.Instance);
+
+        const string bucketName = "test-bucket";
+        const string normalKey = "normal-object.txt";
+        var content = "test content"u8.ToArray();
+
+        // Store a normal object
+        var pipe = new Pipe();
+        await pipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
+        await pipe.Writer.CompleteAsync();
+        await customStorage.StoreDataAsync(bucketName, normalKey, pipe.Reader);
+
+        // Manually create files with different prefixes
+        var bucketDirectory = Path.Combine(_testDataDirectory, bucketName);
+        var defaultTempFile = Path.Combine(bucketDirectory, ".lamina-tmp-abc123");
+        var customTempFile = Path.Combine(bucketDirectory, ".custom-temp-xyz789");
+        File.WriteAllText(defaultTempFile, "default temp content");
+        File.WriteAllText(customTempFile, "custom temp content");
+
+        // Act
+        var keys = await customStorage.ListDataKeysAsync(bucketName);
+        var defaultTempExists = await customStorage.DataExistsAsync(bucketName, ".lamina-tmp-abc123");
+        var customTempExists = await customStorage.DataExistsAsync(bucketName, ".custom-temp-xyz789");
+
+        // Assert
+        var keyList = keys.ToList();
+        Assert.Contains(normalKey, keyList); // Normal object should be listed
+        Assert.Contains(".lamina-tmp-abc123", keyList); // Default prefix should be listed (not filtered)
+        Assert.DoesNotContain(".custom-temp-xyz789", keyList); // Custom prefix should be filtered
+
+        Assert.True(defaultTempExists); // Default prefix should be visible (not filtered)
+        Assert.False(customTempExists); // Custom prefix should be invisible (filtered)
+    }
+
+    [Fact]
+    public async Task StoreDataAsync_AcceptsKeysWithDefaultTempPrefix_WhenUsingCustomPrefix()
+    {
+        // Arrange - Create storage with custom temp file prefix
+        var settings = Options.Create(new FilesystemStorageSettings
+        {
+            DataDirectory = _testDataDirectory,
+            MetadataDirectory = _testMetadataDirectory,
+            MetadataMode = MetadataStorageMode.SeparateDirectory,
+            TempFilePrefix = ".custom-temp-",
+            NetworkMode = NetworkFileSystemMode.None
+        });
+
+        var networkHelper = new NetworkFileSystemHelper(settings, NullLogger<NetworkFileSystemHelper>.Instance);
+        var customStorage = new FilesystemObjectDataStorage(settings, networkHelper, NullLogger<FilesystemObjectDataStorage>.Instance);
+
+        const string bucketName = "test-bucket";
+        const string key = ".lamina-tmp-legitimate-file.txt"; // This should be allowed with custom prefix
+        var content = "test content"u8.ToArray();
+
+        var pipe = new Pipe();
+        await pipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
+        await pipe.Writer.CompleteAsync();
+
+        // Act & Assert - Should not throw because we're using a different temp prefix
+        await customStorage.StoreDataAsync(bucketName, key, pipe.Reader);
+
+        // Verify the object was actually stored and is accessible
+        var exists = await customStorage.DataExistsAsync(bucketName, key);
+        Assert.True(exists);
+    }
+
     public void Dispose()
     {
         // Clean up test directories

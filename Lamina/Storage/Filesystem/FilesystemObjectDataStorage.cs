@@ -13,6 +13,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
     private readonly string _dataDirectory;
     private readonly MetadataStorageMode _metadataMode;
     private readonly string _inlineMetadataDirectoryName;
+    private readonly string _tempFilePrefix;
     private readonly NetworkFileSystemHelper _networkHelper;
     private readonly ILogger<FilesystemObjectDataStorage> _logger;
 
@@ -25,6 +26,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         _dataDirectory = settings.DataDirectory;
         _metadataMode = settings.MetadataMode;
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
+        _tempFilePrefix = settings.TempFilePrefix;
         _networkHelper = networkHelper;
         _logger = logger;
 
@@ -33,10 +35,10 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public async Task<(long size, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, CancellationToken cancellationToken = default)
     {
-        // Validate that the key doesn't contain metadata directory patterns
-        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        // Validate that the key doesn't conflict with temporary files or metadata directories
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            throw new InvalidOperationException($"Cannot store data with key containing metadata directory '{_inlineMetadataDirectoryName}'");
+            throw new InvalidOperationException($"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
         }
 
         var dataPath = GetDataPath(bucketName, key);
@@ -44,7 +46,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         Directory.CreateDirectory(dataDir);
 
         // Create a temporary file in the same directory to ensure atomic move
-        var tempPath = Path.Combine(dataDir, $".tmp_{Guid.NewGuid():N}");
+        var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
         long bytesWritten = 0;
 
         try
@@ -115,10 +117,10 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             return await StoreDataAsync(bucketName, key, dataReader, cancellationToken);
         }
 
-        // Validate that the key doesn't contain metadata directory patterns
-        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        // Validate that the key doesn't conflict with temporary files or metadata directories
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            throw new InvalidOperationException($"Cannot store data with key containing metadata directory '{_inlineMetadataDirectoryName}'");
+            throw new InvalidOperationException($"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
         }
 
         var dataPath = GetDataPath(bucketName, key);
@@ -126,7 +128,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         Directory.CreateDirectory(dataDir);
 
         // Create a temporary file in the same directory to ensure atomic move
-        var tempPath = Path.Combine(dataDir, $".tmp_{Guid.NewGuid():N}");
+        var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
         long bytesWritten = 0;
 
         try
@@ -180,10 +182,10 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public async Task<(long size, string etag)> StoreMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
     {
-        // Validate that the key doesn't contain metadata directory patterns
-        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        // Validate that the key doesn't conflict with temporary files or metadata directories
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            throw new InvalidOperationException($"Cannot store data with key containing metadata directory '{_inlineMetadataDirectoryName}'");
+            throw new InvalidOperationException($"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
         }
 
         var dataPath = GetDataPath(bucketName, key);
@@ -191,7 +193,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         Directory.CreateDirectory(dataDir);
 
         // Create a temporary file in the same directory to ensure atomic move
-        var tempPath = Path.Combine(dataDir, $".tmp_{Guid.NewGuid():N}");
+        var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
         long totalBytesWritten = 0;
 
         try
@@ -259,8 +261,8 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public async Task<bool> WriteDataToPipeAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default)
     {
-        // Validate that the key doesn't contain metadata directory patterns
-        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        // Validate that the key doesn't conflict with temporary files or metadata directories
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
             return false;  // Return false to indicate object not found
         }
@@ -270,6 +272,13 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         if (!File.Exists(dataPath))
         {
             return false;
+        }
+
+        // Check if this is a temporary file
+        var fileName = Path.GetFileName(dataPath);
+        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
+        {
+            return false;  // Temporary files should be invisible
         }
 
         await using var fileStream = File.OpenRead(dataPath);
@@ -291,16 +300,23 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public async Task<bool> DeleteDataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        // Validate that the key doesn't contain metadata directory patterns
-        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        // Validate that the key doesn't conflict with temporary files or metadata directories
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            return false;  // Cannot delete metadata paths
+            return false;  // Cannot delete forbidden paths
         }
 
         var dataPath = GetDataPath(bucketName, key);
         if (!File.Exists(dataPath))
         {
             return false;
+        }
+
+        // Check if this is a temporary file
+        var fileName = Path.GetFileName(dataPath);
+        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
+        {
+            return false;  // Temporary files should be invisible
         }
 
         await _networkHelper.ExecuteWithRetryAsync(() =>
@@ -334,20 +350,32 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public Task<bool> DataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        // Validate that the key doesn't contain metadata directory patterns
-        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        // Validate that the key doesn't conflict with temporary files or metadata directories
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
             return Task.FromResult(false);
         }
 
         var dataPath = GetDataPath(bucketName, key);
-        return Task.FromResult(File.Exists(dataPath));
+        if (!File.Exists(dataPath))
+        {
+            return Task.FromResult(false);
+        }
+
+        // Check if this is a temporary file
+        var fileName = Path.GetFileName(dataPath);
+        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
+        {
+            return Task.FromResult(false);  // Temporary files should be invisible
+        }
+
+        return Task.FromResult(true);
     }
 
     public Task<(long size, DateTime lastModified)?> GetDataInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        // Validate that the key doesn't contain metadata directory patterns
-        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        // Validate that the key doesn't conflict with temporary files or metadata directories
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
             return Task.FromResult<(long size, DateTime lastModified)?>(null);
         }
@@ -356,6 +384,13 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         if (!File.Exists(dataPath))
         {
             return Task.FromResult<(long size, DateTime lastModified)?>(null);
+        }
+
+        // Check if this is a temporary file
+        var fileName = Path.GetFileName(dataPath);
+        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
+        {
+            return Task.FromResult<(long size, DateTime lastModified)?>(null);  // Temporary files should be invisible
         }
 
         var fileInfo = new FileInfo(dataPath);
@@ -402,6 +437,13 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                 continue;
             }
 
+            // Skip if it's a temporary file
+            var fileName = Path.GetFileName(file);
+            if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
+            {
+                continue;
+            }
+
             // Apply prefix filter if provided
             if (!string.IsNullOrEmpty(prefixFilter) && !relativePath.StartsWith(prefixFilter))
             {
@@ -414,8 +456,8 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public async Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        // Validate that the key doesn't contain metadata directory patterns
-        if (FilesystemStorageHelper.IsMetadataPath(key, _metadataMode, _inlineMetadataDirectoryName))
+        // Validate that the key doesn't conflict with temporary files or metadata directories
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
             return null;
         }
@@ -424,6 +466,13 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         if (!File.Exists(dataPath))
         {
             return null;
+        }
+
+        // Check if this is a temporary file
+        var fileName = Path.GetFileName(dataPath);
+        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
+        {
+            return null;  // Temporary files should be invisible
         }
 
         // Use ETagHelper which efficiently computes hash without loading entire file into memory
