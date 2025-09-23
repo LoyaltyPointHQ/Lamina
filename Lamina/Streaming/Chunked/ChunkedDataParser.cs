@@ -46,7 +46,7 @@ namespace Lamina.Streaming.Chunked
 
                     while (position < dataArray.Length)
                     {
-                        var chunkResult = await ProcessNextChunkAsync(dataArray, position, chunkValidator);
+                        var chunkResult = ProcessNextChunk(dataArray, position, chunkValidator);
 
                         if (chunkResult.IsIncomplete)
                         {
@@ -174,7 +174,7 @@ namespace Lamina.Streaming.Chunked
                     {
                         if (chunkValidator?.ExpectsTrailers == true && parsePosition < dataBuffer.Length)
                         {
-                            var trailerResult = await TrailerParser.ParseTrailersAsync(
+                            var trailerResult = TrailerParser.ParseTrailersAsync(
                                 dataBuffer, parsePosition, chunkValidator, _logger);
 
                             result.Trailers = trailerResult.trailers;
@@ -207,7 +207,7 @@ namespace Lamina.Streaming.Chunked
             }
         }
 
-        private async Task<ChunkProcessResult> ProcessNextChunkAsync(
+        private ChunkProcessResult ProcessNextChunk(
             byte[] dataArray,
             int position,
             IChunkSignatureValidator? chunkValidator)
@@ -223,7 +223,7 @@ namespace Lamina.Streaming.Chunked
 
             if (header.IsFinalChunk)
             {
-                await ValidateFinalChunkAsync(header, chunkValidator);
+                ValidateFinalChunk(header, chunkValidator);
                 return ChunkProcessResult.FinalChunk(position + ChunkConstants.CrlfPattern.Length);
             }
 
@@ -233,7 +233,7 @@ namespace Lamina.Streaming.Chunked
             }
 
             var chunkData = ExtractChunkData(dataArray, position, header.Size);
-            await ValidateChunkAsync(chunkData, header, chunkValidator);
+            ValidateChunk(chunkData, header, chunkValidator);
 
             LogChunkDetails(chunkData, header);
 
@@ -295,11 +295,11 @@ namespace Lamina.Streaming.Chunked
             return chunkData;
         }
 
-        private async Task ValidateChunkAsync(ReadOnlyMemory<byte> chunkData, ChunkHeader header, IChunkSignatureValidator? validator)
+        private void ValidateChunk(ReadOnlyMemory<byte> chunkData, ChunkHeader header, IChunkSignatureValidator? validator)
         {
             if (validator != null)
             {
-                var isValid = await validator.ValidateChunkAsync(chunkData, header.Signature, false);
+                var isValid = validator.ValidateChunk(chunkData, header.Signature, false);
                 if (!isValid)
                 {
                     throw new InvalidOperationException($"Invalid chunk signature at chunk index {validator.ChunkIndex}");
@@ -320,11 +320,11 @@ namespace Lamina.Streaming.Chunked
             }
         }
 
-        private async Task ValidateFinalChunkAsync(ChunkHeader header, IChunkSignatureValidator? validator)
+        private void ValidateFinalChunk(ChunkHeader header, IChunkSignatureValidator? validator)
         {
             if (validator != null)
             {
-                var isValid = await validator.ValidateChunkAsync(ReadOnlyMemory<byte>.Empty, header.Signature, true);
+                var isValid = validator.ValidateChunk(ReadOnlyMemory<byte>.Empty, header.Signature, true);
                 if (!isValid)
                 {
                     throw new InvalidOperationException("Invalid final chunk signature");

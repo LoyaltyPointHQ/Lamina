@@ -70,7 +70,7 @@ namespace Lamina.Tests.Streaming.Trailers
             context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/20240101/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
 
             // Act
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
 
             // Assert
             Assert.NotNull(validator);
@@ -124,7 +124,7 @@ namespace Lamina.Tests.Streaming.Trailers
             context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/20240101/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
 
             // Act
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
 
             // Assert
             Assert.NotNull(validator);
@@ -176,7 +176,7 @@ namespace Lamina.Tests.Streaming.Trailers
             context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/20240101/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
 
             // Act
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
 
             // Assert
             Assert.NotNull(validator);
@@ -200,7 +200,7 @@ namespace Lamina.Tests.Streaming.Trailers
             var expectedSignature = await CalculateTrailerSignatureForTest(validator, trailers);
 
             // Act
-            var result = await validator.ValidateTrailerAsync(trailers, expectedSignature);
+            var result = validator.ValidateTrailer(trailers, expectedSignature);
 
             // Assert
             Assert.True(result.IsValid);
@@ -222,7 +222,7 @@ namespace Lamina.Tests.Streaming.Trailers
             var invalidSignature = "invalid_signature";
 
             // Act
-            var result = await validator.ValidateTrailerAsync(trailers, invalidSignature);
+            var result = validator.ValidateTrailer(trailers, invalidSignature);
 
             // Assert
             Assert.False(result.IsValid);
@@ -245,7 +245,7 @@ namespace Lamina.Tests.Streaming.Trailers
             var dummySignature = "dummy";
 
             // Act
-            var result = await validator.ValidateTrailerAsync(trailers, dummySignature);
+            var result = validator.ValidateTrailer(trailers, dummySignature);
 
             // Assert
             Assert.False(result.IsValid);
@@ -268,7 +268,7 @@ namespace Lamina.Tests.Streaming.Trailers
             var dummySignature = "dummy";
 
             // Act
-            var result = await validator.ValidateTrailerAsync(trailers, dummySignature);
+            var result = validator.ValidateTrailer(trailers, dummySignature);
 
             // Assert
             Assert.False(result.IsValid);
@@ -293,7 +293,7 @@ namespace Lamina.Tests.Streaming.Trailers
             var expectedSignature = await CalculateTrailerSignatureForTest(validator, trailers);
 
             // Act
-            var result = await validator.ValidateTrailerAsync(trailers, expectedSignature);
+            var result = validator.ValidateTrailer(trailers, expectedSignature);
 
             // Assert
             Assert.True(result.IsValid);
@@ -359,8 +359,8 @@ namespace Lamina.Tests.Streaming.Trailers
 
             context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/20240101/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
 
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
-            return validator;
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
+            return validator!;
         }
 
         private async Task<IChunkSignatureValidator> CreateTestNonTrailerValidator()
@@ -403,26 +403,26 @@ namespace Lamina.Tests.Streaming.Trailers
 
             context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/20240101/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
 
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
-            return validator;
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
+            return validator!;
         }
 
-        private async Task<string> CalculateTrailerSignatureForTest(IChunkSignatureValidator validator, List<StreamingTrailer> trailers)
+        private Task<string> CalculateTrailerSignatureForTest(IChunkSignatureValidator validator, List<StreamingTrailer> trailers)
         {
             // Cast to concrete type to access internal properties
             var concreteValidator = (ChunkSignatureValidator)validator;
 
             // Build trailer header string and calculate signature using SignatureCalculator
             var trailerHeaderString = SignatureCalculator.BuildTrailerHeaderString(trailers);
-            return SignatureCalculator.CalculateTrailerSignature(
+            return Task.FromResult(SignatureCalculator.CalculateTrailerSignature(
                 concreteValidator.SigningKey,
                 concreteValidator.RequestDateTime,
                 concreteValidator.Region,
                 concreteValidator.PreviousSignature,
-                trailerHeaderString);
+                trailerHeaderString));
         }
 
-        private async Task<string> CalculateStreamingSignature(string method, string uri, string queryString,
+        private Task<string> CalculateStreamingSignature(string method, string uri, string queryString,
             Dictionary<string, string> headers, string signedHeaders, byte[] payload,
             DateTime dateTime, string accessKey, string secretKey, bool isTrailerStreaming = false)
         {
@@ -441,7 +441,7 @@ namespace Lamina.Tests.Streaming.Trailers
             var stringToSign = $"{algorithm}\n{amzDate}\n{credentialScope}\n{GetHash(canonicalRequest)}";
 
             var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
-            return GetHmacSha256Hex(signingKey, stringToSign);
+            return Task.FromResult(GetHmacSha256Hex(signingKey, stringToSign));
         }
 
         private string GetCanonicalHeaders(Dictionary<string, string> headers, string signedHeaders)

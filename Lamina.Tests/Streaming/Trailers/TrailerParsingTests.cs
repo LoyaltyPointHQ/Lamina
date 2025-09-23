@@ -48,8 +48,8 @@ namespace Lamina.Tests.Streaming.Trailers
                     new() { Name = "x-amz-checksum-crc32c", Value = "wdBDMA==" }
                 }
             };
-            _chunkValidatorMock.Setup(v => v.ValidateTrailerAsync(It.IsAny<List<StreamingTrailer>>(), It.IsAny<string>()))
-                .ReturnsAsync(expectedTrailerResult);
+            _chunkValidatorMock.Setup(v => v.ValidateTrailer(It.IsAny<List<StreamingTrailer>>(), It.IsAny<string>()))
+                .Returns(expectedTrailerResult);
 
             // Act
             var result = await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(
@@ -92,8 +92,8 @@ namespace Lamina.Tests.Streaming.Trailers
                 IsValid = false,
                 ErrorMessage = "Invalid trailer signature"
             };
-            _chunkValidatorMock.Setup(v => v.ValidateTrailerAsync(It.IsAny<List<StreamingTrailer>>(), It.IsAny<string>()))
-                .ReturnsAsync(invalidTrailerResult);
+            _chunkValidatorMock.Setup(v => v.ValidateTrailer(It.IsAny<List<StreamingTrailer>>(), It.IsAny<string>()))
+                .Returns(invalidTrailerResult);
 
             // Act
             var result = await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(
@@ -164,8 +164,8 @@ namespace Lamina.Tests.Streaming.Trailers
                     new() { Name = "x-amz-checksum-sha256", Value = "abc123def456" }
                 }
             };
-            _chunkValidatorMock.Setup(v => v.ValidateTrailerAsync(It.IsAny<List<StreamingTrailer>>(), It.IsAny<string>()))
-                .ReturnsAsync(expectedTrailerResult);
+            _chunkValidatorMock.Setup(v => v.ValidateTrailer(It.IsAny<List<StreamingTrailer>>(), It.IsAny<string>()))
+                .Returns(expectedTrailerResult);
 
             // Act
             var result = await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(

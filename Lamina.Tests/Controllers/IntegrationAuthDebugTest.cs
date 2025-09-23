@@ -36,7 +36,7 @@ namespace Lamina.Tests.Controllers
                     config.AddJsonFile(testSettingsPath, optional: false, reloadOnChange: false);
                     
                     // Then overlay authentication settings
-                    var authConfig = new Dictionary<string, string>
+                    var authConfig = new Dictionary<string, string?>
                     {
                         ["Logging:LogLevel:Default"] = "Debug",
                         ["Logging:LogLevel:Microsoft.AspNetCore"] = "Information", 
@@ -186,7 +186,7 @@ namespace Lamina.Tests.Controllers
             return await _client.SendAsync(request);
         }
 
-        private async Task TestDirectServiceCall(byte[] testData)
+        private Task TestDirectServiceCall(byte[] testData)
         {
             using var scope = _factory.Services.CreateScope();
             var authService = scope.ServiceProvider.GetRequiredService<IAuthenticationService>();
@@ -204,11 +204,13 @@ namespace Lamina.Tests.Controllers
             {
                 _output.WriteLine("  User has bucket permissions: " + authService.UserHasAccessToBucket(testUser, "debug-test-bucket", "PUT"));
             }
+
+            return Task.CompletedTask;
         }
 
         // Helper methods for signature calculation
-        private async Task<string> CalculateSignature(string method, string uri, string queryString, 
-            Dictionary<string, string> headers, string signedHeaders, byte[] payload, 
+        private Task<string> CalculateSignature(string method, string uri, string queryString,
+            Dictionary<string, string> headers, string signedHeaders, byte[] payload,
             DateTime dateTime, string accessKey, string secretKey)
         {
             var dateStamp = dateTime.ToString("yyyyMMdd");
@@ -229,7 +231,7 @@ namespace Lamina.Tests.Controllers
             _output.WriteLine($"String to sign:\n{stringToSign}");
 
             var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
-            return GetHmacSha256Hex(signingKey, stringToSign);
+            return Task.FromResult(GetHmacSha256Hex(signingKey, stringToSign));
         }
 
         private string GetCanonicalHeaders(Dictionary<string, string> headers, string signedHeaders)

@@ -31,7 +31,7 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
                 config.AddJsonFile(testSettingsPath, optional: false, reloadOnChange: false);
 
                 // Then overlay authentication settings
-                var authConfig = new Dictionary<string, string>
+                var authConfig = new Dictionary<string, string?>
                 {
                     ["Authentication:Enabled"] = "true",
                     ["Authentication:Users:0:AccessKeyId"] = "TESTKEY",
@@ -562,7 +562,7 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
         return GetHmacSha256Hex(signingKey, stringToSign);
     }
 
-    private async Task<string> CalculateSignature(string method, string uri, string queryString,
+    private Task<string> CalculateSignature(string method, string uri, string queryString,
         Dictionary<string, string> headers, string signedHeaders, byte[] payload,
         DateTime dateTime, string accessKey, string secretKey)
     {
@@ -579,10 +579,10 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
         var stringToSign = $"AWS4-HMAC-SHA256\n{amzDate}\n{credentialScope}\n{canonicalRequestHash}";
 
         var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
-        return GetHmacSha256Hex(signingKey, stringToSign);
+        return Task.FromResult(GetHmacSha256Hex(signingKey, stringToSign));
     }
 
-    private async Task<string> CalculateStreamingSignature(string method, string uri, string queryString,
+    private Task<string> CalculateStreamingSignature(string method, string uri, string queryString,
         Dictionary<string, string> headers, string signedHeaders, byte[] payload,
         DateTime dateTime, string accessKey, string secretKey)
     {
@@ -598,7 +598,7 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
         var stringToSign = $"AWS4-HMAC-SHA256\n{amzDate}\n{credentialScope}\n{canonicalRequestHash}";
 
         var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
-        return GetHmacSha256Hex(signingKey, stringToSign);
+        return Task.FromResult(GetHmacSha256Hex(signingKey, stringToSign));
     }
 
     private byte[] GetSigningKey(string secretKey, string dateStamp, string region, string service)

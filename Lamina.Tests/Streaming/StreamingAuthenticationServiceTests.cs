@@ -25,7 +25,7 @@ namespace Lamina.Tests.Streaming
         }
 
         [Fact]
-        public async Task CreateChunkValidatorAsync_ReturnsNull_WhenNotStreamingRequest()
+        public void CreateChunkValidatorAsync_ReturnsNull_WhenNotStreamingRequest()
         {
             // Arrange
             var context = new DefaultHttpContext();
@@ -36,14 +36,14 @@ namespace Lamina.Tests.Streaming
             var user = new S3User { AccessKeyId = "test", SecretAccessKey = "secret" };
 
             // Act
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
 
             // Assert
             Assert.Null(validator);
         }
 
         [Fact]
-        public async Task CreateChunkValidatorAsync_ReturnsNull_WhenMissingDecodedContentLength()
+        public void CreateChunkValidatorAsync_ReturnsNull_WhenMissingDecodedContentLength()
         {
             // Arrange
             var context = new DefaultHttpContext();
@@ -55,7 +55,7 @@ namespace Lamina.Tests.Streaming
             var user = new S3User { AccessKeyId = "test", SecretAccessKey = "secret" };
 
             // Act
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
 
             // Assert
             Assert.Null(validator);
@@ -104,7 +104,7 @@ namespace Lamina.Tests.Streaming
             context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/20240101/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
 
             // Act
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
 
             // Assert
             Assert.NotNull(validator);
@@ -113,7 +113,7 @@ namespace Lamina.Tests.Streaming
         }
 
         [Fact]
-        public async Task CreateChunkValidatorAsync_ReturnsNull_WhenInvalidAuthHeader()
+        public void CreateChunkValidatorAsync_ReturnsNull_WhenInvalidAuthHeader()
         {
             // Arrange
             var context = new DefaultHttpContext();
@@ -125,14 +125,14 @@ namespace Lamina.Tests.Streaming
             var user = new S3User { AccessKeyId = "test", SecretAccessKey = "secret" };
 
             // Act
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
 
             // Assert
             Assert.Null(validator);
         }
 
         [Fact]
-        public async Task CreateChunkValidatorAsync_ReturnsNull_WhenMissingAmzDate()
+        public void CreateChunkValidatorAsync_ReturnsNull_WhenMissingAmzDate()
         {
             // Arrange
             var context = new DefaultHttpContext();
@@ -144,7 +144,7 @@ namespace Lamina.Tests.Streaming
             var user = new S3User { AccessKeyId = "test", SecretAccessKey = "secret" };
 
             // Act
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
 
             // Assert
             Assert.Null(validator);
@@ -197,7 +197,7 @@ namespace Lamina.Tests.Streaming
             context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/20240101/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
 
             // Act
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
 
             // Assert
             Assert.NotNull(validator);
@@ -246,7 +246,7 @@ namespace Lamina.Tests.Streaming
 
             context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/20240101/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
 
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
             Assert.NotNull(validator);
 
             // Act & Assert - Test chunk validation
@@ -263,7 +263,7 @@ namespace Lamina.Tests.Streaming
                 false);
 
             // Test with the correct signature
-            var result = await validator.ValidateChunkAsync(chunkData, expectedChunkSignature, false);
+            var result = validator.ValidateChunk(chunkData, expectedChunkSignature, false);
 
             // Should succeed with correct signature
             Assert.True(result);
@@ -312,7 +312,7 @@ namespace Lamina.Tests.Streaming
 
             context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/20240101/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
 
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
             Assert.NotNull(validator);
 
             // Act - Test last chunk (empty)
@@ -328,7 +328,7 @@ namespace Lamina.Tests.Streaming
                 new ReadOnlyMemory<byte>(emptyChunk),
                 true);
 
-            var result = await validator.ValidateChunkAsync(emptyChunk, expectedChunkSignature, true);
+            var result = validator.ValidateChunk(emptyChunk, expectedChunkSignature, true);
 
             // Assert - Should handle last chunk successfully with correct signature
             Assert.True(result);
@@ -381,7 +381,7 @@ namespace Lamina.Tests.Streaming
 
             context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/20240101/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
 
-            var validator = await _streamingService.CreateChunkValidatorAsync(context.Request, user);
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
             Assert.NotNull(validator);
 
             // Act - Calculate what the first chunk signature should be
@@ -398,7 +398,7 @@ namespace Lamina.Tests.Streaming
                 false);
 
             // Simulate successful validation with the correct signature
-            var result = await validator.ValidateChunkAsync(chunkData, expectedSignature, false);
+            var result = validator.ValidateChunk(chunkData, expectedSignature, false);
 
             // Assert - Validation should succeed
             Assert.True(result);
@@ -414,7 +414,7 @@ namespace Lamina.Tests.Streaming
                 new ReadOnlyMemory<byte>(chunkData2),
                 false);
 
-            var result2 = await validator.ValidateChunkAsync(chunkData2, expectedSignature2, false);
+            var result2 = validator.ValidateChunk(chunkData2, expectedSignature2, false);
 
             // Assert - Second chunk should also succeed if signature chaining is correct
             Assert.True(result2);
@@ -424,7 +424,7 @@ namespace Lamina.Tests.Streaming
             // the second chunk validation would fail because the previousSignature would be wrong
         }
 
-        private async Task<string> CalculateStreamingSignature(string method, string uri, string queryString,
+        private Task<string> CalculateStreamingSignature(string method, string uri, string queryString,
             Dictionary<string, string> headers, string signedHeaders, byte[] payload,
             DateTime dateTime, string accessKey, string secretKey)
         {
@@ -442,7 +442,7 @@ namespace Lamina.Tests.Streaming
             var stringToSign = $"{algorithm}\n{amzDate}\n{credentialScope}\n{GetHash(canonicalRequest)}";
 
             var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
-            return GetHmacSha256Hex(signingKey, stringToSign);
+            return Task.FromResult(GetHmacSha256Hex(signingKey, stringToSign));
         }
 
         private string GetCanonicalHeaders(Dictionary<string, string> headers, string signedHeaders)

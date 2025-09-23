@@ -10,7 +10,7 @@ namespace Lamina.Streaming.Validation
         /// <summary>
         /// Validates a single chunk with its signature (memory-based)
         /// </summary>
-        Task<bool> ValidateChunkAsync(ReadOnlyMemory<byte> chunkData, string chunkSignature, bool isLastChunk);
+        bool ValidateChunk(ReadOnlyMemory<byte> chunkData, string chunkSignature, bool isLastChunk);
 
         /// <summary>
         /// Validates a single chunk with its signature (streaming-based)
@@ -20,7 +20,7 @@ namespace Lamina.Streaming.Validation
         /// <summary>
         /// Validates trailing headers with their signature
         /// </summary>
-        Task<TrailerValidationResult> ValidateTrailerAsync(List<StreamingTrailer> trailers, string trailerSignature);
+        TrailerValidationResult ValidateTrailer(List<StreamingTrailer> trailers, string trailerSignature);
 
         /// <summary>
         /// Gets the expected chunk size (excluding metadata)

@@ -34,7 +34,7 @@ namespace Lamina.Tests.Services
                 {
                     config.Sources.Clear();
                     
-                    var testConfig = new Dictionary<string, string>
+                    var testConfig = new Dictionary<string, string?>
                     {
                         ["Logging:LogLevel:Default"] = "Debug",
                         ["Logging:LogLevel:Microsoft.AspNetCore"] = "Information",
@@ -214,8 +214,8 @@ namespace Lamina.Tests.Services
             _output.WriteLine($"Bucket creation status: {response.StatusCode}");
         }
 
-        private async Task<string> CalculateSignature(string method, string uri, string queryString, 
-            Dictionary<string, string> headers, string signedHeaders, byte[] payload, 
+        private Task<string> CalculateSignature(string method, string uri, string queryString,
+            Dictionary<string, string> headers, string signedHeaders, byte[] payload,
             DateTime dateTime, string accessKey, string secretKey)
         {
             var dateStamp = dateTime.ToString("yyyyMMdd");
@@ -231,7 +231,7 @@ namespace Lamina.Tests.Services
             var stringToSign = $"{algorithm}\n{amzDate}\n{credentialScope}\n{GetHash(canonicalRequest)}";
 
             var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
-            return GetHmacSha256Hex(signingKey, stringToSign);
+            return Task.FromResult(GetHmacSha256Hex(signingKey, stringToSign));
         }
 
         private string GetCanonicalHeaders(Dictionary<string, string> headers, string signedHeaders)

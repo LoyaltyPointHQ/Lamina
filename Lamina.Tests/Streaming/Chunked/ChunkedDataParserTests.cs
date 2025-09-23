@@ -26,7 +26,7 @@ namespace Lamina.Tests.Streaming.Chunked
                 It.IsAny<EventId>(),
                 It.IsAny<It.IsAnyType>(),
                 It.IsAny<Exception>(),
-                It.IsAny<Func<It.IsAnyType, Exception, string>>()))
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()))
                 .Callback<LogLevel, EventId, object, Exception, Delegate>((level, eventId, state, exception, formatter) =>
                 {
                     Console.WriteLine($"[DEBUG] {formatter.DynamicInvoke(state, exception)}");

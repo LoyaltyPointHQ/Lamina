@@ -12,6 +12,6 @@ namespace Lamina.Streaming
         /// <summary>
         /// Creates a streaming validator for STREAMING-AWS4-HMAC-SHA256-PAYLOAD requests
         /// </summary>
-        Task<IChunkSignatureValidator?> CreateChunkValidatorAsync(HttpRequest request, S3User user);
+        IChunkSignatureValidator? CreateChunkValidator(HttpRequest request, S3User user);
     }
 }

@@ -98,7 +98,7 @@ namespace Lamina.Middleware
                     context.Items["AuthenticatedUser"] = user;
                     
                     // Create chunk validator for downstream processing
-                    var chunkValidator = await _streamingAuthService.CreateChunkValidatorAsync(context.Request, user);
+                    var chunkValidator = _streamingAuthService.CreateChunkValidator(context.Request, user);
                     if (chunkValidator != null)
                     {
                         context.Items["ChunkValidator"] = chunkValidator;

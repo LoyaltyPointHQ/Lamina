@@ -29,7 +29,7 @@ namespace Lamina.Tests.Controllers
                     config.Sources.Clear();
                     
                     // Use in-memory configuration with authentication enabled
-                    var testConfig = new Dictionary<string, string>
+                    var testConfig = new Dictionary<string, string?>
                     {
                         ["Logging:LogLevel:Default"] = "Debug", // More verbose logging
                         ["Logging:LogLevel:Microsoft.AspNetCore"] = "Information",
@@ -124,8 +124,8 @@ namespace Lamina.Tests.Controllers
             }
         }
 
-        private async Task<string> CalculateSignature(string method, string uri, string queryString, 
-            Dictionary<string, string> headers, string signedHeaders, byte[] payload, 
+        private Task<string> CalculateSignature(string method, string uri, string queryString,
+            Dictionary<string, string> headers, string signedHeaders, byte[] payload,
             DateTime dateTime, string accessKey, string secretKey)
         {
             var dateStamp = dateTime.ToString("yyyyMMdd");
@@ -145,7 +145,7 @@ namespace Lamina.Tests.Controllers
             _output.WriteLine($"\nString to sign:\n{stringToSign}");
 
             var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
-            return GetHmacSha256Hex(signingKey, stringToSign);
+            return Task.FromResult(GetHmacSha256Hex(signingKey, stringToSign));
         }
 
         private string GetCanonicalHeaders(Dictionary<string, string> headers, string signedHeaders)

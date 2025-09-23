@@ -31,7 +31,7 @@ public class StreamingAuthenticationIntegrationTests : IClassFixture<WebApplicat
                 config.AddJsonFile(testSettingsPath, optional: false, reloadOnChange: false);
                 
                 // Then overlay authentication settings
-                var authConfig = new Dictionary<string, string>
+                var authConfig = new Dictionary<string, string?>
                 {
                     ["Logging:LogLevel:Default"] = "Debug",
                     ["Logging:LogLevel:Microsoft.AspNetCore"] = "Information",
@@ -438,8 +438,8 @@ public class StreamingAuthenticationIntegrationTests : IClassFixture<WebApplicat
         return GetHmacSha256Hex(signingKey, stringToSign);
     }
 
-    private async Task<string> CalculateSignature(string method, string uri, string queryString, 
-        Dictionary<string, string> headers, string signedHeaders, byte[] payload, 
+    private Task<string> CalculateSignature(string method, string uri, string queryString,
+        Dictionary<string, string> headers, string signedHeaders, byte[] payload,
         DateTime dateTime, string accessKey, string secretKey)
     {
         var dateStamp = dateTime.ToString("yyyyMMdd");
@@ -455,11 +455,11 @@ public class StreamingAuthenticationIntegrationTests : IClassFixture<WebApplicat
         var stringToSign = $"{algorithm}\n{amzDate}\n{credentialScope}\n{GetHash(canonicalRequest)}";
 
         var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
-        return GetHmacSha256Hex(signingKey, stringToSign);
+        return Task.FromResult(GetHmacSha256Hex(signingKey, stringToSign));
     }
 
-    private async Task<string> CalculateStreamingSignature(string method, string uri, string queryString, 
-        Dictionary<string, string> headers, string signedHeaders, byte[] payload, 
+    private Task<string> CalculateStreamingSignature(string method, string uri, string queryString,
+        Dictionary<string, string> headers, string signedHeaders, byte[] payload,
         DateTime dateTime, string accessKey, string secretKey)
     {
         // For streaming, payload hash is always "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
@@ -476,7 +476,7 @@ public class StreamingAuthenticationIntegrationTests : IClassFixture<WebApplicat
         var stringToSign = $"{algorithm}\n{amzDate}\n{credentialScope}\n{GetHash(canonicalRequest)}";
 
         var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
-        return GetHmacSha256Hex(signingKey, stringToSign);
+        return Task.FromResult(GetHmacSha256Hex(signingKey, stringToSign));
     }
 
     private string GetCanonicalHeaders(Dictionary<string, string> headers, string signedHeaders)

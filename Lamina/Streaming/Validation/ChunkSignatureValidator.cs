@@ -50,7 +50,7 @@ namespace Lamina.Streaming.Validation
         internal string Region => _region;
         internal string PreviousSignature => _previousSignature;
 
-        public async Task<bool> ValidateChunkAsync(ReadOnlyMemory<byte> chunkData, string chunkSignature, bool isLastChunk)
+        public bool ValidateChunk(ReadOnlyMemory<byte> chunkData, string chunkSignature, bool isLastChunk)
         {
             try
             {
@@ -119,7 +119,7 @@ namespace Lamina.Streaming.Validation
             }
         }
 
-        public async Task<TrailerValidationResult> ValidateTrailerAsync(List<StreamingTrailer> trailers, string trailerSignature)
+        public TrailerValidationResult ValidateTrailer(List<StreamingTrailer> trailers, string trailerSignature)
         {
             var result = new TrailerValidationResult();
 

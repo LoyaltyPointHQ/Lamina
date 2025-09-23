@@ -19,7 +19,7 @@ namespace Lamina.Streaming.Trailers
         /// <param name="chunkValidator">Validator for trailer signatures</param>
         /// <param name="logger">Optional logger</param>
         /// <returns>Parsed trailers, validation result, and any error message</returns>
-        public static async Task<(List<StreamingTrailer> trailers, bool isValid, string? errorMessage)> ParseTrailersAsync(
+        public static (List<StreamingTrailer> trailers, bool isValid, string? errorMessage) ParseTrailersAsync(
             byte[] dataBuffer,
             int startPosition,
             IChunkSignatureValidator chunkValidator,
@@ -37,7 +37,7 @@ namespace Lamina.Streaming.Trailers
 
                 if (!string.IsNullOrEmpty(trailerSignature))
                 {
-                    var validationResult = await chunkValidator.ValidateTrailerAsync(trailers, trailerSignature);
+                    var validationResult = chunkValidator.ValidateTrailer(trailers, trailerSignature);
                     return (validationResult.Trailers, validationResult.IsValid, validationResult.ErrorMessage);
                 }
                 else if (chunkValidator.ExpectsTrailers)

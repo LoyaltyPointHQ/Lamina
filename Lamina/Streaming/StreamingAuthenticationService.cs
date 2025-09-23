@@ -20,7 +20,7 @@ namespace Lamina.Streaming
             _authService = authService;
         }
 
-        public async Task<IChunkSignatureValidator?> CreateChunkValidatorAsync(HttpRequest request, S3User user)
+        public IChunkSignatureValidator? CreateChunkValidator(HttpRequest request, S3User user)
         {
             // Extract the authorization header details
             var authHeader = request.Headers["Authorization"].FirstOrDefault();
@@ -83,7 +83,7 @@ namespace Lamina.Streaming
             }
 
             // Validate the seed signature by calculating what it should be for the initial request
-            var calculatedSeedSignature = await CalculateSeedSignature(request, user.SecretAccessKey, accessKeyId, dateStamp, region, signedHeaders, requestDateTime, isTrailerStreaming);
+            var calculatedSeedSignature = CalculateSeedSignature(request, user.SecretAccessKey, accessKeyId, dateStamp, region, signedHeaders, requestDateTime, isTrailerStreaming);
             if (!string.Equals(calculatedSeedSignature, providedSeedSignature, StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogWarning("Seed signature validation failed. Expected: {Expected}, Got: {Got}", calculatedSeedSignature, providedSeedSignature);
@@ -106,7 +106,7 @@ namespace Lamina.Streaming
                 expectedTrailerNames);
         }
 
-        private async Task<string> CalculateSeedSignature(HttpRequest request, string secretAccessKey, string accessKeyId, string dateStamp, string region, string signedHeaders, DateTime requestDateTime, bool isTrailerStreaming = false)
+        private string CalculateSeedSignature(HttpRequest request, string secretAccessKey, string accessKeyId, string dateStamp, string region, string signedHeaders, DateTime requestDateTime, bool isTrailerStreaming = false)
         {
             var amzDate = requestDateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
 

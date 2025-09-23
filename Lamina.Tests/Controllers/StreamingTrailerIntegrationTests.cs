@@ -16,7 +16,7 @@ namespace Lamina.Tests.Controllers
 
         public StreamingTrailerIntegrationTests(WebApplicationFactory<Program> factory)
         {
-            var config = new Dictionary<string, string>
+            var config = new Dictionary<string, string?>
             {
                 ["Authentication:Enabled"] = "true",
                 ["Authentication:Users:0:AccessKeyId"] = "TESTKEY",
@@ -251,7 +251,7 @@ namespace Lamina.Tests.Controllers
             return Encoding.UTF8.GetBytes(body.ToString());
         }
 
-        private async Task<string> CalculateStreamingSignature(string method, string uri, string queryString,
+        private Task<string> CalculateStreamingSignature(string method, string uri, string queryString,
             Dictionary<string, string> headers, string signedHeaders, byte[] payload,
             DateTime dateTime, string accessKey, string secretKey, bool isTrailerStreaming = false)
         {
@@ -279,10 +279,10 @@ namespace Lamina.Tests.Controllers
             var stringToSign = $"{algorithm}\n{amzDate}\n{credentialScope}\n{GetHash(canonicalRequest)}";
 
             var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
-            return GetHmacSha256Hex(signingKey, stringToSign);
+            return Task.FromResult(GetHmacSha256Hex(signingKey, stringToSign));
         }
 
-        private async Task<string> CalculateSignature(string method, string uri, string queryString,
+        private Task<string> CalculateSignature(string method, string uri, string queryString,
             Dictionary<string, string> headers, string signedHeaders, byte[] payload,
             DateTime dateTime, string accessKey, string secretKey)
         {
@@ -306,7 +306,7 @@ namespace Lamina.Tests.Controllers
             var stringToSign = $"{algorithm}\n{amzDate}\n{credentialScope}\n{GetHash(canonicalRequest)}";
 
             var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
-            return GetHmacSha256Hex(signingKey, stringToSign);
+            return Task.FromResult(GetHmacSha256Hex(signingKey, stringToSign));
         }
 
         private string GetCanonicalHeaders(Dictionary<string, string> headers, string signedHeaders)
