@@ -22,6 +22,8 @@ Features supported:
 - Multipart uploads (initiate, upload parts, complete, abort, list parts)
 - S3-compliant XML responses
 - AWS Signature V4 authentication (optional, configurable)
+- AWS Streaming with Signature V4 (STREAMING-AWS4-HMAC-SHA256-PAYLOAD)
+- AWS Streaming with Trailers (STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER)
 - Thread-safe file operations with FileSystemLockManager
 
 ## Development Commands
@@ -74,6 +76,7 @@ docker run -p 8080:8080 lamina
   - `S3Object.cs`: Object entity and related models (PutObjectRequest, GetObjectResponse, etc.)
   - `MultipartUpload.cs`: Multipart upload related models
   - `S3XmlResponses.cs`: XML response DTOs for S3 API compliance
+  - `StreamingTrailer.cs`: Models for AWS streaming trailer support
 
 ### Storage Layer
 
@@ -110,6 +113,25 @@ docker run -p 8080:8080 lamina
   - `FilesystemMultipartUploadMetadataStorage`: Filesystem multipart metadata storage
   - `FileSystemLockManager`: Thread-safe file operations manager
 
+### Streaming Support
+
+- **Lamina/Streaming/** (AWS streaming authentication and chunk processing):
+  - **Core Services**:
+    - `IStreamingAuthenticationService` / `StreamingAuthenticationService`: Creates chunk validators for streaming requests
+
+  - **Chunked Data Processing** (`Lamina/Streaming/Chunked/`):
+    - `ChunkConstants.cs`: Constants for AWS chunked encoding
+    - `ChunkHeader.cs`: Models chunk header information
+    - `ChunkBuffer.cs`: Manages chunk data buffering
+    - `IChunkedDataParser` / `ChunkedDataParser`: Parses AWS chunked encoding format
+
+  - **Signature Validation** (`Lamina/Streaming/Validation/`):
+    - `IChunkSignatureValidator` / `ChunkSignatureValidator`: Validates chunk signatures
+    - `SignatureCalculator.cs`: AWS Signature V4 calculations for streaming
+
+  - **Trailer Support** (`Lamina/Streaming/Trailers/`):
+    - `TrailerParser.cs`: Parses HTTP trailers in streaming requests
+
 ### Services
 
 - **Lamina/Services/**:
@@ -119,15 +141,24 @@ docker run -p 8080:8080 lamina
 ### Helpers
 - **Lamina/Helpers/**:
   - `ETagHelper.cs`: Centralized ETag computation using MD5 (supports byte arrays, files, and streams)
+  - `AwsChunkedEncodingHelper.cs`: Facade for AWS chunked encoding operations (delegates to Streaming components)
 
 ### Tests
 - **Lamina.Tests/**:
   - `Controllers/BucketsControllerIntegrationTests.cs`: Bucket API integration tests
   - `Controllers/ObjectsControllerIntegrationTests.cs`: Object API integration tests
+  - `Controllers/StreamingAuthenticationIntegrationTests.cs`: Streaming authentication integration tests
+  - `Controllers/StreamingMultipartUploadIntegrationTests.cs`: Streaming multipart upload tests
+  - `Controllers/StreamingTrailerIntegrationTests.cs`: Streaming with trailers integration tests
   - `Services/BucketServiceTests.cs`: Bucket storage unit tests
   - `Services/ObjectServiceTests.cs`: Object storage unit tests
   - `Services/MultipartUploadServiceTests.cs`: Multipart upload tests
   - `Services/MultipartUploadCleanupServiceTests.cs`: Cleanup service tests
+  - `Services/StreamingAuthenticationServiceTests.cs`: Streaming authentication service tests
+  - `Services/StreamingTrailerSupportTests.cs`: Streaming trailer support tests
+  - `Helpers/AwsChunkedEncodingStreamTests.cs`: Chunked encoding stream processing tests
+  - `Helpers/AwsChunkedEncodingTrailerTests.cs`: Chunked encoding with trailers tests
+  - `Models/StreamingTrailerModelTests.cs`: Streaming trailer model tests
 
 ## S3 API Implementation Details
 
@@ -217,13 +248,12 @@ Configure in `appsettings.json` or `appsettings.Development.json`:
   "FilesystemStorage": {
     "DataDirectory": "/tmp/laminas/data",
     "MetadataDirectory": "/tmp/laminas/metadata",  // Required for SeparateDirectory mode
-    "MetadataMode": "SeparateDirectory",  // or "Inline" (default: SeparateDirectory)
+    "MetadataMode": "Inline",  // or "SeparateDirectory" (default: Inline)
     "InlineMetadataDirectoryName": ".lamina-meta",  // Name of metadata directory in inline mode (default: .lamina-meta)
+    "TempFilePrefix": ".lamina-tmp-",  // Prefix for temporary files (default: .lamina-tmp-)
     "NetworkMode": "None",  // or "CIFS" or "NFS" for network filesystem support
     "RetryCount": 3,  // Number of retries for file operations (used with CIFS/NFS)
-    "RetryDelayMs": 100,  // Initial delay between retries in milliseconds
-    "DirectoryCleanupDelayMs": 500,  // Delay before directory cleanup (useful for CIFS)
-    "DisableMetadataCaching": false  // Set to true for CIFS to avoid stale cache issues
+    "RetryDelayMs": 100  // Initial delay between retries in milliseconds
   }
 }
 ```
@@ -271,9 +301,7 @@ Lamina includes special support for network filesystems to handle their unique c
     "MetadataMode": "SeparateDirectory",
     "NetworkMode": "CIFS",
     "RetryCount": 5,  // More retries for CIFS
-    "RetryDelayMs": 200,  // Longer initial delay
-    "DirectoryCleanupDelayMs": 1000,  // Wait for file handles to release
-    "DisableMetadataCaching": true  // Avoid stale cache issues
+    "RetryDelayMs": 200  // Longer initial delay
   }
 }
 ```
@@ -288,9 +316,7 @@ Lamina includes special support for network filesystems to handle their unique c
     "MetadataMode": "SeparateDirectory",
     "NetworkMode": "NFS",
     "RetryCount": 3,
-    "RetryDelayMs": 100,
-    "DirectoryCleanupDelayMs": 0,  // Not needed for NFS
-    "DisableMetadataCaching": false
+    "RetryDelayMs": 100
   }
 }
 ```
@@ -298,7 +324,6 @@ Lamina includes special support for network filesystems to handle their unique c
 **Network Filesystem Features**:
 - **Retry Logic**: Automatic retry with exponential backoff for transient network errors
 - **CIFS-Safe Atomic Moves**: Special handling for file overwrites on CIFS
-- **Directory Cleanup Delays**: Configurable delays to handle CIFS file handle release
 - **ESTALE Error Handling**: Automatic detection and retry of stale NFS file handles
 - **Network-Aware Error Detection**: Recognizes network-specific error patterns
 
@@ -368,6 +393,14 @@ Lamina includes special support for network filesystems to handle their unique c
 
 ### Streaming Multipart Assembly
 - Multipart uploads are now assembled using streaming to eliminate memory overhead
+
+### AWS Streaming Authentication
+- **AWS Signature V4 Streaming Support**: Full implementation of STREAMING-AWS4-HMAC-SHA256-PAYLOAD authentication
+- **AWS Streaming with Trailers**: Support for STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER with HTTP trailers
+- **Refactored Architecture**: Streaming code moved from `Services/` to dedicated `Streaming/` namespace for better organization
+- **Modular Components**: Separated chunked data parsing, signature validation, and trailer processing into focused components
+- **Enhanced S3 Compatibility**: Improved compatibility with AWS SDKs and S3 clients using streaming uploads
+- **Middleware Integration**: Streaming authentication integrated into S3AuthenticationMiddleware for seamless handling
 
 ### Inline Metadata Mode
 - New metadata storage mode where metadata is stored alongside data files

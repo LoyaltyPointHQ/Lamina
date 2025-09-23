@@ -1,19 +1,7 @@
 using Lamina.Models;
-using Microsoft.AspNetCore.Http;
 
-namespace Lamina.Services
+namespace Lamina.Streaming.Validation
 {
-    /// <summary>
-    /// Interface for handling streaming authentication with chunk signature verification
-    /// </summary>
-    public interface IStreamingAuthenticationService
-    {
-        /// <summary>
-        /// Creates a streaming validator for STREAMING-AWS4-HMAC-SHA256-PAYLOAD requests
-        /// </summary>
-        Task<IChunkSignatureValidator?> CreateChunkValidatorAsync(HttpRequest request, S3User user);
-    }
-
     /// <summary>
     /// Validates chunk signatures in streaming uploads
     /// </summary>

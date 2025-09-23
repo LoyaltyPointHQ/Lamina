@@ -5,7 +5,7 @@ using Moq;
 using Xunit;
 using Lamina.Helpers;
 using Lamina.Models;
-using Lamina.Services;
+using Lamina.Streaming.Validation;
 
 namespace Lamina.Tests.Helpers
 {

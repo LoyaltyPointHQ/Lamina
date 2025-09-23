@@ -5,6 +5,8 @@ using Moq;
 using Xunit;
 using Lamina.Models;
 using Lamina.Services;
+using Lamina.Streaming;
+using Lamina.Streaming.Validation;
 using System.Security.Cryptography;
 
 namespace Lamina.Tests.Services
@@ -407,13 +409,17 @@ namespace Lamina.Tests.Services
 
         private async Task<string> CalculateTrailerSignatureForTest(IChunkSignatureValidator validator, List<StreamingTrailer> trailers)
         {
-            // Use reflection to access the private CalculateTrailerSignature method
-            var validatorType = validator.GetType();
-            var calculateMethod = validatorType.GetMethod("CalculateTrailerSignature",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.NotNull(calculateMethod);
+            // Cast to concrete type to access internal properties
+            var concreteValidator = (ChunkSignatureValidator)validator;
 
-            return (string)calculateMethod.Invoke(validator, new object[] { trailers });
+            // Build trailer header string and calculate signature using SignatureCalculator
+            var trailerHeaderString = SignatureCalculator.BuildTrailerHeaderString(trailers);
+            return SignatureCalculator.CalculateTrailerSignature(
+                concreteValidator.SigningKey,
+                concreteValidator.RequestDateTime,
+                concreteValidator.Region,
+                concreteValidator.PreviousSignature,
+                trailerHeaderString);
         }
 
         private async Task<string> CalculateStreamingSignature(string method, string uri, string queryString,

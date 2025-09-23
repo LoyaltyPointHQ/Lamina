@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
 using Lamina.Helpers;
-using Lamina.Services;
+using Lamina.Streaming.Validation;
 
 namespace Lamina.Tests.Helpers
 {
@@ -137,7 +137,7 @@ namespace Lamina.Tests.Helpers
                 await AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(
                     pipeReader, destinationStream, _chunkValidatorMock.Object, _loggerMock.Object));
 
-            Assert.Contains("Invalid chunk signature at chunk index 1", exception.Message);
+            Assert.Contains("Invalid chunk signature at chunk 1", exception.Message);
         }
 
         private byte[] CreateSimpleChunkedData()

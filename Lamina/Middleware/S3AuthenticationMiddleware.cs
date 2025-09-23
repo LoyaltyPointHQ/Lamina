@@ -2,6 +2,7 @@ using System.Xml.Serialization;
 using Microsoft.AspNetCore.Http;
 using Lamina.Models;
 using Lamina.Services;
+using Lamina.Streaming;
 
 namespace Lamina.Middleware
 {

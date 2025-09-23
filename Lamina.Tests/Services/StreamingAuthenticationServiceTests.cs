@@ -5,6 +5,7 @@ using Moq;
 using Xunit;
 using Lamina.Models;
 using Lamina.Services;
+using Lamina.Streaming;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -251,13 +252,15 @@ namespace Lamina.Tests.Services
             // Act & Assert - Test chunk validation
             var chunkData = new byte[] { 0x48, 0x65, 0x6c, 0x6c, 0x6f }; // "Hello"
 
-            // Calculate the expected chunk signature using reflection
-            var validatorType = validator.GetType();
-            var calculateMethod = validatorType.GetMethod("CalculateChunkSignature",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.NotNull(calculateMethod);
-
-            var expectedChunkSignature = (string)calculateMethod.Invoke(validator, new object[] { new ReadOnlyMemory<byte>(chunkData), false });
+            // Use SignatureCalculator directly to get expected signature
+            var signingKey = GetSigningKey("testsecret", "20240101", "us-east-1", "s3");
+            var expectedChunkSignature = Lamina.Streaming.Validation.SignatureCalculator.CalculateChunkSignature(
+                signingKey,
+                dateTime,
+                "us-east-1",
+                signature, // previous signature
+                new ReadOnlyMemory<byte>(chunkData),
+                false);
 
             // Test with the correct signature
             var result = await validator.ValidateChunkAsync(chunkData, expectedChunkSignature, false);
@@ -315,13 +318,15 @@ namespace Lamina.Tests.Services
             // Act - Test last chunk (empty)
             var emptyChunk = Array.Empty<byte>();
 
-            // Calculate expected signature for the last chunk
-            var validatorType = validator.GetType();
-            var calculateMethod = validatorType.GetMethod("CalculateChunkSignature",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Assert.NotNull(calculateMethod);
-
-            var expectedChunkSignature = (string)calculateMethod.Invoke(validator, new object[] { new ReadOnlyMemory<byte>(emptyChunk), true });
+            // Calculate expected signature for the last chunk using SignatureCalculator
+            var signingKey = GetSigningKey("testsecret", "20240101", "us-east-1", "s3");
+            var expectedChunkSignature = Lamina.Streaming.Validation.SignatureCalculator.CalculateChunkSignature(
+                signingKey,
+                dateTime,
+                "us-east-1",
+                signature, // previous signature
+                new ReadOnlyMemory<byte>(emptyChunk),
+                true);
 
             var result = await validator.ValidateChunkAsync(emptyChunk, expectedChunkSignature, true);
 
@@ -382,15 +387,15 @@ namespace Lamina.Tests.Services
             // Act - Calculate what the first chunk signature should be
             var chunkData = new byte[] { 0x48, 0x65, 0x6c, 0x6c, 0x6f }; // "Hello"
 
-            // Use reflection to access the private CalculateChunkSignature method
-            var validatorType = validator.GetType();
-            var calculateMethod = validatorType.GetMethod("CalculateChunkSignature",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-            Assert.NotNull(calculateMethod);
-
-            // Calculate what we expect the signature to be
-            var expectedSignature = (string)calculateMethod.Invoke(validator, new object[] { new ReadOnlyMemory<byte>(chunkData), false });
+            // Calculate what we expect the signature to be using SignatureCalculator
+            var signingKey = GetSigningKey("testsecret", "20240101", "us-east-1", "s3");
+            var expectedSignature = Lamina.Streaming.Validation.SignatureCalculator.CalculateChunkSignature(
+                signingKey,
+                dateTime,
+                "us-east-1",
+                signature, // previous signature
+                new ReadOnlyMemory<byte>(chunkData),
+                false);
 
             // Simulate successful validation with the correct signature
             var result = await validator.ValidateChunkAsync(chunkData, expectedSignature, false);
@@ -401,7 +406,13 @@ namespace Lamina.Tests.Services
 
             // Now test second chunk - the previousSignature should be our calculated signature
             var chunkData2 = new byte[] { 0x57, 0x6f, 0x72, 0x6c, 0x64 }; // "World"
-            var expectedSignature2 = (string)calculateMethod.Invoke(validator, new object[] { new ReadOnlyMemory<byte>(chunkData2), false });
+            var expectedSignature2 = Lamina.Streaming.Validation.SignatureCalculator.CalculateChunkSignature(
+                signingKey,
+                dateTime,
+                "us-east-1",
+                expectedSignature, // Use the first chunk's signature as previous
+                new ReadOnlyMemory<byte>(chunkData2),
+                false);
 
             var result2 = await validator.ValidateChunkAsync(chunkData2, expectedSignature2, false);
 
