@@ -54,6 +54,7 @@ namespace Lamina.Streaming.Chunked
 
                     if (chunkResult.IsFinalChunk)
                     {
+                        dataReader.AdvanceTo(buffer.End);
                         break;
                     }
 
