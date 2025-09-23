@@ -3,6 +3,7 @@ using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Lamina.Services;
+using Lamina.Models;
 using Microsoft.Extensions.Logging;
 
 namespace Lamina.Helpers
@@ -157,6 +158,265 @@ namespace Lamina.Helpers
             finally
             {
                 await dataReader.CompleteAsync();
+            }
+        }
+
+        /// <summary>
+        /// Parses AWS chunked encoding data with trailer support and writes to a stream
+        /// </summary>
+        /// <param name="dataReader">The pipe reader containing chunked data</param>
+        /// <param name="destinationStream">The stream to write decoded data to</param>
+        /// <param name="chunkValidator">Optional chunk signature validator</param>
+        /// <param name="logger">Optional logger for debugging</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Result including total bytes written and trailer information</returns>
+        public static async Task<ChunkedDataResult> ParseChunkedDataWithTrailersToStreamAsync(
+            PipeReader dataReader,
+            Stream destinationStream,
+            IChunkSignatureValidator? chunkValidator = null,
+            ILogger? logger = null,
+            CancellationToken cancellationToken = default)
+        {
+            var result = new ChunkedDataResult();
+            byte[] remainingBuffer = Array.Empty<byte>();
+
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    var readResult = await dataReader.ReadAsync(cancellationToken);
+                    var buffer = readResult.Buffer;
+
+                    if (buffer.IsEmpty && readResult.IsCompleted)
+                    {
+                        break;
+                    }
+
+                    // Combine remaining buffer with new data
+                    var combinedLength = remainingBuffer.Length + (int)buffer.Length;
+                    var dataBuffer = new byte[combinedLength];
+                    remainingBuffer.CopyTo(dataBuffer, 0);
+
+                    var position = remainingBuffer.Length;
+                    foreach (var segment in buffer)
+                    {
+                        segment.Span.CopyTo(dataBuffer.AsSpan(position));
+                        position += segment.Length;
+                    }
+
+                    dataReader.AdvanceTo(buffer.End);
+
+                    // Parse chunks
+                    var parsePosition = 0;
+                    var processingResult = await ProcessChunksInBuffer(
+                        dataBuffer,
+                        parsePosition,
+                        destinationStream,
+                        chunkValidator,
+                        logger,
+                        cancellationToken);
+
+                    result.TotalBytesWritten += processingResult.bytesWritten;
+                    parsePosition = processingResult.newPosition;
+
+                    if (processingResult.finalChunkReached)
+                    {
+                        // Parse trailers if validator expects them
+                        if (chunkValidator?.ExpectsTrailers == true && parsePosition < dataBuffer.Length)
+                        {
+                            var trailerResult = await ParseTrailers(
+                                dataBuffer,
+                                parsePosition,
+                                chunkValidator,
+                                logger);
+
+                            result.Trailers = trailerResult.trailers;
+                            result.TrailerValidationResult = trailerResult.isValid;
+                            result.ErrorMessage = trailerResult.errorMessage;
+                        }
+                        break;
+                    }
+
+                    // Save any remaining unparsed data
+                    if (parsePosition < dataBuffer.Length)
+                    {
+                        var remainingLength = dataBuffer.Length - parsePosition;
+                        remainingBuffer = new byte[remainingLength];
+                        Array.Copy(dataBuffer, parsePosition, remainingBuffer, 0, remainingLength);
+                    }
+                    else
+                    {
+                        remainingBuffer = Array.Empty<byte>();
+                    }
+                }
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                logger?.LogError(ex, "Error parsing chunked data with trailers");
+                result.ErrorMessage = ex.Message;
+                return result;
+            }
+        }
+
+        private static async Task<(long bytesWritten, bool finalChunkReached, int newPosition)> ProcessChunksInBuffer(
+            byte[] dataBuffer,
+            int position,
+            Stream destinationStream,
+            IChunkSignatureValidator? chunkValidator,
+            ILogger? logger,
+            CancellationToken cancellationToken)
+        {
+            long totalBytesWritten = 0;
+            var dataLength = dataBuffer.Length;
+
+            while (position < dataLength)
+            {
+                // Parse chunk header: size;chunk-signature=...\r\n
+                var headerEnd = FindPattern(dataBuffer, position, new byte[] { 0x0D, 0x0A });
+                if (headerEnd == -1)
+                {
+                    // Incomplete header, need more data
+                    break;
+                }
+
+                var headerLine = Encoding.ASCII.GetString(dataBuffer, position, headerEnd - position);
+                position = headerEnd + 2; // Skip \r\n
+
+                // Parse chunk size and signature
+                var parts = headerLine.Split(';');
+                if (parts.Length < 2 || !parts[1].StartsWith("chunk-signature="))
+                {
+                    throw new InvalidOperationException($"Invalid chunk header: {headerLine}");
+                }
+
+                var chunkSizeStr = parts[0];
+                var chunkSignature = parts[1].Substring("chunk-signature=".Length);
+
+                if (!int.TryParse(chunkSizeStr, System.Globalization.NumberStyles.HexNumber, null, out var chunkSize))
+                {
+                    throw new InvalidOperationException($"Invalid chunk size: {chunkSizeStr}");
+                }
+
+                if (chunkSize == 0)
+                {
+                    // Final chunk - validate signature
+                    if (chunkValidator != null)
+                    {
+                        using var emptyStream = new MemoryStream();
+                        var isValid = await chunkValidator.ValidateChunkStreamAsync(emptyStream, 0, chunkSignature, isLastChunk: true);
+                        if (!isValid)
+                        {
+                            throw new InvalidOperationException("Invalid final chunk signature");
+                        }
+                    }
+
+                    // Skip the final \r\n
+                    if (position + 2 <= dataLength)
+                    {
+                        position += 2;
+                    }
+                    return (totalBytesWritten, true, position);
+                }
+
+                // Check if we have enough data for the chunk
+                if (position + chunkSize + 2 > dataLength)
+                {
+                    // Need more data, rewind to start of this chunk header
+                    position = headerEnd + 2 - headerLine.Length - 2;
+                    break;
+                }
+
+                // Write chunk data to destination stream
+                await destinationStream.WriteAsync(dataBuffer.AsMemory(position, chunkSize));
+                totalBytesWritten += chunkSize;
+
+                // Validate chunk if validator is provided
+                if (chunkValidator != null)
+                {
+                    using var chunkStream = new MemoryStream(dataBuffer, position, chunkSize, writable: false);
+                    var isValid = await chunkValidator.ValidateChunkStreamAsync(chunkStream, chunkSize, chunkSignature, isLastChunk: false);
+                    if (!isValid)
+                    {
+                        throw new InvalidOperationException($"Invalid chunk signature at chunk {chunkValidator.ChunkIndex}");
+                    }
+                }
+
+                position += chunkSize + 2; // Skip chunk data and trailing \r\n
+            }
+
+            return (totalBytesWritten, false, position);
+        }
+
+        private static async Task<(List<StreamingTrailer> trailers, bool isValid, string? errorMessage)> ParseTrailers(
+            byte[] dataBuffer,
+            int startPosition,
+            IChunkSignatureValidator chunkValidator,
+            ILogger? logger)
+        {
+            var trailers = new List<StreamingTrailer>();
+            var position = startPosition;
+            string? trailerSignature = null;
+
+            try
+            {
+                // Parse trailer headers until we find x-amz-trailer-signature or reach end
+                while (position < dataBuffer.Length)
+                {
+                    var lineEnd = FindPattern(dataBuffer, position, new byte[] { 0x0D, 0x0A });
+                    if (lineEnd == -1)
+                    {
+                        break; // Incomplete line
+                    }
+
+                    var line = Encoding.UTF8.GetString(dataBuffer, position, lineEnd - position);
+                    position = lineEnd + 2;
+
+                    if (string.IsNullOrWhiteSpace(line))
+                    {
+                        // Empty line marks end of trailers
+                        break;
+                    }
+
+                    var colonIndex = line.IndexOf(':');
+                    if (colonIndex == -1)
+                    {
+                        logger?.LogWarning("Invalid trailer header format: {Line}", line);
+                        continue;
+                    }
+
+                    var headerName = line.Substring(0, colonIndex).Trim();
+                    var headerValue = line.Substring(colonIndex + 1).Trim();
+
+                    if (headerName.Equals("x-amz-trailer-signature", StringComparison.OrdinalIgnoreCase))
+                    {
+                        trailerSignature = headerValue;
+                        break; // This should be the last trailer
+                    }
+                    else
+                    {
+                        trailers.Add(new StreamingTrailer { Name = headerName, Value = headerValue });
+                    }
+                }
+
+                // Validate trailers if we have a signature
+                if (!string.IsNullOrEmpty(trailerSignature))
+                {
+                    var validationResult = await chunkValidator.ValidateTrailerAsync(trailers, trailerSignature);
+                    return (validationResult.Trailers, validationResult.IsValid, validationResult.ErrorMessage);
+                }
+                else if (chunkValidator.ExpectsTrailers)
+                {
+                    return (trailers, false, "Missing x-amz-trailer-signature");
+                }
+
+                return (trailers, true, null);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogError(ex, "Error parsing trailers");
+                return (trailers, false, ex.Message);
             }
         }
 

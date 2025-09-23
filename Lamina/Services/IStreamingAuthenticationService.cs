@@ -30,6 +30,11 @@ namespace Lamina.Services
         Task<bool> ValidateChunkStreamAsync(Stream chunkStream, long chunkSize, string chunkSignature, bool isLastChunk);
 
         /// <summary>
+        /// Validates trailing headers with their signature
+        /// </summary>
+        Task<TrailerValidationResult> ValidateTrailerAsync(List<StreamingTrailer> trailers, string trailerSignature);
+
+        /// <summary>
         /// Gets the expected chunk size (excluding metadata)
         /// </summary>
         long ExpectedDecodedLength { get; }
@@ -38,5 +43,15 @@ namespace Lamina.Services
         /// Current chunk index
         /// </summary>
         int ChunkIndex { get; }
+
+        /// <summary>
+        /// Whether this validator expects trailers
+        /// </summary>
+        bool ExpectsTrailers { get; }
+
+        /// <summary>
+        /// List of expected trailer header names
+        /// </summary>
+        List<string> ExpectedTrailerNames { get; }
     }
 }

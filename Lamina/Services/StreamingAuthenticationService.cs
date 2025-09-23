@@ -29,7 +29,10 @@ namespace Lamina.Services
 
             // Check if this is a streaming request
             var contentSha256 = request.Headers["x-amz-content-sha256"].FirstOrDefault();
-            if (contentSha256 != "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
+            var isTrailerStreaming = contentSha256 == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER";
+            var isRegularStreaming = contentSha256 == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
+
+            if (!isTrailerStreaming && !isRegularStreaming)
             {
                 return null;
             }
@@ -63,8 +66,22 @@ namespace Lamina.Services
 
             var requestDateTime = DateTime.ParseExact(xAmzDate, "yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
 
+            // Parse expected trailers if this is a trailer streaming request
+            var expectedTrailerNames = new List<string>();
+            if (isTrailerStreaming)
+            {
+                var trailerHeader = request.Headers["x-amz-trailer"].FirstOrDefault();
+                if (!string.IsNullOrEmpty(trailerHeader))
+                {
+                    expectedTrailerNames = trailerHeader.Split(',')
+                        .Select(t => t.Trim().ToLower())
+                        .ToList();
+                    _logger.LogDebug("Expected trailers: {Trailers}", string.Join(", ", expectedTrailerNames));
+                }
+            }
+
             // Validate the seed signature by calculating what it should be for the initial request
-            var calculatedSeedSignature = await CalculateSeedSignature(request, user.SecretAccessKey, accessKeyId, dateStamp, region, signedHeaders, requestDateTime);
+            var calculatedSeedSignature = await CalculateSeedSignature(request, user.SecretAccessKey, accessKeyId, dateStamp, region, signedHeaders, requestDateTime, isTrailerStreaming);
             if (!string.Equals(calculatedSeedSignature, providedSeedSignature, StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogWarning("Seed signature validation failed. Expected: {Expected}, Got: {Got}", calculatedSeedSignature, providedSeedSignature);
@@ -86,10 +103,12 @@ namespace Lamina.Services
                 GetHeaders(request.Headers),
                 signedHeaders,
                 providedSeedSignature,
-                _logger);
+                _logger,
+                isTrailerStreaming,
+                expectedTrailerNames);
         }
 
-        private async Task<string> CalculateSeedSignature(HttpRequest request, string secretAccessKey, string accessKeyId, string dateStamp, string region, string signedHeaders, DateTime requestDateTime)
+        private async Task<string> CalculateSeedSignature(HttpRequest request, string secretAccessKey, string accessKeyId, string dateStamp, string region, string signedHeaders, DateTime requestDateTime, bool isTrailerStreaming = false)
         {
             var amzDate = requestDateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
 
@@ -102,8 +121,10 @@ namespace Lamina.Services
             // Build canonical headers
             var canonicalHeaders = GetCanonicalHeaders(headers, signedHeaders);
 
-            // For streaming requests, the payload hash is always "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
-            var payloadHash = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
+            // For streaming requests, the payload hash depends on the streaming type
+            var payloadHash = isTrailerStreaming
+                ? "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"
+                : "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
 
             // Encode the URI path segments for the canonical request (following AWS spec)
             var encodedUri = EncodeUri(canonicalUri);
@@ -270,6 +291,8 @@ namespace Lamina.Services
         private readonly string _signedHeaders;
         private readonly string _seedSignature;
         private readonly ILogger _logger;
+        private readonly bool _expectsTrailers;
+        private readonly List<string> _expectedTrailerNames;
         private int _chunkIndex;
         private string _previousSignature;
 
@@ -283,7 +306,9 @@ namespace Lamina.Services
             Dictionary<string, string> headers,
             string signedHeaders,
             string seedSignature,
-            ILogger logger)
+            ILogger logger,
+            bool expectsTrailers = false,
+            List<string>? expectedTrailerNames = null)
         {
             _signingKey = signingKey;
             _requestDateTime = requestDateTime;
@@ -295,6 +320,8 @@ namespace Lamina.Services
             _signedHeaders = signedHeaders;
             _seedSignature = seedSignature;
             _logger = logger;
+            _expectsTrailers = expectsTrailers;
+            _expectedTrailerNames = expectedTrailerNames ?? new List<string>();
             _chunkIndex = 0;
 
             // Use the provided seed signature from initial request
@@ -303,6 +330,8 @@ namespace Lamina.Services
 
         public long ExpectedDecodedLength => _expectedDecodedLength;
         public int ChunkIndex => _chunkIndex;
+        public bool ExpectsTrailers => _expectsTrailers;
+        public List<string> ExpectedTrailerNames => _expectedTrailerNames;
 
         public async Task<bool> ValidateChunkAsync(ReadOnlyMemory<byte> chunkData, string chunkSignature, bool isLastChunk)
         {
@@ -358,6 +387,94 @@ namespace Lamina.Services
             }
         }
 
+        public async Task<TrailerValidationResult> ValidateTrailerAsync(List<StreamingTrailer> trailers, string trailerSignature)
+        {
+            var result = new TrailerValidationResult();
+
+            try
+            {
+                if (!_expectsTrailers)
+                {
+                    result.ErrorMessage = "This validator does not expect trailers";
+                    return result;
+                }
+
+                // Validate that all expected trailer names are present
+                var providedTrailerNames = trailers.Select(t => t.Name.ToLower()).ToHashSet();
+                var missingTrailers = _expectedTrailerNames.Except(providedTrailerNames).ToList();
+
+                if (missingTrailers.Any())
+                {
+                    result.ErrorMessage = $"Missing expected trailers: {string.Join(", ", missingTrailers)}";
+                    return result;
+                }
+
+                // Calculate expected trailer signature
+                var expectedSignature = CalculateTrailerSignature(trailers);
+                result.IsValid = string.Equals(expectedSignature, trailerSignature, StringComparison.OrdinalIgnoreCase);
+
+                if (result.IsValid)
+                {
+                    result.Trailers = trailers;
+                    _logger.LogDebug("Trailer signature validation successful: {TrailerSignature}", trailerSignature);
+                }
+                else
+                {
+                    result.ErrorMessage = $"Trailer signature validation failed. Expected: {expectedSignature}, Got: {trailerSignature}";
+                    _logger.LogWarning("Trailer signature validation failed. Expected: {Expected}, Got: {Got}", expectedSignature, trailerSignature);
+                }
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error validating trailer signature");
+                result.ErrorMessage = $"Error validating trailer: {ex.Message}";
+                return result;
+            }
+        }
+
+        private string CalculateTrailerSignature(List<StreamingTrailer> trailers)
+        {
+            var dateStamp = _requestDateTime.ToString("yyyyMMdd");
+            var amzDate = _requestDateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            // AWS Trailer signature format:
+            // AWS4-HMAC-SHA256-TRAILER\n
+            // timestamp\n
+            // credential_scope\n
+            // previous_signature\n
+            // hash_of_trailer_headers
+
+            var algorithm = "AWS4-HMAC-SHA256-TRAILER";
+            var credentialScope = $"{dateStamp}/{_region}/s3/aws4_request";
+
+            // Build trailer header string for hashing
+            var trailerHeaderString = BuildTrailerHeaderString(trailers);
+            var trailerHash = GetHash(Encoding.UTF8.GetBytes(trailerHeaderString));
+
+            var stringToSign = $"{algorithm}\n{amzDate}\n{credentialScope}\n{_previousSignature}\n{trailerHash}";
+
+            _logger.LogDebug("Trailer signature string to sign: {StringToSign}", stringToSign.Replace("\n", "\\n"));
+            _logger.LogDebug("Trailer headers: {TrailerHeaders}", trailerHeaderString);
+            _logger.LogDebug("Previous signature for trailer: {PreviousSignature}", _previousSignature);
+
+            return GetHmacSha256Hex(_signingKey, stringToSign);
+        }
+
+        private string BuildTrailerHeaderString(List<StreamingTrailer> trailers)
+        {
+            // Sort trailers by name for consistent hashing
+            var sortedTrailers = trailers.OrderBy(t => t.Name.ToLower()).ToList();
+            var builder = new StringBuilder();
+
+            foreach (var trailer in sortedTrailers)
+            {
+                builder.Append($"{trailer.Name.ToLower()}:{trailer.Value}\n");
+            }
+
+            return builder.ToString();
+        }
 
         private string CalculateChunkSignature(ReadOnlyMemory<byte> chunkData, bool isLastChunk)
         {
