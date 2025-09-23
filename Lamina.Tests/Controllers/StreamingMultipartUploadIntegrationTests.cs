@@ -360,6 +360,11 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
         var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/{key}?partNumber={partNumber}&uploadId={uploadId}");
         request.Headers.Add("Host", "localhost");
         request.Headers.Add("x-amz-date", amzDate);
+
+        // Add content SHA256 header for proper signature validation
+        var payloadHash = GetHash(data);
+        request.Headers.Add("x-amz-content-sha256", payloadHash);
+
         request.Content = new ByteArrayContent(data);
 
         var signature = await CalculateSignature(
@@ -369,9 +374,10 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
             new Dictionary<string, string>
             {
                 ["host"] = "localhost",
-                ["x-amz-date"] = amzDate
+                ["x-amz-date"] = amzDate,
+                ["x-amz-content-sha256"] = payloadHash
             },
-            "host;x-amz-date",
+            "host;x-amz-date;x-amz-content-sha256",
             data,
             dateTime,
             "TESTKEY",
@@ -379,7 +385,7 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
 
         request.Headers.TryAddWithoutValidation("Authorization",
             $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateStamp}/us-east-1/s3/aws4_request, " +
-            $"SignedHeaders=host;x-amz-date, Signature={signature}");
+            $"SignedHeaders=host;x-amz-date;x-amz-content-sha256, Signature={signature}");
 
         var response = await _client.SendAsync(request);
         response.EnsureSuccessStatusCode();
@@ -408,6 +414,11 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
         var request = new HttpRequestMessage(HttpMethod.Post, $"/{bucketName}/{key}?uploadId={uploadId}");
         request.Headers.Add("Host", "localhost");
         request.Headers.Add("x-amz-date", amzDate);
+
+        // Add content SHA256 header for proper signature validation
+        var payloadHash = GetHash(requestBytes);
+        request.Headers.Add("x-amz-content-sha256", payloadHash);
+
         request.Content = new ByteArrayContent(requestBytes);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/xml");
 
@@ -418,9 +429,10 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
             new Dictionary<string, string>
             {
                 ["host"] = "localhost",
-                ["x-amz-date"] = amzDate
+                ["x-amz-date"] = amzDate,
+                ["x-amz-content-sha256"] = payloadHash
             },
-            "host;x-amz-date",
+            "host;x-amz-date;x-amz-content-sha256",
             requestBytes,
             dateTime,
             "TESTKEY",
@@ -428,7 +440,7 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
 
         request.Headers.TryAddWithoutValidation("Authorization",
             $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateStamp}/us-east-1/s3/aws4_request, " +
-            $"SignedHeaders=host;x-amz-date, Signature={signature}");
+            $"SignedHeaders=host;x-amz-date;x-amz-content-sha256, Signature={signature}");
 
         var response = await _client.SendAsync(request);
         response.EnsureSuccessStatusCode();

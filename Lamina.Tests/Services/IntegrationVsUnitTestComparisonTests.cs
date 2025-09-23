@@ -111,18 +111,23 @@ namespace Lamina.Tests.Services
             unitTestContext.Request.ContentLength = testData.Length;
             unitTestContext.Request.Body = new MemoryStream(testData);
 
+            // Add content SHA256 header for proper signature validation
+            var payloadHash = GetHash(testData);
+            unitTestContext.Request.Headers["x-amz-content-sha256"] = payloadHash;
+
             // Calculate signature for unit test
             var unitTestHeaders = new Dictionary<string, string>
             {
                 {"host", "localhost"},
-                {"x-amz-date", amzDate}
+                {"x-amz-date", amzDate},
+                {"x-amz-content-sha256", payloadHash}
             };
 
-            var unitTestSignature = await CalculateSignature("PUT", $"/{bucketName}/{key}", "", 
-                unitTestHeaders, "host;x-amz-date", testData, dateTime, "TESTKEY", "testsecret");
+            var unitTestSignature = await CalculateSignature("PUT", $"/{bucketName}/{key}", "",
+                unitTestHeaders, "host;x-amz-date;x-amz-content-sha256", testData, dateTime, "TESTKEY", "testsecret");
 
-            unitTestContext.Request.Headers["Authorization"] = 
-                $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature={unitTestSignature}";
+            unitTestContext.Request.Headers["Authorization"] =
+                $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date;x-amz-content-sha256, Signature={unitTestSignature}";
 
             _output.WriteLine($"Unit test signature: {unitTestSignature}");
 
@@ -138,11 +143,12 @@ namespace Lamina.Tests.Services
             var integrationHeaders = new Dictionary<string, string>
             {
                 ["host"] = "localhost",
-                ["x-amz-date"] = amzDate
+                ["x-amz-date"] = amzDate,
+                ["x-amz-content-sha256"] = payloadHash
             };
 
-            var integrationSignature = await CalculateSignature("PUT", $"/{bucketName}/{key}", "", 
-                integrationHeaders, "host;x-amz-date", testData, dateTime, "TESTKEY", "testsecret");
+            var integrationSignature = await CalculateSignature("PUT", $"/{bucketName}/{key}", "",
+                integrationHeaders, "host;x-amz-date;x-amz-content-sha256", testData, dateTime, "TESTKEY", "testsecret");
 
             _output.WriteLine($"Integration test signature: {integrationSignature}");
             _output.WriteLine($"Signatures match: {unitTestSignature == integrationSignature}");
@@ -151,9 +157,10 @@ namespace Lamina.Tests.Services
             var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/{key}");
             request.Headers.Add("Host", "localhost");
             request.Headers.Add("x-amz-date", amzDate);
-            request.Headers.TryAddWithoutValidation("Authorization", 
+            request.Headers.Add("x-amz-content-sha256", payloadHash);
+            request.Headers.TryAddWithoutValidation("Authorization",
                 $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateStamp}/us-east-1/s3/aws4_request, " +
-                $"SignedHeaders=host;x-amz-date, Signature={integrationSignature}");
+                $"SignedHeaders=host;x-amz-date;x-amz-content-sha256, Signature={integrationSignature}");
             request.Content = new ByteArrayContent(testData);
 
             _output.WriteLine("\nSending integration test request...");
@@ -174,11 +181,11 @@ namespace Lamina.Tests.Services
             _output.WriteLine($"Method: PUT");
             _output.WriteLine($"URI: {EncodeUri($"/{bucketName}/{key}")}");
             _output.WriteLine($"Query: (empty)");
-            _output.WriteLine($"Headers: {GetCanonicalHeaders(integrationHeaders, "host;x-amz-date")}");
-            _output.WriteLine($"Signed headers: host;x-amz-date");
+            _output.WriteLine($"Headers: {GetCanonicalHeaders(integrationHeaders, "host;x-amz-date;x-amz-content-sha256")}");
+            _output.WriteLine($"Signed headers: host;x-amz-date;x-amz-content-sha256");
             _output.WriteLine($"Payload hash: {GetHash(testData)}");
 
-            var expectedCanonicalRequest = $"PUT\n{EncodeUri($"/{bucketName}/{key}")}\n\n{GetCanonicalHeaders(integrationHeaders, "host;x-amz-date")}\nhost;x-amz-date\n{GetHash(testData)}";
+            var expectedCanonicalRequest = $"PUT\n{EncodeUri($"/{bucketName}/{key}")}\n\n{GetCanonicalHeaders(integrationHeaders, "host;x-amz-date;x-amz-content-sha256")}\nhost;x-amz-date;x-amz-content-sha256\n{GetHash(testData)}";
             _output.WriteLine($"\nExpected canonical request:\n{expectedCanonicalRequest}");
 
             var expectedStringToSign = $"AWS4-HMAC-SHA256\n{amzDate}\n{dateStamp}/us-east-1/s3/aws4_request\n{GetHash(expectedCanonicalRequest)}";

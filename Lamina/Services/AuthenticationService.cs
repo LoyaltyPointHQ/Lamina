@@ -50,7 +50,7 @@ namespace Lamina.Services
                     return (false, null, "Unsupported authentication method");
                 }
 
-                var sigV4Request = await ParseSignatureV4Request(request, authHeader);
+                var sigV4Request = ParseSignatureV4Request(request, authHeader);
                 if (sigV4Request == null)
                 {
                     return (false, null, "Invalid authorization header format");
@@ -124,7 +124,7 @@ namespace Lamina.Services
             return bucketPerms.Permissions.Any(p => p.Equals(requiredPermission, StringComparison.OrdinalIgnoreCase));
         }
 
-        private async Task<SignatureV4Request?> ParseSignatureV4Request(HttpRequest request, string authHeader)
+        private SignatureV4Request? ParseSignatureV4Request(HttpRequest request, string authHeader)
         {
             var match = Regex.Match(authHeader, @"AWS4-HMAC-SHA256\s+Credential=([^/]+)/([^/]+)/([^/]+)/s3/aws4_request,\s*SignedHeaders=([^,]+),\s*Signature=([a-fA-F0-9]+)");
             if (!match.Success)
@@ -144,22 +144,7 @@ namespace Lamina.Services
                 return null;
             }
 
-            byte[] payload = Array.Empty<byte>();
-            
-            // Check if this is a streaming request - if so, don't buffer the payload
-            var contentSha256 = request.Headers["x-amz-content-sha256"].FirstOrDefault();
-            var isStreamingPayload = contentSha256 == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
-            
-            if (!isStreamingPayload && request.Body != null)
-            {
-                // Only buffer non-streaming requests
-                request.EnableBuffering();
-                request.Body.Position = 0;
-                using var memoryStream = new MemoryStream();
-                await request.Body.CopyToAsync(memoryStream);
-                payload = memoryStream.ToArray();
-                request.Body.Position = 0;
-            }
+            // We don't read the request body here - follow AWS/MinIO specification
             // For streaming payloads, we leave payload empty and handle validation differently
 
             var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -183,7 +168,7 @@ namespace Lamina.Services
                 CanonicalUri = canonicalUri,
                 CanonicalQueryString = canonicalQueryString,
                 Headers = headers,
-                Payload = payload,
+                Payload = [],
                 Region = region,
                 Service = "s3",
                 RequestDateTime = DateTime.ParseExact(xAmzDate, "yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal),
@@ -219,8 +204,10 @@ namespace Lamina.Services
             {
                 true when request.Headers["x-amz-content-sha256"] == "UNSIGNED-PAYLOAD" => "UNSIGNED-PAYLOAD",
                 true when request.Headers["x-amz-content-sha256"] == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD" => "STREAMING-AWS4-HMAC-SHA256-PAYLOAD",
+                true when request.Headers["x-amz-content-sha256"] == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER" => "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER",
                 true => request.Headers["x-amz-content-sha256"], // Use provided hash
-                false => GetHash(request.Payload) // Calculate from payload
+                // Use empty SHA256 when header is missing (AWS/MinIO specification) - no need to read body
+                false => "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             };
 
             // Encode the URI path segments for the canonical request

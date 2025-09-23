@@ -311,25 +311,30 @@ public class StreamingAuthenticationIntegrationTests : IClassFixture<WebApplicat
         
         request.Headers.Add("Host", "localhost");
         request.Headers.Add("x-amz-date", amzDate);
-        
+
+        // Add content SHA256 header for proper signature validation
+        var payloadHash = GetHash(data);
+        request.Headers.Add("x-amz-content-sha256", payloadHash);
+
         var signature = await CalculateSignature(
-            "PUT", 
-            $"/{bucketName}/{key}", 
-            "", 
+            "PUT",
+            $"/{bucketName}/{key}",
+            "",
             new Dictionary<string, string>
             {
                 ["host"] = "localhost",
-                ["x-amz-date"] = amzDate
+                ["x-amz-date"] = amzDate,
+                ["x-amz-content-sha256"] = payloadHash
             },
-            "host;x-amz-date",
+            "host;x-amz-date;x-amz-content-sha256",
             data,
             dateTime,
             "TESTKEY",
             "testsecret");
 
-        request.Headers.TryAddWithoutValidation("Authorization", 
+        request.Headers.TryAddWithoutValidation("Authorization",
             $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateStamp}/us-east-1/s3/aws4_request, " +
-            $"SignedHeaders=host;x-amz-date, Signature={signature}");
+            $"SignedHeaders=host;x-amz-date;x-amz-content-sha256, Signature={signature}");
 
         request.Content = new ByteArrayContent(data);
         return await _client.SendAsync(request);

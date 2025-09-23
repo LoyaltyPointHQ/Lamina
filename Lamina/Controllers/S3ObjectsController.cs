@@ -9,6 +9,7 @@ using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem.Configuration;
 using Microsoft.Extensions.Options;
 using Lamina.Helpers;
+using System.Text;
 
 namespace Lamina.Controllers;
 
@@ -379,7 +380,7 @@ public class S3ObjectsController : ControllerBase
 
             using (var reader = new StreamReader(Request.Body))
             {
-                var xmlContent = await reader.ReadToEndAsync();
+                var xmlContent = await reader.ReadToEndAsync(cancellationToken);
 
                 // Try to deserialize - first without namespace (most common), then with namespace
                 try
