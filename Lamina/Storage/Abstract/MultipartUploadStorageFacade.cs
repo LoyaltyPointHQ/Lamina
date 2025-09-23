@@ -62,7 +62,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         using var tempStream = new MemoryStream();
         try
         {
-            await Helpers.AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(dataReader, tempStream, chunkValidator, cancellationToken);
+            await Helpers.AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(dataReader, tempStream, chunkValidator, _logger, cancellationToken);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("Invalid") && ex.Message.Contains("signature"))
         {

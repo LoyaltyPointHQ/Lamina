@@ -235,7 +235,8 @@ public class DataFirstObjectStorageTests
     public async Task InMemoryDataStorage_ImplementsNewMethods()
     {
         // Test that InMemoryObjectDataStorage properly implements the new interface methods
-        var storage = new InMemoryObjectDataStorage();
+        var loggerMock = new Mock<ILogger<InMemoryObjectDataStorage>>();
+        var storage = new InMemoryObjectDataStorage(loggerMock.Object);
         var bucketName = "test-bucket";
         var key = "test-key";
         var testData = Encoding.UTF8.GetBytes("Test content");

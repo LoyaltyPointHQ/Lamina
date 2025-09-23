@@ -556,7 +556,7 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
         var chunkSize = isLastChunk ? "0" : chunkData.Length.ToString("x");
         var chunkHash = GetHash(chunkData);
 
-        var stringToSign = $"{algorithm}\n{amzDate}\n{credentialScope}\n{previousSignature}\n{emptyStringHash}\n{chunkSize}\n{chunkHash}";
+        var stringToSign = $"{algorithm}\n{amzDate}\n{credentialScope}\n{previousSignature}\n{emptyStringHash}\n{chunkHash}";
 
         var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
         return GetHmacSha256Hex(signingKey, stringToSign);

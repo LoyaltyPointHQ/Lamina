@@ -3,6 +3,7 @@ using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Lamina.Services;
+using Microsoft.Extensions.Logging;
 
 namespace Lamina.Helpers
 {
@@ -13,11 +14,13 @@ namespace Lamina.Helpers
         /// </summary>
         /// <param name="dataReader">The pipe reader containing chunked data</param>
         /// <param name="chunkValidator">Optional chunk signature validator</param>
+        /// <param name="logger">Optional logger for debugging</param>
         /// <param name="cancellationToken">Cancellation token</param>
         /// <returns>Async enumerable of decoded chunk data</returns>
         public static async IAsyncEnumerable<ReadOnlyMemory<byte>> ParseChunkedDataAsync(
             PipeReader dataReader,
             IChunkSignatureValidator? chunkValidator = null,
+            Microsoft.Extensions.Logging.ILogger? logger = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             byte[] remainingBuffer = Array.Empty<byte>();
@@ -115,6 +118,15 @@ namespace Lamina.Helpers
                         var chunkData = new byte[chunkSize];
                         Array.Copy(dataArray, position, chunkData, 0, chunkSize);
 
+                        // Debug: log chunk details
+                        if (logger != null)
+                        {
+                            var debugBytes = chunkData.Length > 20 ? chunkData.Take(20).ToArray() : chunkData;
+                            var hexString = BitConverter.ToString(debugBytes).Replace("-", " ");
+                            logger.LogDebug("Received chunk - Size: {ChunkSize}, Signature: {ChunkSignature}, First bytes: {FirstBytes}",
+                                chunkSize, chunkSignature, hexString);
+                        }
+
                         // Validate chunk signature if validator is provided
                         if (chunkValidator != null)
                         {
@@ -175,12 +187,14 @@ namespace Lamina.Helpers
         /// <param name="dataReader">The pipe reader containing chunked data</param>
         /// <param name="destinationStream">The stream to write decoded data to</param>
         /// <param name="chunkValidator">Optional chunk signature validator</param>
+        /// <param name="logger">Optional logger for debugging</param>
         /// <param name="cancellationToken">Cancellation token</param>
         /// <returns>Total bytes written</returns>
         public static async Task<long> ParseChunkedDataToStreamAsync(
             PipeReader dataReader,
             Stream destinationStream,
             IChunkSignatureValidator? chunkValidator = null,
+            ILogger? logger = null,
             CancellationToken cancellationToken = default)
         {
             byte[] remainingBuffer = Array.Empty<byte>();
@@ -294,6 +308,15 @@ namespace Lamina.Helpers
                             // Extract chunk data
                             var chunkDataArray = new byte[chunkSize];
                             Array.Copy(dataBuffer, position, chunkDataArray, 0, chunkSize);
+
+                            // Debug: log chunk details
+                            if (logger != null)
+                            {
+                                var debugBytes = chunkDataArray.Length > 20 ? chunkDataArray.Take(20).ToArray() : chunkDataArray;
+                                var hexString = BitConverter.ToString(debugBytes).Replace("-", " ");
+                                logger.LogDebug("Received chunk (streaming) - Size: {ChunkSize}, Signature: {ChunkSignature}, First bytes: {FirstBytes}",
+                                    chunkSize, chunkSignature, hexString);
+                            }
 
                             // Validate chunk signature if validator is provided
                             if (chunkValidator != null)

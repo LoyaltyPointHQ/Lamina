@@ -138,7 +138,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                 // Parse AWS chunked encoding and write decoded data directly to file with signature validation
                 try
                 {
-                    bytesWritten = await AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, cancellationToken);
+                    bytesWritten = await AwsChunkedEncodingHelper.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, _logger, cancellationToken);
                 }
                 catch (InvalidOperationException ex) when (ex.Message.Contains("Invalid") && ex.Message.Contains("signature"))
                 {
