@@ -1,5 +1,5 @@
 apiVersion: v2
-name: lamina
+name: lamina-chart
 description: S3-compatible storage API service with support for Kubernetes and OpenShift
 type: application
 version: 1.0.0
