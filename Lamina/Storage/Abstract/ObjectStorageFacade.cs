@@ -25,31 +25,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
     public async Task<S3Object?> PutObjectAsync(string bucketName, string key, PipeReader dataReader, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
     {
-        try
-        {
-            // Store data and get ETag
-            var (size, etag) = await _dataStorage.StoreDataAsync(bucketName, key, dataReader, cancellationToken);
-
-            // Store metadata
-            var s3Object = await _metadataStorage.StoreMetadataAsync(bucketName, key, etag, size, request, cancellationToken);
-
-            if (s3Object == null)
-            {
-                // Rollback data if metadata storage failed
-                await _dataStorage.DeleteDataAsync(bucketName, key, cancellationToken);
-                _logger.LogError("Failed to store metadata for object {Key} in bucket {BucketName}", key, bucketName);
-                return null;
-            }
-
-            return s3Object;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error storing object {Key} in bucket {BucketName}", key, bucketName);
-            // Try to clean up any partial data
-            await _dataStorage.DeleteDataAsync(bucketName, key, cancellationToken);
-            throw;
-        }
+        return await PutObjectAsync(bucketName, key, dataReader, null, request, cancellationToken);
     }
 
     public async Task<S3Object?> PutObjectAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
@@ -66,18 +42,44 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 return null;
             }
 
-            // Store metadata
-            var s3Object = await _metadataStorage.StoreMetadataAsync(bucketName, key, etag, size, request, cancellationToken);
-
-            if (s3Object == null)
+            // Check if we should store metadata or just return auto-generated object
+            if (ShouldStoreMetadata(key, request))
             {
-                // Rollback data if metadata storage failed
-                await _dataStorage.DeleteDataAsync(bucketName, key, cancellationToken);
-                _logger.LogError("Failed to store metadata for object {Key} in bucket {BucketName}", key, bucketName);
-                return null;
-            }
+                // Store metadata
+                var s3Object = await _metadataStorage.StoreMetadataAsync(bucketName, key, etag, size, request, cancellationToken);
 
-            return s3Object;
+                if (s3Object == null)
+                {
+                    // Rollback data if metadata storage failed
+                    await _dataStorage.DeleteDataAsync(bucketName, key, cancellationToken);
+                    _logger.LogError("Failed to store metadata for object {Key} in bucket {BucketName}", key, bucketName);
+                    return null;
+                }
+
+                return s3Object;
+            }
+            else
+            {
+                // Return object with auto-generated metadata without storing it
+                var dataPath = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+                if (dataPath == null)
+                {
+                    _logger.LogError("Data was stored but cannot be retrieved for object {Key} in bucket {BucketName}", key, bucketName);
+                    return null;
+                }
+
+                var contentType = GetContentTypeFromKey(key);
+                return new S3Object
+                {
+                    Key = key,
+                    BucketName = bucketName,
+                    Size = size,
+                    LastModified = dataPath.Value.lastModified,
+                    ETag = etag,
+                    ContentType = contentType,
+                    Metadata = new Dictionary<string, string>()
+                };
+            }
         }
         catch (Exception ex)
         {
@@ -210,5 +212,33 @@ public class ObjectStorageFacade : IObjectStorageFacade
             ".conf" or ".config" => "text/plain",
             _ => "application/octet-stream" // Default fallback
         };
+    }
+
+    private bool ShouldStoreMetadata(string key, PutObjectRequest? request)
+    {
+        // If no request provided, no metadata to store
+        if (request == null)
+        {
+            return false;
+        }
+
+        // Get the auto-detected content type for comparison
+        var autoDetectedContentType = GetContentTypeFromKey(key);
+
+        // Check if provided content type differs from auto-detected
+        var providedContentType = request.ContentType ?? "application/octet-stream";
+        if (!string.Equals(providedContentType, autoDetectedContentType, StringComparison.OrdinalIgnoreCase))
+        {
+            return true; // Content type is custom, store metadata
+        }
+
+        // Check if there's any user metadata
+        if (request.Metadata != null && request.Metadata.Count > 0)
+        {
+            return true; // User metadata exists, store metadata
+        }
+
+        // Metadata matches defaults, no need to store
+        return false;
     }
 }

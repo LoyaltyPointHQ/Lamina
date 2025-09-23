@@ -203,7 +203,8 @@ docker run -p 8080:8080 lamina
    - **Data is the source of truth** - object existence is determined by data presence, not metadata
    - **Metadata is optional** - if metadata doesn't exist but data does, metadata is generated on-the-fly
    - **Content Type Detection** - automatically detects MIME types based on file extensions
-   - **No forced metadata storage** - missing metadata is generated for read operations but not persisted
+   - **Optimized metadata storage** - metadata is only stored when it differs from auto-generated defaults (custom content types or user metadata)
+   - **Automatic metadata generation** - missing metadata is generated for read operations but not persisted, making this the normal case
 
 5. **Storage Backends**:
 
@@ -369,6 +370,14 @@ Lamina includes special support for network filesystems to handle their unique c
 ```
 
 ## Recent Updates
+
+### Optimized Metadata Storage
+- **Storage optimization**: Metadata is only stored when it differs from auto-generated defaults
+- **Smart comparison**: Compares provided content type with auto-detected type based on file extension
+- **User metadata detection**: Only stores metadata when custom user metadata is present
+- **Reduced storage overhead**: Eliminates redundant metadata files for typical object uploads
+- **Backward compatibility**: Existing metadata files are still read; missing metadata is generated on-the-fly
+- **Code refactoring**: Combined duplicate `PutObjectAsync` overloads using delegation pattern to reduce maintenance overhead
 
 ### Data-First Object Storage
 - **Data is now the source of truth** for object existence
