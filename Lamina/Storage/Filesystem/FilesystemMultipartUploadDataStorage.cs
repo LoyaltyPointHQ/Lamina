@@ -74,7 +74,6 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
                 }
             }
 
-            await dataReader.CompleteAsync();
             await fileStream.FlushAsync(cancellationToken);
         } // FileStream is fully disposed here
 

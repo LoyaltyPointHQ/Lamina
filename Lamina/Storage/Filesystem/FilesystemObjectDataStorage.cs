@@ -83,7 +83,6 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                     }
                 }
 
-                await dataReader.CompleteAsync();
                 await fileStream.FlushAsync(cancellationToken);
             } // FileStream is fully disposed here
 

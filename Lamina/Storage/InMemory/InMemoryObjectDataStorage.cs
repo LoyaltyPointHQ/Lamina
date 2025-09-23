@@ -25,31 +25,24 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         var dataSegments = new List<byte[]>();
         long totalSize = 0;
 
-        try
+        while (!cancellationToken.IsCancellationRequested)
         {
-            while (!cancellationToken.IsCancellationRequested)
+            var result = await dataReader.ReadAsync(cancellationToken);
+            var buffer = result.Buffer;
+
+            if (buffer.Length > 0)
             {
-                var result = await dataReader.ReadAsync(cancellationToken);
-                var buffer = result.Buffer;
-
-                if (buffer.Length > 0)
-                {
-                    var data = buffer.ToArray();
-                    dataSegments.Add(data);
-                    totalSize += data.Length;
-                }
-
-                dataReader.AdvanceTo(buffer.End);
-
-                if (result.IsCompleted)
-                {
-                    break;
-                }
+                var data = buffer.ToArray();
+                dataSegments.Add(data);
+                totalSize += data.Length;
             }
-        }
-        finally
-        {
-            await dataReader.CompleteAsync();
+
+            dataReader.AdvanceTo(buffer.End);
+
+            if (result.IsCompleted)
+            {
+                break;
+            }
         }
 
         var combinedData = new byte[totalSize];

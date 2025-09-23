@@ -29,55 +29,48 @@ namespace Lamina.Streaming.Chunked
         {
             byte[] remainingBuffer = Array.Empty<byte>();
 
-            try
+            while (!cancellationToken.IsCancellationRequested)
             {
-                while (!cancellationToken.IsCancellationRequested)
+                var result = await dataReader.ReadAsync(cancellationToken);
+                var buffer = result.Buffer;
+
+                if (buffer.IsEmpty && result.IsCompleted)
                 {
-                    var result = await dataReader.ReadAsync(cancellationToken);
-                    var buffer = result.Buffer;
-
-                    if (buffer.IsEmpty && result.IsCompleted)
-                    {
-                        break;
-                    }
-
-                    var dataArray = ChunkBuffer.CombineBuffersLegacy(remainingBuffer, buffer);
-                    var position = 0;
-
-                    while (position < dataArray.Length)
-                    {
-                        var chunkResult = ProcessNextChunk(dataArray, position, chunkValidator);
-
-                        if (chunkResult.IsIncomplete)
-                        {
-                            remainingBuffer = ChunkBuffer.ExtractRemainingData(dataArray, position, dataArray.Length);
-                            break;
-                        }
-
-                        if (chunkResult.IsFinalChunk)
-                        {
-                            break;
-                        }
-
-                        if (chunkResult.ChunkData.HasValue)
-                        {
-                            yield return chunkResult.ChunkData.Value;
-                        }
-
-                        position = chunkResult.NewPosition;
-                    }
-
-                    dataReader.AdvanceTo(buffer.End);
-
-                    if (result.IsCompleted)
-                    {
-                        break;
-                    }
+                    break;
                 }
-            }
-            finally
-            {
-                await dataReader.CompleteAsync();
+
+                var dataArray = ChunkBuffer.CombineBuffersLegacy(remainingBuffer, buffer);
+                var position = 0;
+
+                while (position < dataArray.Length)
+                {
+                    var chunkResult = ProcessNextChunk(dataArray, position, chunkValidator);
+
+                    if (chunkResult.IsIncomplete)
+                    {
+                        remainingBuffer = ChunkBuffer.ExtractRemainingData(dataArray, position, dataArray.Length);
+                        break;
+                    }
+
+                    if (chunkResult.IsFinalChunk)
+                    {
+                        break;
+                    }
+
+                    if (chunkResult.ChunkData.HasValue)
+                    {
+                        yield return chunkResult.ChunkData.Value;
+                    }
+
+                    position = chunkResult.NewPosition;
+                }
+
+                dataReader.AdvanceTo(buffer.End);
+
+                if (result.IsCompleted)
+                {
+                    break;
+                }
             }
         }
 
@@ -90,54 +83,47 @@ namespace Lamina.Streaming.Chunked
             byte[] remainingBuffer = Array.Empty<byte>();
             long totalBytesWritten = 0;
 
-            try
+            while (!cancellationToken.IsCancellationRequested)
             {
-                while (!cancellationToken.IsCancellationRequested)
+                var result = await dataReader.ReadAsync(cancellationToken);
+                var buffer = result.Buffer;
+
+                if (buffer.IsEmpty && result.IsCompleted)
                 {
-                    var result = await dataReader.ReadAsync(cancellationToken);
-                    var buffer = result.Buffer;
-
-                    if (buffer.IsEmpty && result.IsCompleted)
-                    {
-                        break;
-                    }
-
-                    var (dataBuffer, isRented) = ChunkBuffer.CombineBuffers(remainingBuffer, buffer, _bufferPool);
-                    var dataLength = remainingBuffer.Length + (int)buffer.Length;
-
-                    try
-                    {
-                        var processingResult = await ProcessChunksToStreamAsync(
-                            dataBuffer, dataLength, destinationStream, chunkValidator, cancellationToken);
-
-                        totalBytesWritten += processingResult.bytesWritten;
-
-                        if (processingResult.finalChunkReached)
-                        {
-                            break;
-                        }
-
-                        remainingBuffer = ChunkBuffer.ExtractRemainingData(dataBuffer, processingResult.newPosition, dataLength);
-                    }
-                    finally
-                    {
-                        ChunkBuffer.SafeReturnBuffer(dataBuffer, _bufferPool, isRented);
-                    }
-
-                    dataReader.AdvanceTo(buffer.End);
-
-                    if (result.IsCompleted)
-                    {
-                        break;
-                    }
+                    break;
                 }
 
-                return totalBytesWritten;
+                var (dataBuffer, isRented) = ChunkBuffer.CombineBuffers(remainingBuffer, buffer, _bufferPool);
+                var dataLength = remainingBuffer.Length + (int)buffer.Length;
+
+                try
+                {
+                    var processingResult = await ProcessChunksToStreamAsync(
+                        dataBuffer, dataLength, destinationStream, chunkValidator, cancellationToken);
+
+                    totalBytesWritten += processingResult.bytesWritten;
+
+                    if (processingResult.finalChunkReached)
+                    {
+                        break;
+                    }
+
+                    remainingBuffer = ChunkBuffer.ExtractRemainingData(dataBuffer, processingResult.newPosition, dataLength);
+                }
+                finally
+                {
+                    ChunkBuffer.SafeReturnBuffer(dataBuffer, _bufferPool, isRented);
+                }
+
+                dataReader.AdvanceTo(buffer.End);
+
+                if (result.IsCompleted)
+                {
+                    break;
+                }
             }
-            finally
-            {
-                await dataReader.CompleteAsync();
-            }
+
+            return totalBytesWritten;
         }
 
         public async Task<ChunkedDataResult> ParseChunkedDataWithTrailersToStreamAsync(
