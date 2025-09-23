@@ -138,6 +138,7 @@ docker run -p 8080:8080 lamina
   - `IAuthenticationService` / `AuthenticationService`: AWS Signature V4 authentication
   - `MultipartUploadCleanupService`: Background service for automatic cleanup of stale multipart uploads
   - `MetadataCleanupService`: Background service for automatic cleanup of orphaned metadata (metadata without corresponding data)
+  - `TempFileCleanupService`: Background service for automatic cleanup of stale temporary files in filesystem storage
 
 ### Helpers
 - **Lamina/Helpers/**:
@@ -155,6 +156,7 @@ docker run -p 8080:8080 lamina
   - `Services/MultipartUploadServiceTests.cs`: Multipart upload tests
   - `Services/MultipartUploadCleanupServiceTests.cs`: Cleanup service tests
   - `Services/MetadataCleanupServiceTests.cs`: Metadata cleanup service tests
+  - `Services/TempFileCleanupServiceTests.cs`: Temporary file cleanup service tests
   - `Services/StreamingAuthenticationServiceTests.cs`: Streaming authentication service tests
   - `Services/StreamingTrailerSupportTests.cs`: Streaming trailer support tests
   - `Helpers/AwsChunkedEncodingStreamTests.cs`: Chunked encoding stream processing tests
@@ -382,7 +384,28 @@ Lamina includes special support for network filesystems to handle their unique c
 }
 ```
 
+### Temporary File Cleanup Configuration
+```json
+{
+  "TempFileCleanup": {
+    "Enabled": true,  // Enable/disable automatic temp file cleanup
+    "CleanupIntervalMinutes": 60,  // How often to run cleanup (default: every hour)
+    "TempFileAgeMinutes": 30,  // Files older than this are considered stale (default: 30 minutes)
+    "BatchSize": 100  // Number of files to process per batch (default: 100)
+  }
+}
+```
+
 ## Recent Updates
+
+### Temporary File Cleanup Service
+- **Automated temporary file cleanup**: Background service that periodically scans and removes stale temporary files left by interrupted upload operations
+- **Filesystem storage specific**: Only operates when filesystem storage is configured, ensuring no unnecessary overhead for in-memory storage
+- **Age-based cleanup**: Removes temporary files older than a configurable threshold (default: 30 minutes) to avoid deleting files currently being written
+- **Recursive directory scanning**: Scans all subdirectories in the data directory to find temporary files with the configured prefix (`.lamina-tmp-*`)
+- **Batch processing**: Processes files in configurable batches for memory efficiency and performance monitoring
+- **Comprehensive error handling**: Gracefully handles file access errors, locked files, and permission issues without stopping the cleanup process
+- **Configurable intervals**: Customizable cleanup frequency and age thresholds for different deployment scenarios
 
 ### Metadata Cleanup Service
 - **Automated orphaned metadata cleanup**: Background service that periodically scans for and removes metadata entries that no longer have corresponding data files

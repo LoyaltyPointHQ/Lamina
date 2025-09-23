@@ -122,6 +122,13 @@ if (metadataCleanupEnabled)
     builder.Services.AddHostedService<MetadataCleanupService>();
 }
 
+// Register temp file cleanup service if enabled and using filesystem storage
+var tempFileCleanupEnabled = builder.Configuration.GetValue<bool>("TempFileCleanup:Enabled", true);
+if (tempFileCleanupEnabled && storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddHostedService<TempFileCleanupService>();
+}
+
 var app = builder.Build();
 
 // Create configured buckets on startup
