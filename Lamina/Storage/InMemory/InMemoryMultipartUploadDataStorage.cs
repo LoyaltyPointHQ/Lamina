@@ -16,36 +16,7 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         var uploadKey = $"{bucketName}/{key}/{uploadId}";
         var parts = _uploadParts.GetOrAdd(uploadKey, _ => new ConcurrentDictionary<int, UploadPart>());
 
-        var dataSegments = new List<byte[]>();
-        long totalSize = 0;
-
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            var result = await dataReader.ReadAsync(cancellationToken);
-            var buffer = result.Buffer;
-
-            if (buffer.Length > 0)
-            {
-                var data = buffer.ToArray();
-                dataSegments.Add(data);
-                totalSize += data.Length;
-            }
-
-            dataReader.AdvanceTo(buffer.End);
-
-            if (result.IsCompleted)
-            {
-                break;
-            }
-        }
-
-        var combinedData = new byte[totalSize];
-        var offset = 0;
-        foreach (var segment in dataSegments)
-        {
-            Buffer.BlockCopy(segment, 0, combinedData, offset, segment.Length);
-            offset += segment.Length;
-        }
+        var combinedData = await PipeReaderHelper.ReadAllBytesAsync(dataReader, false, cancellationToken);
 
         var etag = ETagHelper.ComputeETag(combinedData);
 
@@ -53,7 +24,7 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         {
             PartNumber = partNumber,
             ETag = etag,
-            Size = totalSize,
+            Size = combinedData.Length,
             LastModified = DateTime.UtcNow,
             Data = combinedData
         };

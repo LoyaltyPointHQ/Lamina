@@ -22,41 +22,12 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
     {
         var bucketData = _data.GetOrAdd(bucketName, _ => new ConcurrentDictionary<string, byte[]>());
 
-        var dataSegments = new List<byte[]>();
-        long totalSize = 0;
-
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            var result = await dataReader.ReadAsync(cancellationToken);
-            var buffer = result.Buffer;
-
-            if (buffer.Length > 0)
-            {
-                var data = buffer.ToArray();
-                dataSegments.Add(data);
-                totalSize += data.Length;
-            }
-
-            dataReader.AdvanceTo(buffer.End);
-
-            if (result.IsCompleted)
-            {
-                break;
-            }
-        }
-
-        var combinedData = new byte[totalSize];
-        var offset = 0;
-        foreach (var segment in dataSegments)
-        {
-            Buffer.BlockCopy(segment, 0, combinedData, offset, segment.Length);
-            offset += segment.Length;
-        }
+        var combinedData = await PipeReaderHelper.ReadAllBytesAsync(dataReader, false, cancellationToken);
 
         var etag = ETagHelper.ComputeETag(combinedData);
         bucketData[key] = combinedData;
 
-        return (totalSize, etag);
+        return (combinedData.Length, etag);
     }
 
     public async Task<(long size, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, CancellationToken cancellationToken = default)
@@ -108,40 +79,16 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         var bucketData = _data.GetOrAdd(bucketName, _ => new ConcurrentDictionary<string, byte[]>());
 
         var allSegments = new List<byte[]>();
-        long totalSize = 0;
 
         // Read all parts
         foreach (var reader in partReaders)
         {
-            try
-            {
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    var result = await reader.ReadAsync(cancellationToken);
-                    var buffer = result.Buffer;
-
-                    if (buffer.Length > 0)
-                    {
-                        var data = buffer.ToArray();
-                        allSegments.Add(data);
-                        totalSize += data.Length;
-                    }
-
-                    reader.AdvanceTo(buffer.End);
-
-                    if (result.IsCompleted)
-                    {
-                        break;
-                    }
-                }
-            }
-            finally
-            {
-                await reader.CompleteAsync();
-            }
+            var partData = await PipeReaderHelper.ReadAllBytesAsync(reader, true, cancellationToken);
+            allSegments.Add(partData);
         }
 
         // Combine all segments into one array
+        var totalSize = allSegments.Sum(s => s.Length);
         var combinedData = new byte[totalSize];
         var offset = 0;
         foreach (var segment in allSegments)

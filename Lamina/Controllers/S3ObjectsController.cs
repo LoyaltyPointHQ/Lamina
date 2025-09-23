@@ -375,45 +375,42 @@ public class S3ObjectsController : ControllerBase
     {
         try
         {
-            // Read the XML request body
+            // Read the XML request body using PipeReader
             List<CompletedPart> parts = new();
 
-            using (var reader = new StreamReader(Request.Body))
+            var xmlContent = await PipeReaderHelper.ReadAllTextAsync(Request.BodyReader, true, cancellationToken);
+
+            // Try to deserialize - first without namespace (most common), then with namespace
+            try
             {
-                var xmlContent = await reader.ReadToEndAsync(cancellationToken);
+                // Try without namespace first (for compatibility with most clients)
+                var serializerNoNamespace = new XmlSerializer(typeof(CompleteMultipartUploadXmlNoNamespace));
+                using var stringReader = new StringReader(xmlContent);
+                var completeRequestNoNs = serializerNoNamespace.Deserialize(stringReader) as CompleteMultipartUploadXmlNoNamespace;
 
-                // Try to deserialize - first without namespace (most common), then with namespace
-                try
+                if (completeRequestNoNs != null && completeRequestNoNs.Parts != null)
                 {
-                    // Try without namespace first (for compatibility with most clients)
-                    var serializerNoNamespace = new XmlSerializer(typeof(CompleteMultipartUploadXmlNoNamespace));
-                    using var stringReader = new StringReader(xmlContent);
-                    var completeRequestNoNs = serializerNoNamespace.Deserialize(stringReader) as CompleteMultipartUploadXmlNoNamespace;
-
-                    if (completeRequestNoNs != null && completeRequestNoNs.Parts != null)
+                    parts = completeRequestNoNs.Parts.Select(p => new CompletedPart
                     {
-                        parts = completeRequestNoNs.Parts.Select(p => new CompletedPart
-                        {
-                            PartNumber = p.PartNumber,
-                            ETag = p.ETag
-                        }).ToList();
-                    }
+                        PartNumber = p.PartNumber,
+                        ETag = p.ETag
+                    }).ToList();
                 }
-                catch
-                {
-                    // If that fails, try with S3 namespace
-                    var serializerWithNamespace = new XmlSerializer(typeof(CompleteMultipartUploadXml));
-                    using var stringReader = new StringReader(xmlContent);
-                    var completeRequestWithNs = serializerWithNamespace.Deserialize(stringReader) as CompleteMultipartUploadXml;
+            }
+            catch
+            {
+                // If that fails, try with S3 namespace
+                var serializerWithNamespace = new XmlSerializer(typeof(CompleteMultipartUploadXml));
+                using var stringReader = new StringReader(xmlContent);
+                var completeRequestWithNs = serializerWithNamespace.Deserialize(stringReader) as CompleteMultipartUploadXml;
 
-                    if (completeRequestWithNs != null && completeRequestWithNs.Parts != null)
+                if (completeRequestWithNs != null && completeRequestWithNs.Parts != null)
+                {
+                    parts = completeRequestWithNs.Parts.Select(p => new CompletedPart
                     {
-                        parts = completeRequestWithNs.Parts.Select(p => new CompletedPart
-                        {
-                            PartNumber = p.PartNumber,
-                            ETag = p.ETag
-                        }).ToList();
-                    }
+                        PartNumber = p.PartNumber,
+                        ETag = p.ETag
+                    }).ToList();
                 }
             }
 
@@ -421,13 +418,6 @@ public class S3ObjectsController : ControllerBase
             {
                 return BadRequest();
             }
-
-
-            var request = new CompleteMultipartUploadRequest
-            {
-                UploadId = uploadId,
-                Parts = parts
-            };
 
             var completeRequest = new CompleteMultipartUploadRequest
             {

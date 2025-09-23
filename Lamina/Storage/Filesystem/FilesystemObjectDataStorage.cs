@@ -58,31 +58,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             // Write the data to temp file, ensuring proper disposal before computing ETag
             {
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
-
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    var result = await dataReader.ReadAsync(cancellationToken);
-                    var buffer = result.Buffer;
-
-                    if (buffer.IsEmpty && result.IsCompleted)
-                    {
-                        break;
-                    }
-
-                    foreach (var segment in buffer)
-                    {
-                        await fileStream.WriteAsync(segment, cancellationToken);
-                        bytesWritten += segment.Length;
-                    }
-
-                    dataReader.AdvanceTo(buffer.End);
-
-                    if (result.IsCompleted)
-                    {
-                        break;
-                    }
-                }
-
+                bytesWritten = await PipeReaderHelper.CopyToAsync(dataReader, fileStream, false, cancellationToken);
                 await fileStream.FlushAsync(cancellationToken);
             } // FileStream is fully disposed here
 
@@ -207,30 +183,8 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
                 foreach (var reader in partReaders)
                 {
-                    while (!cancellationToken.IsCancellationRequested)
-                    {
-                        var result = await reader.ReadAsync(cancellationToken);
-                        var buffer = result.Buffer;
-
-                        if (buffer.IsEmpty && result.IsCompleted)
-                        {
-                            break;
-                        }
-
-                        foreach (var segment in buffer)
-                        {
-                            await fileStream.WriteAsync(segment, cancellationToken);
-                            totalBytesWritten += segment.Length;
-                        }
-
-                        reader.AdvanceTo(buffer.End);
-
-                        if (result.IsCompleted)
-                        {
-                            break;
-                        }
-                    }
-                    await reader.CompleteAsync();
+                    var bytesWritten = await PipeReaderHelper.CopyToAsync(reader, fileStream, true, cancellationToken);
+                    totalBytesWritten += bytesWritten;
                 }
 
                 await fileStream.FlushAsync(cancellationToken);
