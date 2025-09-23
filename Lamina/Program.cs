@@ -74,13 +74,24 @@ if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
     // Register NetworkFileSystemHelper for CIFS/NFS support
     builder.Services.AddSingleton<NetworkFileSystemHelper>();
 
-    // Register bucket services
+    // Register bucket data services
     builder.Services.AddSingleton<IBucketDataStorage, FilesystemBucketDataStorage>();
-    builder.Services.AddSingleton<IBucketMetadataStorage, FilesystemBucketMetadataStorage>();
 
-    // Register data and metadata services for objects
+    // Register data services for objects
     builder.Services.AddSingleton<IObjectDataStorage, FilesystemObjectDataStorage>();
-    builder.Services.AddSingleton<IObjectMetadataStorage, FilesystemObjectMetadataStorage>();
+
+    // Register metadata services based on metadata mode
+    var metadataMode = builder.Configuration.GetValue<string>("FilesystemStorage:MetadataMode") ?? "Inline";
+    if (metadataMode.Equals("Xattr", StringComparison.OrdinalIgnoreCase))
+    {
+        builder.Services.AddSingleton<IBucketMetadataStorage, XattrBucketMetadataStorage>();
+        builder.Services.AddSingleton<IObjectMetadataStorage, XattrObjectMetadataStorage>();
+    }
+    else
+    {
+        builder.Services.AddSingleton<IBucketMetadataStorage, FilesystemBucketMetadataStorage>();
+        builder.Services.AddSingleton<IObjectMetadataStorage, FilesystemObjectMetadataStorage>();
+    }
 
     // Register data and metadata services for multipart uploads
     builder.Services.AddSingleton<IMultipartUploadDataStorage, FilesystemMultipartUploadDataStorage>();

@@ -219,10 +219,13 @@ docker run -p 8080:8080 lamina
 
    **Filesystem Storage**:
    - Data stored in: `{DataDirectory}/{bucketName}/{key}`
-   - Metadata stored in: `{MetadataDirectory}/{bucketName}/{key}.json`
+   - Metadata storage depends on mode:
+     - **SeparateDirectory**: `{MetadataDirectory}/{bucketName}/{key}.json` and `{MetadataDirectory}/_buckets/{bucketName}.json`
+     - **Inline**: `{DataDirectory}/{bucketName}/.lamina-meta/{key}.json` and `{DataDirectory}/.lamina-meta/_buckets/{bucketName}.json`
+     - **Xattr**: POSIX extended attributes on data files and bucket directories (Linux/macOS only)
    - Multipart uploads: `{MetadataDirectory}/_multipart_uploads/{uploadId}/`
    - File size is ALWAYS read from filesystem (not stored in metadata)
-   - Metadata format (JSON):
+   - Metadata format (JSON for file modes, binary for xattr):
      ```json
      {
        "Key": "object-key",
@@ -252,9 +255,10 @@ Configure in `appsettings.json` or `appsettings.Development.json`:
   "FilesystemStorage": {
     "DataDirectory": "/tmp/laminas/data",
     "MetadataDirectory": "/tmp/laminas/metadata",  // Required for SeparateDirectory mode
-    "MetadataMode": "Inline",  // or "SeparateDirectory" (default: Inline)
+    "MetadataMode": "Inline",  // or "SeparateDirectory" or "Xattr" (default: Inline)
     "InlineMetadataDirectoryName": ".lamina-meta",  // Name of metadata directory in inline mode (default: .lamina-meta)
     "TempFilePrefix": ".lamina-tmp-",  // Prefix for temporary files (default: .lamina-tmp-)
+    "XattrPrefix": "user.lamina",  // Prefix for extended attributes in Xattr mode (default: user.lamina)
     "NetworkMode": "None",  // or "CIFS" or "NFS" for network filesystem support
     "RetryCount": 3,  // Number of retries for file operations (used with CIFS/NFS)
     "RetryDelayMs": 100  // Initial delay between retries in milliseconds
@@ -290,6 +294,44 @@ Example inline mode configuration:
   }
 }
 ```
+
+**Xattr Mode** (POSIX extended attributes):
+- Metadata is stored as POSIX extended attributes directly on data files and bucket directories
+- Object data: `/tmp/laminas/data/bucket/key` (with object metadata as xattr)
+- Bucket directories: `/tmp/laminas/data/bucket` (with bucket metadata as xattr)
+- No separate metadata files or directories needed
+- Attributes use configurable prefix (default: `user.lamina`)
+- Platform-specific: Only works on Linux and macOS
+- Atomic operations: Metadata automatically deleted with file/directory
+
+Example xattr mode configuration:
+```json
+{
+  "StorageType": "Filesystem",
+  "FilesystemStorage": {
+    "DataDirectory": "/tmp/laminas/data",
+    "MetadataMode": "Xattr",
+    "XattrPrefix": "user.lamina"
+  }
+}
+```
+
+**Xattr Mode Benefits**:
+- **Atomic operations**: Metadata is automatically managed with file/directory operations
+- **No orphaned metadata**: Metadata cannot exist without corresponding data/bucket
+- **Simplified storage**: No separate metadata files or directories to manage
+- **Better performance**: Single filesystem operation for both data and metadata
+- **Native integration**: Works with standard Unix tools (`getfattr`, `setfattr`)
+- **Automatic cleanup**: Metadata is deleted when file/directory is deleted
+- **Unified storage**: Both object and bucket metadata use the same xattr approach
+
+**Xattr Mode Limitations**:
+- **Platform-specific**: Only works on Linux and macOS (not Windows)
+- **Filesystem support**: Not all filesystems support extended attributes (e.g., FAT32, some network filesystems)
+- **Size limits**: Extended attributes have size limitations (typically 64KB per attribute)
+- **Metadata truncation**: Large metadata will be truncated to fit size limits
+- **Backup compatibility**: Some backup tools may not preserve extended attributes
+- **Network filesystems**: May not work reliably on CIFS/NFS mounts
 
 #### Network Filesystem Support (CIFS/NFS)
 
@@ -537,6 +579,50 @@ cat /tmp/laminas/data/test-bucket/path/to/.lamina-meta/test.txt.json | jq .
 
 # Try to create object with forbidden key (will fail)
 curl -X PUT http://localhost:5214/test-bucket/.lamina-meta/forbidden.txt --data "test"
+```
+
+*Xattr Mode (Linux/macOS only):*
+```bash
+# Use xattr metadata configuration
+echo '{
+  "StorageType": "Filesystem",
+  "FilesystemStorage": {
+    "DataDirectory": "/tmp/laminas/data",
+    "MetadataMode": "Xattr",
+    "XattrPrefix": "user.lamina"
+  }
+}' > appsettings.Xattr.json
+
+dotnet run --project Lamina/Lamina.csproj --launch-profile http -- --config appsettings.Xattr.json
+
+# Create bucket and upload object
+curl -X PUT http://localhost:5214/test-bucket
+echo "test content" | curl -X PUT -H "Content-Type: text/plain" --data-binary @- http://localhost:5214/test-bucket/test.txt
+
+# Check filesystem - only data file exists
+ls -la /tmp/laminas/data/test-bucket/
+
+# View extended attributes (Linux)
+getfattr -d /tmp/laminas/data/test-bucket/test.txt
+
+# Or view with specific prefix (Linux)
+getfattr -n user.lamina.etag /tmp/laminas/data/test-bucket/test.txt
+getfattr -n user.lamina.content-type /tmp/laminas/data/test-bucket/test.txt
+
+# List all lamina attributes for object
+getfattr --match="user.lamina.*" -d /tmp/laminas/data/test-bucket/test.txt
+
+# View bucket metadata (stored on bucket directory)
+getfattr -d /tmp/laminas/data/test-bucket/
+
+# View specific bucket attributes
+getfattr -n user.lamina.region /tmp/laminas/data/test-bucket/
+
+# Test bucket tagging
+curl -X PUT -H "Content-Type: application/xml" --data '<Tagging><TagSet><Tag><Key>Environment</Key><Value>Production</Value></Tag></TagSet></Tagging>' http://localhost:5214/test-bucket?tagging
+
+# View bucket tags as xattr
+getfattr --match="user.lamina.tag.*" -d /tmp/laminas/data/test-bucket/
 ```
 
 ## Auto-Update Instructions

@@ -7,6 +7,7 @@ public class FilesystemStorageSettings
     public MetadataStorageMode MetadataMode { get; set; } = MetadataStorageMode.Inline;
     public string InlineMetadataDirectoryName { get; set; } = ".lamina-meta";
     public string TempFilePrefix { get; set; } = ".lamina-tmp-";
+    public string XattrPrefix { get; set; } = "user.lamina";
 
     // Network filesystem configuration
     public NetworkFileSystemMode NetworkMode { get; set; } = NetworkFileSystemMode.None;
@@ -17,7 +18,8 @@ public class FilesystemStorageSettings
 public enum MetadataStorageMode
 {
     SeparateDirectory,
-    Inline
+    Inline,
+    Xattr
 }
 
 public enum NetworkFileSystemMode

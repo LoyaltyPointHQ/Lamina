@@ -51,10 +51,30 @@ public static class ConfigurationValidator
                 Console.WriteLine($"  Data Directory: {dataDirectory}");
                 Console.WriteLine($"  Inline Metadata Directory Name: {inlineMetadataDirectoryName}");
             }
+            else if (metadataMode.Equals("Xattr", StringComparison.OrdinalIgnoreCase))
+            {
+                var xattrPrefix = configuration["FilesystemStorage:XattrPrefix"] ?? "user.lamina";
+
+                // Check platform compatibility
+                var isLinuxOrMacOS = OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
+                if (!isLinuxOrMacOS)
+                {
+                    throw new InvalidOperationException(
+                        "Configuration error: Xattr metadata mode is only supported on Linux and macOS platforms. " +
+                        "Windows does not support POSIX extended attributes.");
+                }
+
+                // Log the configuration for xattr mode
+                Console.WriteLine($"Filesystem Storage Configuration:");
+                Console.WriteLine($"  Mode: Xattr (POSIX Extended Attributes)");
+                Console.WriteLine($"  Data Directory: {dataDirectory}");
+                Console.WriteLine($"  Xattr Prefix: {xattrPrefix}");
+                Console.WriteLine($"  Platform: {Environment.OSVersion.Platform}");
+            }
             else
             {
                 throw new InvalidOperationException(
-                    $"Configuration error: Invalid MetadataMode '{metadataMode}'. Valid values are 'SeparateDirectory' or 'Inline'.");
+                    $"Configuration error: Invalid MetadataMode '{metadataMode}'. Valid values are 'SeparateDirectory', 'Inline', or 'Xattr'.");
             }
         }
         else if (!storageType.Equals("InMemory", StringComparison.OrdinalIgnoreCase))
