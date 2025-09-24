@@ -216,7 +216,7 @@ public class FilesystemObjectDataStorageOptimizationTests : IDisposable
             prefix: "docs", delimiter: "/");
 
         // Assert - Should scan bucket root for entries starting with "docs"
-        // This test verifies the GetParentDirectoryFromPrefix logic
+        // This test verifies the GetScanDirectoryAndFilter logic
         var allItems = result.Keys.Concat(result.CommonPrefixes);
         foreach (var item in allItems)
         {
@@ -293,6 +293,29 @@ public class FilesystemObjectDataStorageOptimizationTests : IDisposable
         // Assert - Should return empty results gracefully
         Assert.Empty(result.Keys);
         Assert.Empty(result.CommonPrefixes);
+    }
+
+    [Fact]
+    public async Task RegressionTest_ListAllObjectsWithoutPrefixOrDelimiter_FindsAllFiles()
+    {
+        // This test reproduces the exact scenario from the failing integration test
+        const string bucketName = "regression-test";
+
+        // Create exactly 3 files like the failing test
+        await StoreObject(bucketName, "file1.txt", "Content 1");
+        await StoreObject(bucketName, "file2.txt", "Content 2");
+        await StoreObject(bucketName, "file3.txt", "Content 3");
+
+        // Act - List all objects (no prefix, no delimiter) like the failing integration test
+        var result = await _storage.ListDataKeysAsync(bucketName, BucketType.GeneralPurpose,
+            prefix: null, delimiter: null, maxKeys: 10);
+
+        // Assert - Should find all 3 files
+        var keys = result.Keys.OrderBy(k => k).ToList();
+        Assert.Equal(3, keys.Count);
+        Assert.Contains("file1.txt", keys);
+        Assert.Contains("file2.txt", keys);
+        Assert.Contains("file3.txt", keys);
     }
 
     private async Task CreateTestHierarchy(string bucketName)

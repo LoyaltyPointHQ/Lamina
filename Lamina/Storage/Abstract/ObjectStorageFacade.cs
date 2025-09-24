@@ -168,8 +168,10 @@ public class ObjectStorageFacade : IObjectStorageFacade
         // Calculate total items (keys + common prefixes) for truncation detection
         var totalItems = dataResult.Keys.Count + (dataResult.CommonPrefixes?.Count ?? 0);
 
-        // Check if we need to truncate (only if we requested extra items)
-        if (shouldCheckTruncation && totalItems > effectiveMaxKeys)
+        // Check if we need to truncate:
+        // If we requested N+1 items and got exactly N+1 items, then there are more items available
+        // If we requested N+1 items and got N or fewer items, then that's all there are
+        if (shouldCheckTruncation && totalItems == effectiveMaxKeys + 1)
         {
             response.IsTruncated = true;
 
@@ -211,7 +213,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
             if (meta != null)
                 response.Contents.Add(meta);
         }
-
+        
         return response;
     }
 
