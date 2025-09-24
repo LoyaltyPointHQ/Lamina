@@ -16,6 +16,8 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.8"/>
         <PackageReference Include="Nito.AsyncEx" Version="5.1.2" />
+        <PackageReference Include="StackExchange.Redis" Version="2.8.22" />
+        <PackageReference Include="RedLock.net" Version="2.3.2" />
     </ItemGroup>
 
     <ItemGroup>

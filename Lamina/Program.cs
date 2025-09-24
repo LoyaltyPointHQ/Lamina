@@ -10,6 +10,9 @@ using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.Filesystem.Locking;
 using Lamina.Storage.InMemory;
+using RedLockNet.SERedis;
+using RedLockNet.SERedis.Configuration;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -59,8 +62,45 @@ builder.Services.AddSingleton<IChunkedDataParser, ChunkedDataParser>();
 // Register auto bucket creation service
 builder.Services.AddSingleton<IAutoBucketCreationService, AutoBucketCreationService>();
 
-// Register FileSystemLockManager for thread-safe file operations
-builder.Services.AddSingleton<IFileSystemLockManager, InMemoryLockManager>();
+// Configure and register lock manager based on configuration
+var lockManagerType = builder.Configuration["LockManager"] ?? "InMemory";
+
+if (lockManagerType.Equals("Redis", StringComparison.OrdinalIgnoreCase))
+{
+    // Configure Redis settings
+    builder.Services.Configure<RedisSettings>(
+        builder.Configuration.GetSection("Redis"));
+
+    // Register Redis connection multiplexer
+    builder.Services.AddSingleton<ConnectionMultiplexer>(provider =>
+    {
+        var redisSettings = builder.Configuration.GetSection("Redis").Get<RedisSettings>() ?? new RedisSettings();
+        var configuration = ConfigurationOptions.Parse(redisSettings.ConnectionString);
+        return ConnectionMultiplexer.Connect(configuration);
+    });
+
+    // Register RedLock factory
+    builder.Services.AddSingleton<RedLockFactory>(provider =>
+    {
+        var redis = provider.GetRequiredService<ConnectionMultiplexer>();
+        var redisSettings = builder.Configuration.GetSection("Redis").Get<RedisSettings>() ?? new RedisSettings();
+
+        var multiplexers = new List<RedLockMultiplexer>
+        {
+            new RedLockMultiplexer(redis)
+        };
+
+        return RedLockFactory.Create(multiplexers);
+    });
+
+    // Register Redis-based lock manager
+    builder.Services.AddSingleton<IFileSystemLockManager, RedisLockManager>();
+}
+else
+{
+    // Register in-memory lock manager (default)
+    builder.Services.AddSingleton<IFileSystemLockManager, InMemoryLockManager>();
+}
 
 // Register S3 services based on configuration
 var storageType = builder.Configuration["StorageType"] ?? "InMemory";

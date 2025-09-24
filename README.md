@@ -10,6 +10,7 @@
 - **Full S3 API Compatibility**: Implements the official Amazon S3 REST API specification with strict compliance
 - **Metadata Storage**: Three metadata modes - separate directories, inline storage, or POSIX extended attributes (Linux/macOS)
 - **Network Filesystem Ready**: Special support for CIFS and NFS with retry logic and atomic operations
+- **Distributed Locking**: Redis-based distributed locking for safe multi-instance deployments
 - **Background Services**: Automatic cleanup of temporary files, orphaned metadata, and stale multipart uploads
 
 ## 🚀 Quick Start
@@ -167,6 +168,74 @@ Configure storage backend in `appsettings.json`:
   }
 }
 ```
+
+### Distributed Locking
+
+For multi-instance deployments, enable Redis-based distributed locking to ensure safe concurrent access to shared storage:
+
+```json
+{
+  "LockManager": "Redis",
+  "Redis": {
+    "ConnectionString": "redis:6379",
+    "LockExpirySeconds": 30,
+    "RetryCount": 3,
+    "RetryDelayMs": 100,
+    "LockKeyPrefix": "lamina:lock"
+  }
+}
+```
+
+#### Docker Compose with Redis
+
+```yaml
+version: '3.8'
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  lamina-1:
+    image: ghcr.io/loyaltypointhq/lamina:latest
+    environment:
+      - LockManager=Redis
+      - Redis__ConnectionString=redis:6379
+      - Redis__LockKeyPrefix=lamina-prod:lock
+      - StorageType=Filesystem
+      - FilesystemStorage__DataDirectory=/app/data
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+
+  lamina-2:
+    image: ghcr.io/loyaltypointhq/lamina:latest
+    environment:
+      - LockManager=Redis
+      - Redis__ConnectionString=redis:6379
+      - Redis__LockKeyPrefix=lamina-prod:lock
+      - StorageType=Filesystem
+      - FilesystemStorage__DataDirectory=/app/data
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8081:8080"
+    depends_on:
+      - redis
+```
+
+#### When to Use Redis Locking
+
+- **Single Instance**: Use default `InMemory` lock manager
+- **Multi-Instance**: Use `Redis` lock manager for:
+  - Load balancing across multiple Lamina instances
+  - High availability deployments
+  - Shared storage (NFS, CIFS, cloud volumes)
+  - Kubernetes deployments with multiple replicas
 
 #### Metadata Modes
 

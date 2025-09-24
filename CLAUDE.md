@@ -373,10 +373,10 @@ Lamina includes special support for network filesystems to handle their unique c
 - **ESTALE Error Handling**: Automatic detection and retry of stale NFS file handles
 - **Network-Aware Error Detection**: Recognizes network-specific error patterns
 
-**Important Limitations**:
-- The in-memory lock manager only protects within a single Lamina instance
-- For multi-instance deployments on network filesystems, implement distributed locking
-- Recommended: Use single instance or implement Redis/database-based locking
+**Lock Manager Support**:
+- **InMemory Lock Manager**: Default option, provides thread-safe file operations within a single Lamina instance
+- **Redis Lock Manager**: Distributed locking for multi-instance deployments using Redis and RedLock algorithm
+- **Multi-Instance Deployments**: Use Redis lock manager for proper coordination across multiple Lamina instances
 
 **Recommended Mount Options**:
 - **NFS**: `mount -t nfs4 -o vers=4.2,hard,timeo=600,retrans=2,rsize=1048576,wsize=1048576`
@@ -438,7 +438,42 @@ Lamina includes special support for network filesystems to handle their unique c
 }
 ```
 
+### Distributed Locking Configuration (Redis)
+```json
+{
+  "LockManager": "Redis",  // "InMemory" (default) or "Redis"
+  "Redis": {
+    "ConnectionString": "localhost:6379",  // Redis connection string
+    "LockExpirySeconds": 30,  // How long locks are held before automatic expiry
+    "RetryCount": 3,  // Number of retries for lock acquisition
+    "RetryDelayMs": 100,  // Initial delay between retries in milliseconds
+    "Database": 0,  // Redis database number
+    "LockKeyPrefix": "lamina:lock"  // Prefix for Redis lock keys
+  }
+}
+```
+
+#### Redis Lock Manager Features
+- **Distributed Locking**: Uses RedLock algorithm for consensus across Redis instances
+- **Automatic Expiry**: Locks automatically expire to prevent deadlocks from crashed processes
+- **Retry Logic**: Configurable retry attempts with exponential backoff
+- **Connection Resilience**: Handles Redis connection failures gracefully
+- **Path-based Locking**: Normalizes file paths to ensure consistent locking across instances
+- **Operation-specific Locks**: Separate lock keys for read, write, and delete operations
+- **Configurable Key Prefix**: Customizable Redis key prefix to avoid conflicts with other applications
+- **Multi-Instance Support**: Enables safe multi-instance deployments on shared storage
+
 ## Recent Updates
+
+### Redis Distributed Lock Manager
+- **Distributed Locking Support**: Added Redis-based lock manager for multi-instance deployments using the RedLock algorithm
+- **Lock Manager Selection**: Configurable lock manager type (`InMemory` or `Redis`) via `LockManager` configuration setting
+- **RedLock Algorithm**: Implements the RedLock distributed locking algorithm for consensus across Redis instances
+- **Automatic Lock Expiry**: Prevents deadlocks from crashed processes by automatically expiring locks after configurable timeout
+- **Connection Resilience**: Graceful handling of Redis connection failures with proper error reporting
+- **Backward Compatibility**: Maintains full compatibility with existing InMemoryLockManager for single-instance deployments
+- **Comprehensive Testing**: Full test suite with conditional Redis availability checks and concurrent operation validation
+- **Production Ready**: Suitable for production multi-instance deployments on shared storage (NFS, CIFS)
 
 ### Temporary File Cleanup Service
 - **Automated temporary file cleanup**: Background service that periodically scans and removes stale temporary files left by interrupted upload operations
