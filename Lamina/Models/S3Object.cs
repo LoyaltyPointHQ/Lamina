@@ -23,6 +23,7 @@ public class ListObjectsRequest
 public class ListObjectsResponse
 {
     public List<S3ObjectInfo> Contents { get; set; } = new();
+    public List<string> CommonPrefixes { get; set; } = new();
     public bool IsTruncated { get; set; }
     public string? NextContinuationToken { get; set; }
     public string? Prefix { get; set; }

@@ -411,6 +411,185 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         }
     }
 
+    public Task<ListDataResult> ListDataKeysWithDelimiterAsync(string bucketName, string? prefix = null, string? delimiter = null, CancellationToken cancellationToken = default)
+    {
+        var result = new ListDataResult();
+
+        // Validate bucket name
+        if (FilesystemStorageHelper.IsKeyForbidden(bucketName, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return Task.FromResult(result);
+        }
+
+        var bucketPath = Path.Combine(_dataDirectory, bucketName);
+        if (!Directory.Exists(bucketPath))
+        {
+            return Task.FromResult(result);
+        }
+
+        // If no delimiter, use the existing method logic
+        if (string.IsNullOrEmpty(delimiter))
+        {
+            var allKeys = new List<string>();
+            CollectKeys(bucketPath, bucketName, prefix, allKeys);
+            result.Keys.AddRange(allKeys.OrderBy(k => k));
+            return Task.FromResult(result);
+        }
+
+        // Process with delimiter logic
+        var prefixLength = prefix?.Length ?? 0;
+        var commonPrefixSet = new HashSet<string>();
+        var directKeys = new List<string>();
+
+        CollectKeysWithDelimiter(bucketPath, bucketName, prefix, delimiter, prefixLength, directKeys, commonPrefixSet);
+
+        result.Keys.AddRange(directKeys.OrderBy(k => k));
+        result.CommonPrefixes.AddRange(commonPrefixSet.OrderBy(p => p));
+
+        return Task.FromResult(result);
+    }
+
+    private void CollectKeysWithDelimiter(string currentPath, string bucketName, string? prefix, string delimiter, int prefixLength, List<string> keys, HashSet<string> commonPrefixes)
+    {
+        if (!Directory.Exists(currentPath))
+        {
+            return;
+        }
+
+        // Process files in current directory
+        foreach (var file in Directory.GetFiles(currentPath))
+        {
+            var fileName = Path.GetFileName(file);
+
+            // Skip temporary files
+            if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
+            {
+                continue;
+            }
+
+            // Skip inline metadata directories
+            if (_metadataMode == MetadataStorageMode.Inline && fileName == _inlineMetadataDirectoryName)
+            {
+                continue;
+            }
+
+            var relativePath = Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), file)
+                .Replace(Path.DirectorySeparatorChar, '/');
+
+            // Apply prefix filter
+            if (!string.IsNullOrEmpty(prefix) && !relativePath.StartsWith(prefix))
+            {
+                continue;
+            }
+
+            // Check for delimiter after prefix
+            var remainingKey = relativePath.Substring(prefixLength);
+            var delimiterIndex = remainingKey.IndexOf(delimiter, StringComparison.Ordinal);
+
+            if (delimiterIndex >= 0)
+            {
+                // Found delimiter - add as common prefix
+                var commonPrefix = relativePath.Substring(0, prefixLength + delimiterIndex + delimiter.Length);
+                commonPrefixes.Add(commonPrefix);
+            }
+            else
+            {
+                // No delimiter - direct file
+                keys.Add(relativePath);
+            }
+        }
+
+        // Process subdirectories
+        foreach (var dir in Directory.GetDirectories(currentPath))
+        {
+            var dirName = Path.GetFileName(dir);
+
+            // Skip inline metadata directories
+            if (_metadataMode == MetadataStorageMode.Inline && dirName == _inlineMetadataDirectoryName)
+            {
+                continue;
+            }
+
+            var relativePath = Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), dir)
+                .Replace(Path.DirectorySeparatorChar, '/') + "/";
+
+            // Apply prefix filter
+            if (!string.IsNullOrEmpty(prefix) && !relativePath.StartsWith(prefix) && !prefix.StartsWith(relativePath))
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(prefix) && relativePath.StartsWith(prefix))
+            {
+                // Check for delimiter after prefix in directory path
+                var remainingKey = relativePath.Substring(prefixLength);
+                var delimiterIndex = remainingKey.IndexOf(delimiter, StringComparison.Ordinal);
+
+                if (delimiterIndex >= 0)
+                {
+                    // Found delimiter - add as common prefix
+                    var commonPrefix = relativePath.Substring(0, prefixLength + delimiterIndex + delimiter.Length);
+                    commonPrefixes.Add(commonPrefix);
+                    continue; // Don't recurse into this directory
+                }
+            }
+
+            // Recurse into subdirectory
+            CollectKeysWithDelimiter(dir, bucketName, prefix, delimiter, prefixLength, keys, commonPrefixes);
+        }
+    }
+
+    private void CollectKeys(string currentPath, string bucketName, string? prefixFilter, List<string> keys)
+    {
+        if (!Directory.Exists(currentPath))
+        {
+            return;
+        }
+
+        // Process files
+        foreach (var file in Directory.GetFiles(currentPath))
+        {
+            var fileName = Path.GetFileName(file);
+
+            // Skip temporary files
+            if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
+            {
+                continue;
+            }
+
+            // Skip inline metadata directories
+            if (_metadataMode == MetadataStorageMode.Inline && fileName == _inlineMetadataDirectoryName)
+            {
+                continue;
+            }
+
+            var relativePath = Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), file)
+                .Replace(Path.DirectorySeparatorChar, '/');
+
+            // Apply prefix filter
+            if (!string.IsNullOrEmpty(prefixFilter) && !relativePath.StartsWith(prefixFilter))
+            {
+                continue;
+            }
+
+            keys.Add(relativePath);
+        }
+
+        // Process subdirectories
+        foreach (var dir in Directory.GetDirectories(currentPath))
+        {
+            var dirName = Path.GetFileName(dir);
+
+            // Skip inline metadata directories
+            if (_metadataMode == MetadataStorageMode.Inline && dirName == _inlineMetadataDirectoryName)
+            {
+                continue;
+            }
+
+            CollectKeys(dir, bucketName, prefixFilter, keys);
+        }
+    }
+
     public async Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         // Validate that the key doesn't conflict with temporary files or metadata directories

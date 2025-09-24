@@ -157,6 +157,61 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         return Task.FromResult(keys);
     }
 
+    public Task<ListDataResult> ListDataKeysWithDelimiterAsync(string bucketName, string? prefix = null, string? delimiter = null, CancellationToken cancellationToken = default)
+    {
+        var result = new ListDataResult();
+
+        if (!_data.TryGetValue(bucketName, out var bucketData))
+        {
+            return Task.FromResult(result);
+        }
+
+        var keys = bucketData.Keys.AsEnumerable();
+
+        // Apply prefix filter
+        if (!string.IsNullOrEmpty(prefix))
+        {
+            keys = keys.Where(k => k.StartsWith(prefix));
+        }
+
+        // If no delimiter, return all keys (same as ListDataKeysAsync)
+        if (string.IsNullOrEmpty(delimiter))
+        {
+            result.Keys.AddRange(keys);
+            return Task.FromResult(result);
+        }
+
+        // Process keys with delimiter
+        var prefixLength = prefix?.Length ?? 0;
+        var commonPrefixSet = new HashSet<string>();
+
+        foreach (var key in keys)
+        {
+            // Get the part after the prefix
+            var remainingKey = key.Substring(prefixLength);
+
+            // Look for delimiter in the remaining key
+            var delimiterIndex = remainingKey.IndexOf(delimiter);
+
+            if (delimiterIndex >= 0)
+            {
+                // Found delimiter - this represents a "directory"
+                var commonPrefix = key.Substring(0, prefixLength + delimiterIndex + delimiter.Length);
+                commonPrefixSet.Add(commonPrefix);
+            }
+            else
+            {
+                // No delimiter found - this is a direct key at this level
+                result.Keys.Add(key);
+            }
+        }
+
+        result.CommonPrefixes.AddRange(commonPrefixSet.OrderBy(p => p));
+        result.Keys.Sort();
+
+        return Task.FromResult(result);
+    }
+
     public Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         if (_data.TryGetValue(bucketName, out var bucketData) &&

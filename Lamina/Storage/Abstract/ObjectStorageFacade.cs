@@ -126,17 +126,20 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
     public async Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)
     {
-        // Get data keys to find objects without metadata
-        var dataKeys = await _dataStorage.ListDataKeysAsync(bucketName, request?.Prefix, cancellationToken);
+        // Use the new delimiter-aware method
+        var dataResult = await _dataStorage.ListDataKeysWithDelimiterAsync(bucketName, request?.Prefix, request?.Delimiter, cancellationToken);
         var response = new ListObjectsResponse
         {
             Prefix = request?.Prefix,
+            Delimiter = request?.Delimiter,
             MaxKeys = request?.MaxKeys ?? 1000,
             IsTruncated = false,
-            NextContinuationToken = null
+            NextContinuationToken = null,
+            CommonPrefixes = dataResult.CommonPrefixes
         };
 
-        foreach (var key in dataKeys)
+        // Process keys to get object metadata
+        foreach (var key in dataResult.Keys)
         {
             var meta = await _metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
             if (meta == null)
@@ -147,7 +150,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
                     _logger.LogInformation("Found orphaned data without metadata for key {Key} in bucket {BucketName}", key, bucketName);
 
                     meta = await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
-                    
+
                 }
             }
             if (meta != null)

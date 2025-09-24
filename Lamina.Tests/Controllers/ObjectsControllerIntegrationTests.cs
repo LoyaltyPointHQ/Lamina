@@ -168,6 +168,180 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task ListObjects_WithDelimiter_ReturnsHierarchicalListing()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create hierarchical structure
+        await Client.PutAsync($"/{bucketName}/photos/2021/jan/1.jpg",
+            new StringContent("Image 1", Encoding.UTF8, "image/jpeg"));
+        await Client.PutAsync($"/{bucketName}/photos/2021/feb/2.jpg",
+            new StringContent("Image 2", Encoding.UTF8, "image/jpeg"));
+        await Client.PutAsync($"/{bucketName}/photos/2022/mar/3.jpg",
+            new StringContent("Image 3", Encoding.UTF8, "image/jpeg"));
+        await Client.PutAsync($"/{bucketName}/photos/readme.txt",
+            new StringContent("Photos readme", Encoding.UTF8, "text/plain"));
+        await Client.PutAsync($"/{bucketName}/docs/manual.pdf",
+            new StringContent("Manual", Encoding.UTF8, "application/pdf"));
+
+        // Test with prefix and delimiter
+        var response = await Client.GetAsync($"/{bucketName}?prefix=photos/&delimiter=/");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResult?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+
+        // Should contain only direct files under photos/
+        Assert.Single(result.ContentsList);
+        Assert.Equal("photos/readme.txt", result.ContentsList[0].Key);
+
+        // Should contain common prefixes for subdirectories
+        Assert.Equal(2, result.CommonPrefixesList.Count);
+        Assert.Contains(result.CommonPrefixesList, cp => cp.Prefix == "photos/2021/");
+        Assert.Contains(result.CommonPrefixesList, cp => cp.Prefix == "photos/2022/");
+    }
+
+    [Fact]
+    public async Task ListObjects_WithDelimiterNoPrefix_ReturnsTopLevelOnly()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create hierarchical structure
+        await Client.PutAsync($"/{bucketName}/photos/2021/image.jpg",
+            new StringContent("Image", Encoding.UTF8, "image/jpeg"));
+        await Client.PutAsync($"/{bucketName}/docs/readme.txt",
+            new StringContent("Readme", Encoding.UTF8, "text/plain"));
+        await Client.PutAsync($"/{bucketName}/root-file.txt",
+            new StringContent("Root file", Encoding.UTF8, "text/plain"));
+
+        // Test with delimiter but no prefix
+        var response = await Client.GetAsync($"/{bucketName}?delimiter=/");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResult?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+
+        // Should contain only root-level files
+        Assert.Single(result.ContentsList);
+        Assert.Equal("root-file.txt", result.ContentsList[0].Key);
+
+        // Should contain common prefixes for top-level directories
+        Assert.Equal(2, result.CommonPrefixesList.Count);
+        Assert.Contains(result.CommonPrefixesList, cp => cp.Prefix == "photos/");
+        Assert.Contains(result.CommonPrefixesList, cp => cp.Prefix == "docs/");
+    }
+
+    [Fact]
+    public async Task ListObjects_WithoutDelimiter_ReturnsAllObjectsRecursively()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create hierarchical structure
+        await Client.PutAsync($"/{bucketName}/photos/2021/image.jpg",
+            new StringContent("Image", Encoding.UTF8, "image/jpeg"));
+        await Client.PutAsync($"/{bucketName}/docs/readme.txt",
+            new StringContent("Readme", Encoding.UTF8, "text/plain"));
+        await Client.PutAsync($"/{bucketName}/root-file.txt",
+            new StringContent("Root file", Encoding.UTF8, "text/plain"));
+
+        // Test without delimiter (should return all objects)
+        var response = await Client.GetAsync($"/{bucketName}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResult?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+
+        // Should contain all objects
+        Assert.Equal(3, result.ContentsList.Count);
+        Assert.Contains(result.ContentsList, o => o.Key == "photos/2021/image.jpg");
+        Assert.Contains(result.ContentsList, o => o.Key == "docs/readme.txt");
+        Assert.Contains(result.ContentsList, o => o.Key == "root-file.txt");
+
+        // Should not contain any common prefixes
+        Assert.Empty(result.CommonPrefixesList);
+    }
+
+    [Fact]
+    public async Task ListObjects_WithPrefixAndDelimiter_ReturnsNestedLevelCorrectly()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create deep hierarchical structure
+        await Client.PutAsync($"/{bucketName}/photos/2021/jan/vacation/beach1.jpg",
+            new StringContent("Beach 1", Encoding.UTF8, "image/jpeg"));
+        await Client.PutAsync($"/{bucketName}/photos/2021/jan/vacation/beach2.jpg",
+            new StringContent("Beach 2", Encoding.UTF8, "image/jpeg"));
+        await Client.PutAsync($"/{bucketName}/photos/2021/jan/work/meeting.jpg",
+            new StringContent("Meeting", Encoding.UTF8, "image/jpeg"));
+        await Client.PutAsync($"/{bucketName}/photos/2021/jan/selfie.jpg",
+            new StringContent("Selfie", Encoding.UTF8, "image/jpeg"));
+
+        // Test with specific prefix and delimiter
+        var response = await Client.GetAsync($"/{bucketName}?prefix=photos/2021/jan/&delimiter=/");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResult?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+
+        // Should contain direct files in jan/ directory
+        Assert.Single(result.ContentsList);
+        Assert.Equal("photos/2021/jan/selfie.jpg", result.ContentsList[0].Key);
+
+        // Should contain common prefixes for subdirectories
+        Assert.Equal(2, result.CommonPrefixesList.Count);
+        Assert.Contains(result.CommonPrefixesList, cp => cp.Prefix == "photos/2021/jan/vacation/");
+        Assert.Contains(result.CommonPrefixesList, cp => cp.Prefix == "photos/2021/jan/work/");
+    }
+
+    [Fact]
+    public async Task ListObjects_EmptyDelimiter_BehavesLikeNoDelimiter()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        await Client.PutAsync($"/{bucketName}/photos/image.jpg",
+            new StringContent("Image", Encoding.UTF8, "image/jpeg"));
+        await Client.PutAsync($"/{bucketName}/docs/readme.txt",
+            new StringContent("Readme", Encoding.UTF8, "text/plain"));
+
+        // Test with empty delimiter
+        var response = await Client.GetAsync($"/{bucketName}?delimiter=");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResult?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+
+        // Should return all objects (same as no delimiter)
+        Assert.Equal(2, result.ContentsList.Count);
+        Assert.Empty(result.CommonPrefixesList);
+    }
+
+    [Fact]
     public async Task HeadObject_ExistingObject_Returns200()
     {
         var bucketName = await CreateTestBucketAsync();

@@ -116,6 +116,14 @@ public class DataFirstObjectStorageTests
         _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, null, default))
             .ReturnsAsync(new[] { "file-with-metadata.txt", "file-without-metadata.txt" });
 
+        // Setup the new delimiter-aware method
+        _dataStorageMock.Setup(x => x.ListDataKeysWithDelimiterAsync(bucketName, null, null, default))
+            .ReturnsAsync(new ListDataResult
+            {
+                Keys = new List<string> { "file-with-metadata.txt", "file-without-metadata.txt" },
+                CommonPrefixes = new List<string>()
+            });
+
         // Setup metadata for first file (with metadata)
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "file-with-metadata.txt", default))
             .ReturnsAsync(new S3ObjectInfo

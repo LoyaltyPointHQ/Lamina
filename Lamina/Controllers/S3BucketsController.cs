@@ -192,6 +192,10 @@ public class S3BucketsController : ControllerBase
                 Size = o.Size,
                 StorageClass = "STANDARD",
                 Owner = new Owner()
+            }).ToList(),
+            CommonPrefixesList = objects.CommonPrefixes.Select(cp => new CommonPrefixes
+            {
+                Prefix = cp
             }).ToList()
         };
 
