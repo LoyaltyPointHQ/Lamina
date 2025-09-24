@@ -14,6 +14,8 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
     private readonly ILogger<XattrBucketMetadataStorage> _logger;
 
     private const string RegionAttributeName = "region";
+    private const string TypeAttributeName = "type";
+    private const string StorageClassAttributeName = "storage-class";
     private const string TagPrefix = "tag";
 
     public XattrBucketMetadataStorage(
@@ -60,6 +62,22 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
                 _logger.LogWarning("Failed to store region attribute for bucket {BucketName}", bucketName);
             }
 
+            // Store bucket type
+            var bucketType = request?.Type ?? BucketType.GeneralPurpose;
+            if (!_xattrHelper.SetAttribute(bucketPath, TypeAttributeName, bucketType.ToString()))
+            {
+                _logger.LogWarning("Failed to store type attribute for bucket {BucketName}", bucketName);
+            }
+
+            // Store storage class if provided
+            if (!string.IsNullOrEmpty(request?.StorageClass))
+            {
+                if (!_xattrHelper.SetAttribute(bucketPath, StorageClassAttributeName, request.StorageClass))
+                {
+                    _logger.LogWarning("Failed to store storage class attribute for bucket {BucketName}", bucketName);
+                }
+            }
+
             // Get directory creation time
             var dirInfo = new DirectoryInfo(bucketPath);
 
@@ -68,6 +86,8 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
                 Name = bucketName,
                 CreationDate = dirInfo.CreationTimeUtc,
                 Region = region,
+                Type = bucketType,
+                StorageClass = request?.StorageClass,
                 Tags = new Dictionary<string, string>()
             };
         }
@@ -99,6 +119,17 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
             // Get region from xattr, default to us-east-1
             var region = _xattrHelper.GetAttribute(bucketPath, RegionAttributeName) ?? "us-east-1";
 
+            // Get bucket type from xattr, default to GeneralPurpose
+            var typeString = _xattrHelper.GetAttribute(bucketPath, TypeAttributeName);
+            var bucketType = BucketType.GeneralPurpose;
+            if (!string.IsNullOrEmpty(typeString) && Enum.TryParse<BucketType>(typeString, out var parsedType))
+            {
+                bucketType = parsedType;
+            }
+
+            // Get storage class from xattr
+            var storageClass = _xattrHelper.GetAttribute(bucketPath, StorageClassAttributeName);
+
             // Get tags from xattr
             var tags = GetBucketTags(bucketPath);
 
@@ -107,6 +138,8 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
                 Name = bucketName,
                 CreationDate = dirInfo.CreationTimeUtc,
                 Region = region,
+                Type = bucketType,
+                StorageClass = storageClass,
                 Tags = tags
             };
         }

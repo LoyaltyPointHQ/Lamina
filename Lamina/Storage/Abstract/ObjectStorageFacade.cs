@@ -9,16 +9,19 @@ public class ObjectStorageFacade : IObjectStorageFacade
 {
     private readonly IObjectDataStorage _dataStorage;
     private readonly IObjectMetadataStorage _metadataStorage;
+    private readonly IBucketStorageFacade _bucketStorage;
     private readonly ILogger<ObjectStorageFacade> _logger;
     private readonly IContentTypeProvider _contentTypeProvider;
 
     public ObjectStorageFacade(
         IObjectDataStorage dataStorage,
         IObjectMetadataStorage metadataStorage,
+        IBucketStorageFacade bucketStorage,
         ILogger<ObjectStorageFacade> logger)
     {
         _dataStorage = dataStorage;
         _metadataStorage = metadataStorage;
+        _bucketStorage = bucketStorage;
         _logger = logger;
         _contentTypeProvider = new FileExtensionContentTypeProvider();
     }
@@ -129,12 +132,17 @@ public class ObjectStorageFacade : IObjectStorageFacade
         request ??= new ListObjectsRequest();
         var effectiveMaxKeys = Math.Min(request.MaxKeys, 1000); // S3 limits to 1000
 
+        // Get bucket type for storage optimization
+        var bucket = await _bucketStorage.GetBucketAsync(bucketName, cancellationToken);
+        var bucketType = bucket?.Type ?? BucketType.GeneralPurpose;
+
         // Only request extra if maxKeys is specified and less than 1000
         var shouldCheckTruncation = request.MaxKeys > 0 && request.MaxKeys < 1000;
         var requestLimit = shouldCheckTruncation ? effectiveMaxKeys + 1 : effectiveMaxKeys;
 
         var dataResult = await _dataStorage.ListDataKeysAsync(
             bucketName,
+            bucketType,
             request.Prefix,
             request.Delimiter,
             request.ContinuationToken, // This could be marker or continuation-token

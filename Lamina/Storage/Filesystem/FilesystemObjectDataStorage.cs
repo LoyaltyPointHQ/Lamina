@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using Lamina.Helpers;
+using Lamina.Models;
 using Lamina.Streaming.Chunked;
 using Lamina.Streaming.Validation;
 using Lamina.Storage.Abstract;
@@ -51,11 +52,10 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
         // Create a temporary file in the same directory to ensure atomic move
         var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
-        long bytesWritten = 0;
-
         try
         {
             // Write the data to temp file, ensuring proper disposal before computing ETag
+            long bytesWritten;
             {
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
                 bytesWritten = await PipeReaderHelper.CopyToAsync(dataReader, fileStream, false, cancellationToken);
@@ -108,11 +108,10 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
         // Create a temporary file in the same directory to ensure atomic move
         var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
-        long bytesWritten = 0;
-
         try
         {
             // Write the decoded data to temp file
+            long bytesWritten;
             {
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
@@ -355,7 +354,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
     }
 
 
-    public Task<ListDataResult> ListDataKeysAsync(string bucketName, string? prefix = null, string? delimiter = null, string? startAfter = null, int? maxKeys = null, CancellationToken cancellationToken = default)
+    public Task<ListDataResult> ListDataKeysAsync(string bucketName, BucketType bucketType, string? prefix = null, string? delimiter = null, string? startAfter = null, int? maxKeys = null, CancellationToken cancellationToken = default)
     {
         var result = new ListDataResult();
 
@@ -371,84 +370,196 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             return Task.FromResult(result);
         }
 
-        // If no delimiter, use iterator-based collection with early termination
-        if (string.IsNullOrEmpty(delimiter))
+        // Choose implementation based on bucket type
+        if (bucketType == BucketType.Directory)
         {
-            // Calculate the most specific starting directory based on prefix
-            var keysStartPath = CalculateOptimalStartingPath(bucketPath, prefix);
-
-            // Use iterator to collect keys with early termination
-            var keys = CollectKeysIteratively(keysStartPath, bucketName, prefix, startAfter, maxKeys);
-            result.Keys.AddRange(keys);
-            return Task.FromResult(result);
+            // Directory buckets: Use filesystem enumeration order (no sorting)
+            return Task.FromResult(ListDataKeysForDirectoryBucket(bucketPath, bucketName, prefix, delimiter, startAfter, maxKeys));
         }
-
-        // Process with delimiter logic and pagination
-        var prefixLength = prefix?.Length ?? 0;
-        var allItems = new SortedSet<(string item, bool isPrefix)>(
-            Comparer<(string item, bool isPrefix)>.Create((x, y) =>
-                string.Compare(x.item, y.item, StringComparison.Ordinal)));
-
-        // Calculate the most specific starting directory based on prefix
-        var delimiterStartPath = CalculateOptimalStartingPath(bucketPath, prefix);
-        CollectKeysWithDelimiter(delimiterStartPath, bucketName, prefix, delimiter, prefixLength, allItems, startAfter, maxKeys);
-
-        // Apply maxKeys limit to final sorted results and materialize to avoid multiple enumeration
-        var finalItems = allItems.AsEnumerable();
-        if (maxKeys.HasValue)
+        else
         {
-            finalItems = finalItems.Take(maxKeys.Value);
+            // General purpose buckets: Maintain lexicographical order
+            return Task.FromResult(ListDataKeysForGeneralPurposeBucket(bucketPath, bucketName, prefix, delimiter, startAfter, maxKeys));
         }
-        var materializedItems = finalItems.ToList();
-
-        // Separate into keys and common prefixes
-        result.Keys.AddRange(materializedItems.Where(item => !item.isPrefix).Select(item => item.item));
-        result.CommonPrefixes.AddRange(materializedItems.Where(item => item.isPrefix).Select(item => item.item));
-
-        return Task.FromResult(result);
     }
 
-    private bool CollectKeysWithDelimiter(string currentPath, string bucketName, string? prefix, string delimiter, int prefixLength, SortedSet<(string item, bool isPrefix)> allItems, string? startAfter, int? maxKeys)
+    private ListDataResult ListDataKeysForDirectoryBucket(string bucketPath, string bucketName, string? prefix, string? delimiter, string? startAfter, int? maxKeys)
     {
-        if (!Directory.Exists(currentPath))
+        var result = new ListDataResult();
+
+        if (string.IsNullOrEmpty(delimiter))
         {
-            return false;
+            // No delimiter - enumerate all files in filesystem order
+            var keys = EnumerateKeysForDirectoryBucketNoDelimiter(bucketPath, bucketName, prefix, startAfter, maxKeys);
+            result.Keys.AddRange(keys);
+        }
+        else
+        {
+            // With delimiter - enumerate with delimiter handling in filesystem order
+            var (keys, commonPrefixes) = EnumerateKeysForDirectoryBucketWithDelimiter(bucketPath, bucketName, prefix, delimiter, startAfter, maxKeys);
+            result.Keys.AddRange(keys);
+            result.CommonPrefixes.AddRange(commonPrefixes);
         }
 
-        // Check if we've already collected enough items
-        if (maxKeys.HasValue && allItems.Count >= maxKeys.Value)
+        return result;
+    }
+
+    private ListDataResult ListDataKeysForGeneralPurposeBucket(string bucketPath, string bucketName, string? prefix, string? delimiter, string? startAfter, int? maxKeys)
+    {
+        var result = new ListDataResult();
+
+        if (string.IsNullOrEmpty(delimiter))
         {
-            return true; // Signal that we should stop collecting
+            // No delimiter - use sorted enumeration for lexicographical order
+            var keys = EnumerateKeysForGeneralPurposeBucketNoDelimiter(bucketPath, bucketName, prefix, startAfter, maxKeys);
+            result.Keys.AddRange(keys);
+        }
+        else
+        {
+            // With delimiter - use sorted enumeration with delimiter handling
+            var (keys, commonPrefixes) = EnumerateKeysForGeneralPurposeBucketWithDelimiter(bucketPath, bucketName, prefix, delimiter, startAfter, maxKeys);
+            result.Keys.AddRange(keys);
+            result.CommonPrefixes.AddRange(commonPrefixes);
         }
 
-        // Process files in current directory
-        foreach (var file in Directory.GetFiles(currentPath))
-        {
-            var fileName = Path.GetFileName(file);
+        return result;
+    }
 
-            // Skip temporary files
-            if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
+    private IEnumerable<string> EnumerateKeysForDirectoryBucketNoDelimiter(string bucketPath, string bucketName, string? prefix, string? startAfter, int? maxKeys)
+    {
+        var count = 0;
+        var startPath = CalculateOptimalStartingPath(bucketPath, prefix);
+
+        // Use lazy enumeration for Directory buckets - no sorting needed
+        foreach (var key in EnumerateAllKeysLazily(startPath, bucketName, prefix))
+        {
+            // Apply startAfter filter
+            if (!string.IsNullOrEmpty(startAfter) && string.Compare(key, startAfter, StringComparison.Ordinal) <= 0)
             {
                 continue;
             }
 
-            // Skip inline metadata directories
-            if (_metadataMode == MetadataStorageMode.Inline && fileName == _inlineMetadataDirectoryName)
+            yield return key;
+            count++;
+
+            // Early termination for Directory buckets
+            if (maxKeys.HasValue && count >= maxKeys.Value)
             {
-                continue;
+                yield break;
             }
+        }
+    }
 
-            var relativePath = Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), file)
-                .Replace(Path.DirectorySeparatorChar, '/');
+    private (List<string> keys, List<string> commonPrefixes) EnumerateKeysForDirectoryBucketWithDelimiter(string bucketPath, string bucketName, string? prefix, string delimiter, string? startAfter, int? maxKeys)
+    {
+        // Use optimized single-directory scan for forward slash delimiter
+        if (delimiter == "/")
+        {
+            return ListDataKeysWithDelimiterOptimized(bucketPath, prefix, delimiter, startAfter, maxKeys, sortResults: false);
+        }
 
-            // Apply prefix filter
-            if (!string.IsNullOrEmpty(prefix) && !relativePath.StartsWith(prefix))
+        // Fall back to full enumeration for other delimiters (rare case)
+        var keys = new List<string>();
+        var commonPrefixes = new List<string>();
+        var count = 0;
+        var prefixLength = prefix?.Length ?? 0;
+        var startPath = CalculateOptimalStartingPath(bucketPath, prefix);
+        var seenPrefixes = new HashSet<string>();
+
+        // Use lazy enumeration for Directory buckets - filesystem order
+        foreach (var key in EnumerateAllKeysLazily(startPath, bucketName, prefix))
+        {
+            // Apply startAfter filter early
+            if (!string.IsNullOrEmpty(startAfter) && string.Compare(key, startAfter, StringComparison.Ordinal) <= 0)
             {
                 continue;
             }
 
             // Check for delimiter after prefix
-            var remainingKey = relativePath.Substring(prefixLength);
+            var remainingKey = key.Substring(prefixLength);
+            var delimiterIndex = remainingKey.IndexOf(delimiter, StringComparison.Ordinal);
+
+            if (delimiterIndex >= 0)
+            {
+                // Found delimiter - this is a common prefix
+                var commonPrefix = key.Substring(0, prefixLength + delimiterIndex + delimiter.Length);
+
+                if (seenPrefixes.Add(commonPrefix)) // Only add if not seen before
+                {
+                    commonPrefixes.Add(commonPrefix);
+                    count++;
+                }
+            }
+            else
+            {
+                // No delimiter - direct key
+                keys.Add(key);
+                count++;
+            }
+
+            // Early termination
+            if (maxKeys.HasValue && count >= maxKeys.Value)
+            {
+                break;
+            }
+        }
+
+        return (keys, commonPrefixes);
+    }
+
+    private IEnumerable<string> EnumerateKeysForGeneralPurposeBucketNoDelimiter(string bucketPath, string bucketName, string? prefix, string? startAfter, int? maxKeys)
+    {
+        var sortedKeys = new SortedSet<string>(StringComparer.Ordinal);
+        var startPath = CalculateOptimalStartingPath(bucketPath, prefix);
+
+        // Collect into sorted set for lexicographical order
+        foreach (var key in EnumerateAllKeysLazily(startPath, bucketName, prefix))
+        {
+            // Apply startAfter filter during enumeration for efficiency
+            if (!string.IsNullOrEmpty(startAfter) && string.Compare(key, startAfter, StringComparison.Ordinal) <= 0)
+            {
+                continue;
+            }
+
+            sortedKeys.Add(key);
+
+            // Early termination if we have enough
+            if (maxKeys.HasValue && sortedKeys.Count >= maxKeys.Value)
+            {
+                break;
+            }
+        }
+
+        return sortedKeys;
+    }
+
+    private (List<string> keys, List<string> commonPrefixes) EnumerateKeysForGeneralPurposeBucketWithDelimiter(string bucketPath, string bucketName, string? prefix, string delimiter, string? startAfter, int? maxKeys)
+    {
+        // Use optimized single-directory scan for forward slash delimiter
+        if (delimiter == "/")
+        {
+            return ListDataKeysWithDelimiterOptimized(bucketPath, prefix, delimiter, startAfter, maxKeys, sortResults: true);
+        }
+
+        // Fall back to full enumeration for other delimiters (rare case)
+        var allItems = new SortedSet<(string item, bool isPrefix)>(
+            Comparer<(string item, bool isPrefix)>.Create((x, y) =>
+                string.Compare(x.item, y.item, StringComparison.Ordinal)));
+
+        var prefixLength = prefix?.Length ?? 0;
+        var startPath = CalculateOptimalStartingPath(bucketPath, prefix);
+
+        // Collect into sorted set for lexicographical order
+        foreach (var key in EnumerateAllKeysLazily(startPath, bucketName, prefix))
+        {
+            // Apply startAfter filter early
+            if (!string.IsNullOrEmpty(startAfter) && string.Compare(key, startAfter, StringComparison.Ordinal) <= 0)
+            {
+                continue;
+            }
+
+            // Check for delimiter after prefix
+            var remainingKey = key.Substring(prefixLength);
             var delimiterIndex = remainingKey.IndexOf(delimiter, StringComparison.Ordinal);
 
             string itemToAdd;
@@ -457,100 +568,41 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             if (delimiterIndex >= 0)
             {
                 // Found delimiter - add as common prefix
-                itemToAdd = relativePath.Substring(0, prefixLength + delimiterIndex + delimiter.Length);
+                itemToAdd = key.Substring(0, prefixLength + delimiterIndex + delimiter.Length);
                 isPrefix = true;
             }
             else
             {
-                // No delimiter - direct file
-                itemToAdd = relativePath;
+                // No delimiter - direct key
+                itemToAdd = key;
                 isPrefix = false;
-            }
-
-            // Apply startAfter filter
-            if (!string.IsNullOrEmpty(startAfter) && string.Compare(itemToAdd, startAfter, StringComparison.Ordinal) <= 0)
-            {
-                continue;
             }
 
             allItems.Add((itemToAdd, isPrefix));
 
-            // Check if we've reached the limit after adding this item
+            // Early termination
             if (maxKeys.HasValue && allItems.Count >= maxKeys.Value)
             {
-                return true; // Stop collecting
+                break;
             }
         }
 
-        // Process subdirectories - sort them first to ensure lexicographical order
-        var directories = Directory.GetDirectories(currentPath);
-        Array.Sort(directories, StringComparer.Ordinal);
+        // Separate into keys and common prefixes
+        var keys = allItems.Where(item => !item.isPrefix).Select(item => item.item).ToList();
+        var commonPrefixes = allItems.Where(item => item.isPrefix).Select(item => item.item).ToList();
 
-        foreach (var dir in directories)
-        {
-            var dirName = Path.GetFileName(dir);
-
-            // Skip inline metadata directories
-            if (_metadataMode == MetadataStorageMode.Inline && dirName == _inlineMetadataDirectoryName)
-            {
-                continue;
-            }
-
-            var relativePath = Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), dir)
-                .Replace(Path.DirectorySeparatorChar, '/') + "/";
-
-            // Apply prefix filter - only process directories that could contain matching keys
-            if (!string.IsNullOrEmpty(prefix) && !relativePath.StartsWith(prefix) && !prefix.StartsWith(relativePath))
-            {
-                continue;
-            }
-
-            if (!string.IsNullOrEmpty(prefix) && relativePath.StartsWith(prefix))
-            {
-                // Check for delimiter after prefix in directory path
-                var remainingKey = relativePath.Substring(prefixLength);
-                var delimiterIndex = remainingKey.IndexOf(delimiter, StringComparison.Ordinal);
-
-                if (delimiterIndex >= 0)
-                {
-                    // Found delimiter - add as common prefix
-                    var commonPrefix = relativePath.Substring(0, prefixLength + delimiterIndex + delimiter.Length);
-
-                    // Apply startAfter filter
-                    if (string.IsNullOrEmpty(startAfter) || string.Compare(commonPrefix, startAfter, StringComparison.Ordinal) > 0)
-                    {
-                        allItems.Add((commonPrefix, true));
-
-                        // Check if we've reached the limit after adding this item
-                        if (maxKeys.HasValue && allItems.Count >= maxKeys.Value)
-                        {
-                            return true; // Stop collecting
-                        }
-                    }
-
-                    continue; // Don't recurse into this directory
-                }
-            }
-
-            // Recurse into subdirectory - stop if we've collected enough items
-            if (CollectKeysWithDelimiter(dir, bucketName, prefix, delimiter, prefixLength, allItems, startAfter, maxKeys))
-            {
-                return true; // Stop collecting if subdirectory signaled to stop
-            }
-        }
-
-        return false; // Continue collecting
+        return (keys, commonPrefixes);
     }
 
-    private void CollectKeys(string currentPath, string bucketName, string? prefixFilter, SortedSet<string> keys, string? startAfter)
+    private IEnumerable<string> EnumerateAllKeysLazily(string startPath, string bucketName, string? prefix)
     {
-        if (!Directory.Exists(currentPath))
+        if (!Directory.Exists(startPath))
         {
-            return;
+            yield break;
         }
 
-        // Process files in current directory
-        foreach (var file in Directory.GetFiles(currentPath))
+        // Use Directory.EnumerateFiles for lazy enumeration - much more memory efficient
+        foreach (var file in Directory.EnumerateFiles(startPath, "*", SearchOption.AllDirectories))
         {
             var fileName = Path.GetFileName(file);
 
@@ -561,153 +613,26 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             }
 
             // Skip inline metadata directories
-            if (_metadataMode == MetadataStorageMode.Inline && fileName == _inlineMetadataDirectoryName)
+            var relativePath = Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), file);
+            if (_metadataMode == MetadataStorageMode.Inline &&
+                relativePath.Contains(Path.DirectorySeparatorChar + _inlineMetadataDirectoryName + Path.DirectorySeparatorChar))
             {
                 continue;
             }
 
-            var relativePath = Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), file)
-                .Replace(Path.DirectorySeparatorChar, '/');
+            // Convert to S3 key format
+            var key = relativePath.Replace(Path.DirectorySeparatorChar, '/');
 
             // Apply prefix filter
-            if (!string.IsNullOrEmpty(prefixFilter) && !relativePath.StartsWith(prefixFilter))
+            if (!string.IsNullOrEmpty(prefix) && !key.StartsWith(prefix))
             {
                 continue;
             }
 
-            // Apply startAfter filter
-            if (!string.IsNullOrEmpty(startAfter) && string.Compare(relativePath, startAfter, StringComparison.Ordinal) <= 0)
-            {
-                continue;
-            }
-
-            keys.Add(relativePath);
-
-        }
-
-        // Process subdirectories - only recurse if they could contain matching keys and we need more keys
-        foreach (var dir in Directory.GetDirectories(currentPath))
-        {
-            var dirName = Path.GetFileName(dir);
-
-            // Skip inline metadata directories
-            if (_metadataMode == MetadataStorageMode.Inline && dirName == _inlineMetadataDirectoryName)
-            {
-                continue;
-            }
-
-            // Calculate the directory path relative to bucket
-            var dirRelativePath = Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), dir)
-                .Replace(Path.DirectorySeparatorChar, '/') + "/";
-
-            // Only recurse if this directory could contain keys matching our prefix
-            if (string.IsNullOrEmpty(prefixFilter) ||
-                prefixFilter.StartsWith(dirRelativePath) ||
-                dirRelativePath.StartsWith(prefixFilter))
-            {
-                // Recurse into subdirectory
-                CollectKeys(dir, bucketName, prefixFilter, keys, startAfter);
-            }
+            yield return key;
         }
     }
 
-    private IEnumerable<string> CollectKeysIteratively(string currentPath, string bucketName, string? prefixFilter, string? startAfter, int? maxKeys)
-    {
-        var sortedKeys = new SortedSet<string>(StringComparer.Ordinal);
-        CollectKeysOptimized(currentPath, bucketName, prefixFilter, sortedKeys, startAfter, maxKeys);
-        return sortedKeys;
-    }
-
-    private bool CollectKeysOptimized(string currentPath, string bucketName, string? prefixFilter, SortedSet<string> keys, string? startAfter, int? maxKeys)
-    {
-        if (!Directory.Exists(currentPath))
-        {
-            return false;
-        }
-
-        // Check if we've already collected enough items
-        if (maxKeys.HasValue && keys.Count >= maxKeys.Value)
-        {
-            return true; // Signal that we should stop collecting
-        }
-
-        // Process files in current directory first
-        var files = Directory.GetFiles(currentPath);
-        Array.Sort(files, StringComparer.Ordinal);
-
-        foreach (var file in files)
-        {
-            var fileName = Path.GetFileName(file);
-
-            // Skip temporary files
-            if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
-            {
-                continue;
-            }
-
-            // Skip inline metadata directories
-            if (_metadataMode == MetadataStorageMode.Inline && fileName == _inlineMetadataDirectoryName)
-            {
-                continue;
-            }
-
-            var relativePath = Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), file)
-                .Replace(Path.DirectorySeparatorChar, '/');
-
-            // Apply prefix filter
-            if (!string.IsNullOrEmpty(prefixFilter) && !relativePath.StartsWith(prefixFilter))
-            {
-                continue;
-            }
-
-            // Apply startAfter filter
-            if (!string.IsNullOrEmpty(startAfter) && string.Compare(relativePath, startAfter, StringComparison.Ordinal) <= 0)
-            {
-                continue;
-            }
-
-            keys.Add(relativePath);
-
-            // Check if we've reached the limit after adding this item
-            if (maxKeys.HasValue && keys.Count >= maxKeys.Value)
-            {
-                return true; // Stop collecting
-            }
-        }
-
-        // Process subdirectories - sort them first to ensure lexicographical order
-        var directories = Directory.GetDirectories(currentPath);
-        Array.Sort(directories, StringComparer.Ordinal);
-
-        foreach (var dir in directories)
-        {
-            var dirName = Path.GetFileName(dir);
-
-            // Skip inline metadata directories
-            if (_metadataMode == MetadataStorageMode.Inline && dirName == _inlineMetadataDirectoryName)
-            {
-                continue;
-            }
-
-            // Calculate the directory path relative to bucket
-            var dirRelativePath = Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), dir)
-                .Replace(Path.DirectorySeparatorChar, '/') + "/";
-
-            // Only recurse if this directory could contain keys matching our prefix
-            if (string.IsNullOrEmpty(prefixFilter) ||
-                prefixFilter.StartsWith(dirRelativePath) ||
-                dirRelativePath.StartsWith(prefixFilter))
-            {
-                // Recurse into subdirectory - stop if we've collected enough items
-                if (CollectKeysOptimized(dir, bucketName, prefixFilter, keys, startAfter, maxKeys))
-                {
-                    return true; // Stop collecting if subdirectory signaled to stop
-                }
-            }
-        }
-
-        return false; // Continue collecting
-    }
 
     public async Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
@@ -752,7 +677,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
         // Find the deepest existing directory that contains potential matches
         var directoryPath = fullPrefixPath;
-        
+
         // If the full prefix path is a directory, start from there
         if (Directory.Exists(directoryPath))
         {
@@ -767,6 +692,170 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
         // Return the deepest existing directory, or bucket path if nothing exists
         return string.IsNullOrEmpty(directoryPath) || !directoryPath.StartsWith(bucketPath) ? bucketPath : directoryPath;
+    }
+
+    /// <summary>
+    /// Gets the parent directory path from a prefix for optimized delimiter-based scanning.
+    /// For prefix "a/b/c", returns ("a/b/", "c") to scan directory "a/b/" for entries starting with "c".
+    /// </summary>
+    /// <param name="bucketPath">The base bucket directory path</param>
+    /// <param name="prefix">The S3 prefix (e.g., "a/b/c")</param>
+    /// <param name="delimiter">The delimiter character (typically "/")</param>
+    /// <returns>Tuple of (parentDirectoryPath, filterPrefix)</returns>
+    private (string parentDirectoryPath, string filterPrefix) GetParentDirectoryFromPrefix(string bucketPath, string? prefix, string delimiter)
+    {
+        if (string.IsNullOrEmpty(prefix))
+        {
+            // No prefix - scan bucket root, no filter
+            return (bucketPath, string.Empty);
+        }
+
+        var lastDelimiterIndex = prefix.LastIndexOf(delimiter, StringComparison.Ordinal);
+
+        if (lastDelimiterIndex == -1)
+        {
+            // No delimiter in prefix - scan bucket root, filter by entire prefix
+            return (bucketPath, prefix);
+        }
+
+        // Split at last delimiter
+        var parentPrefix = prefix.Substring(0, lastDelimiterIndex + delimiter.Length); // "a/b/"
+        var filterPrefix = prefix.Substring(lastDelimiterIndex + delimiter.Length);    // "c"
+
+        // Convert to filesystem path
+        var parentPath = Path.Combine(bucketPath, parentPrefix.Replace('/', Path.DirectorySeparatorChar).TrimEnd(Path.DirectorySeparatorChar));
+
+        return (parentPath, filterPrefix);
+    }
+
+    /// <summary>
+    /// Optimized listing method that performs single-directory scan when delimiter is "/".
+    /// This provides massive performance improvements for hierarchical data structures.
+    /// </summary>
+    /// <param name="bucketPath">The bucket directory path</param>
+    /// <param name="prefix">The S3 prefix to filter by</param>
+    /// <param name="delimiter">The delimiter (must be "/")</param>
+    /// <param name="startAfter">The continuation token</param>
+    /// <param name="maxKeys">Maximum number of keys to return</param>
+    /// <param name="sortResults">Whether to sort results (true for general-purpose, false for directory buckets)</param>
+    /// <returns>Lists of keys and common prefixes</returns>
+    private (List<string> keys, List<string> commonPrefixes) ListDataKeysWithDelimiterOptimized(
+        string bucketPath, string? prefix, string delimiter,
+        string? startAfter, int? maxKeys, bool sortResults)
+    {
+        var (parentDirectoryPath, filterPrefix) = GetParentDirectoryFromPrefix(bucketPath, prefix, delimiter);
+
+        var keys = new List<string>();
+        var commonPrefixSet = new HashSet<string>();
+        var totalItems = 0;
+        var effectiveMaxKeys = maxKeys ?? int.MaxValue;
+
+        // Check if parent directory exists
+        if (!Directory.Exists(parentDirectoryPath))
+        {
+            return (keys, []);
+        }
+
+        // Get all entries in the parent directory (single-level scan only)
+        var allEntries = new List<(string name, bool isDirectory, string fullS3Key)>();
+
+        try
+        {
+            // Enumerate files and directories in the parent directory
+            foreach (var entry in Directory.EnumerateFileSystemEntries(parentDirectoryPath))
+            {
+                var entryName = Path.GetFileName(entry);
+
+                // Skip temporary files
+                if (FilesystemStorageHelper.IsTemporaryFile(entryName, _tempFilePrefix))
+                {
+                    continue;
+                }
+
+                // Skip inline metadata directories
+                if (_metadataMode == MetadataStorageMode.Inline && entryName == _inlineMetadataDirectoryName)
+                {
+                    continue;
+                }
+
+                // Apply prefix filter at directory level
+                if (!string.IsNullOrEmpty(filterPrefix) && !entryName.StartsWith(filterPrefix))
+                {
+                    continue;
+                }
+
+                var isDirectory = Directory.Exists(entry);
+
+                // Construct full S3 key
+                string fullS3Key;
+                if (string.IsNullOrEmpty(prefix))
+                {
+                    fullS3Key = entryName;
+                }
+                else
+                {
+                    var parentS3Prefix = prefix.Substring(0, Math.Max(0, prefix.Length - filterPrefix.Length));
+                    fullS3Key = parentS3Prefix + entryName;
+                }
+
+                allEntries.Add((entryName, isDirectory, fullS3Key));
+            }
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // Directory doesn't exist - return empty results
+            return (keys, new List<string>());
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Permission denied - return empty results
+            return (keys, new List<string>());
+        }
+
+        // Sort entries if required (general-purpose buckets need lexicographical order)
+        if (sortResults)
+        {
+            allEntries.Sort((a, b) => string.Compare(a.fullS3Key, b.fullS3Key, StringComparison.Ordinal));
+        }
+
+        // Process entries and apply pagination
+        foreach (var (_, isDirectory, fullS3Key) in allEntries)
+        {
+            // Apply startAfter filter
+            if (!string.IsNullOrEmpty(startAfter) && string.Compare(fullS3Key, startAfter, StringComparison.Ordinal) <= 0)
+            {
+                continue;
+            }
+
+            if (totalItems >= effectiveMaxKeys)
+            {
+                break;
+            }
+
+            if (isDirectory)
+            {
+                // Directory becomes a common prefix
+                var commonPrefix = fullS3Key + delimiter;
+                if (commonPrefixSet.Add(commonPrefix))
+                {
+                    totalItems++;
+                }
+            }
+            else
+            {
+                // File becomes a direct key
+                keys.Add(fullS3Key);
+                totalItems++;
+            }
+        }
+
+        var commonPrefixes = commonPrefixSet.ToList();
+        if (sortResults)
+        {
+            commonPrefixes.Sort(StringComparer.Ordinal);
+        }
+
+        return (keys, commonPrefixes);
     }
 
 }

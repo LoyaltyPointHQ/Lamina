@@ -1,4 +1,5 @@
 using System.IO.Pipelines;
+using Lamina.Models;
 using Lamina.Streaming.Validation;
 
 namespace Lamina.Storage.Abstract;
@@ -18,6 +19,6 @@ public interface IObjectDataStorage
     Task<bool> DeleteDataAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     Task<bool> DataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     Task<(long size, DateTime lastModified)?> GetDataInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default);
-    Task<ListDataResult> ListDataKeysAsync(string bucketName, string? prefix = null, string? delimiter = null, string? startAfter = null, int? maxKeys = null, CancellationToken cancellationToken = default);
+    Task<ListDataResult> ListDataKeysAsync(string bucketName, BucketType bucketType, string? prefix = null, string? delimiter = null, string? startAfter = null, int? maxKeys = null, CancellationToken cancellationToken = default);
     Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default);
 }

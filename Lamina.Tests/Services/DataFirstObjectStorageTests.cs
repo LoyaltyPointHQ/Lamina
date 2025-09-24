@@ -14,6 +14,7 @@ public class DataFirstObjectStorageTests
 {
     private readonly Mock<IObjectDataStorage> _dataStorageMock;
     private readonly Mock<IObjectMetadataStorage> _metadataStorageMock;
+    private readonly Mock<IBucketStorageFacade> _bucketStorageMock;
     private readonly Mock<ILogger<ObjectStorageFacade>> _loggerMock;
     private readonly ObjectStorageFacade _facade;
 
@@ -21,8 +22,20 @@ public class DataFirstObjectStorageTests
     {
         _dataStorageMock = new Mock<IObjectDataStorage>();
         _metadataStorageMock = new Mock<IObjectMetadataStorage>();
+        _bucketStorageMock = new Mock<IBucketStorageFacade>();
         _loggerMock = new Mock<ILogger<ObjectStorageFacade>>();
-        _facade = new ObjectStorageFacade(_dataStorageMock.Object, _metadataStorageMock.Object, _loggerMock.Object);
+
+        // Setup default bucket to return GeneralPurpose type
+        _bucketStorageMock.Setup(x => x.GetBucketAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string bucketName, CancellationToken ct) => new Bucket
+            {
+                Name = bucketName,
+                Type = BucketType.GeneralPurpose,
+                Region = "us-east-1",
+                CreationDate = DateTime.UtcNow
+            });
+
+        _facade = new ObjectStorageFacade(_dataStorageMock.Object, _metadataStorageMock.Object, _bucketStorageMock.Object, _loggerMock.Object);
     }
 
     [Fact]
@@ -113,7 +126,7 @@ public class DataFirstObjectStorageTests
         var expectedEtag = ETagHelper.ComputeETag(testData);
 
         // Setup the new delimiter-aware method
-        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, null, null, null, null, default))
+        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, It.IsAny<BucketType>(), null, null, null, null, default))
             .ReturnsAsync(new ListDataResult
             {
                 Keys = new List<string> { "file-with-metadata.txt", "file-without-metadata.txt" },

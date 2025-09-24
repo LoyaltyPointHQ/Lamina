@@ -52,6 +52,10 @@ builder.Services.Configure<AuthenticationSettings>(
 builder.Services.Configure<AutoBucketCreationSettings>(
     builder.Configuration.GetSection("AutoBucketCreation"));
 
+// Configure bucket defaults
+builder.Services.Configure<BucketDefaultsSettings>(
+    builder.Configuration.GetSection("BucketDefaults"));
+
 // Register authentication service
 builder.Services.AddSingleton<IAuthenticationService, AuthenticationService>();
 builder.Services.AddSingleton<IStreamingAuthenticationService, StreamingAuthenticationService>();

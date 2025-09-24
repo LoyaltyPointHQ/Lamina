@@ -31,6 +31,9 @@ public class BucketInfo
 
     [XmlElement("CreationDate")]
     public string CreationDate { get; set; } = string.Empty;
+
+    [XmlElement("BucketType")]
+    public string? BucketType { get; set; }
 }
 
 [XmlRoot("ListBucketResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]

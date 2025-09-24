@@ -3,6 +3,8 @@ using Lamina.Models;
 using Lamina.Services;
 using System.Xml.Serialization;
 using Lamina.Storage.Abstract;
+using Lamina.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace Lamina.Controllers;
 
@@ -14,6 +16,7 @@ public class S3BucketsController : ControllerBase
     private readonly IObjectStorageFacade _objectStorage;
     private readonly IMultipartUploadStorageFacade _multipartStorage;
     private readonly IAuthenticationService _authService;
+    private readonly BucketDefaultsSettings _bucketDefaults;
     private readonly ILogger<S3BucketsController> _logger;
 
     public S3BucketsController(
@@ -21,12 +24,14 @@ public class S3BucketsController : ControllerBase
         IObjectStorageFacade objectStorage,
         IMultipartUploadStorageFacade multipartStorage,
         IAuthenticationService authService,
+        IOptions<BucketDefaultsSettings> bucketDefaultsOptions,
         ILogger<S3BucketsController> logger)
     {
         _bucketStorage = bucketStorage;
         _objectStorage = objectStorage;
         _multipartStorage = multipartStorage;
         _authService = authService;
+        _bucketDefaults = bucketDefaultsOptions.Value;
         _logger = logger;
     }
 
@@ -49,7 +54,10 @@ public class S3BucketsController : ControllerBase
             return new ObjectResult(error);
         }
 
-        var bucket = await _bucketStorage.CreateBucketAsync(bucketName, null, cancellationToken);
+        // Parse bucket configuration from request body or headers
+        var createRequest = await ParseCreateBucketRequest(cancellationToken);
+
+        var bucket = await _bucketStorage.CreateBucketAsync(bucketName, createRequest, cancellationToken);
         if (bucket == null)
         {
             _logger.LogWarning("Bucket already exists: {BucketName}", bucketName);
@@ -95,6 +103,53 @@ public class S3BucketsController : ControllerBase
         return true;
     }
 
+    private async Task<CreateBucketRequest> ParseCreateBucketRequest(CancellationToken cancellationToken)
+    {
+        var request = new CreateBucketRequest();
+
+        // Check for bucket type in header
+        if (Request.Headers.TryGetValue("x-amz-bucket-type", out var bucketTypeHeader))
+        {
+            if (Enum.TryParse<BucketType>(bucketTypeHeader.ToString(), true, out var bucketType))
+            {
+                request.Type = bucketType;
+            }
+        }
+
+        // Check for storage class in header
+        if (Request.Headers.TryGetValue("x-amz-storage-class", out var storageClassHeader))
+        {
+            request.StorageClass = storageClassHeader.ToString();
+        }
+
+        // Check for region in header
+        if (Request.Headers.TryGetValue("x-amz-bucket-region", out var regionHeader))
+        {
+            request.Region = regionHeader.ToString();
+        }
+
+        // TODO: Parse XML request body for CreateBucketConfiguration if needed
+        // For now, we'll just use headers and apply defaults
+
+        // Apply defaults from configuration when not specified
+        if (!request.Type.HasValue)
+        {
+            request.Type = _bucketDefaults.Type;
+        }
+
+        if (string.IsNullOrEmpty(request.Region))
+        {
+            request.Region = _bucketDefaults.Region;
+        }
+
+        if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketDefaults.StorageClass))
+        {
+            request.StorageClass = _bucketDefaults.StorageClass;
+        }
+
+        return request;
+    }
+
     [HttpGet("")]
     [Route("/")]
     public async Task<IActionResult> ListBuckets(CancellationToken cancellationToken = default)
@@ -124,7 +179,8 @@ public class S3BucketsController : ControllerBase
             Buckets = filteredBuckets.Select(b => new BucketInfo
             {
                 Name = b.Name,
-                CreationDate = b.CreationDate.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
+                CreationDate = b.CreationDate.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
+                BucketType = b.Type.ToString()
             }).ToList()
         };
 
@@ -168,6 +224,42 @@ public class S3BucketsController : ControllerBase
             return new ObjectResult(error);
         }
 
+        // Get bucket information to check if it's a Directory bucket
+        var bucket = await _bucketStorage.GetBucketAsync(bucketName, cancellationToken);
+        var isDirectoryBucket = bucket?.Type == BucketType.Directory;
+
+        // Validate Directory bucket constraints
+        if (isDirectoryBucket)
+        {
+            // For Directory buckets, only "/" delimiter is supported
+            if (!string.IsNullOrEmpty(delimiter) && delimiter != "/")
+            {
+                var error = new S3Error
+                {
+                    Code = "InvalidArgument",
+                    Message = "Directory buckets only support '/' as a delimiter",
+                    Resource = $"/{bucketName}"
+                };
+                Response.StatusCode = 400;
+                Response.ContentType = "application/xml";
+                return new ObjectResult(error);
+            }
+
+            // Prefixes must end with delimiter if delimiter is specified
+            if (!string.IsNullOrEmpty(prefix) && !string.IsNullOrEmpty(delimiter) && !prefix.EndsWith(delimiter))
+            {
+                var error = new S3Error
+                {
+                    Code = "InvalidArgument",
+                    Message = "For Directory buckets, prefixes must end with the delimiter",
+                    Resource = $"/{bucketName}"
+                };
+                Response.StatusCode = 400;
+                Response.ContentType = "application/xml";
+                return new ObjectResult(error);
+            }
+        }
+
         // Determine API version: listType=2 means ListObjectsV2, otherwise ListObjects V1
         var isV2 = listType == 2;
 
@@ -184,6 +276,14 @@ public class S3BucketsController : ControllerBase
         };
 
         var objects = await _objectStorage.ListObjectsAsync(bucketName, listRequest, cancellationToken);
+
+        // For Directory buckets, objects should not be in lexicographical order
+        if (isDirectoryBucket)
+        {
+            // Randomize the order to simulate non-lexicographical ordering
+            var random = new Random();
+            objects.Contents = objects.Contents.OrderBy(x => random.Next()).ToList();
+        }
 
         Response.ContentType = "application/xml";
 
@@ -272,11 +372,19 @@ public class S3BucketsController : ControllerBase
     [HttpHead("{bucketName}")]
     public async Task<IActionResult> HeadBucket(string bucketName, CancellationToken cancellationToken = default)
     {
-        var exists = await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken);
-        if (!exists)
+        var bucket = await _bucketStorage.GetBucketAsync(bucketName, cancellationToken);
+        if (bucket == null)
         {
             return NotFound();
         }
+
+        // Add bucket type headers
+        Response.Headers.Append("x-amz-bucket-type", bucket.Type.ToString());
+        if (!string.IsNullOrEmpty(bucket.StorageClass))
+        {
+            Response.Headers.Append("x-amz-storage-class", bucket.StorageClass);
+        }
+        Response.Headers.Append("x-amz-bucket-region", bucket.Region);
 
         return Ok();
     }

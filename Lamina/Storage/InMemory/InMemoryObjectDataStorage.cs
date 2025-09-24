@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using Lamina.Helpers;
+using Lamina.Models;
 using Lamina.Streaming.Chunked;
 using Lamina.Streaming.Validation;
 using Lamina.Storage.Abstract;
@@ -140,7 +141,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         return Task.FromResult<(long size, DateTime lastModified)?>(null);
     }
 
-    public Task<ListDataResult> ListDataKeysAsync(string bucketName, string? prefix = null, string? delimiter = null, string? startAfter = null, int? maxKeys = null, CancellationToken cancellationToken = default)
+    public Task<ListDataResult> ListDataKeysAsync(string bucketName, BucketType bucketType, string? prefix = null, string? delimiter = null, string? startAfter = null, int? maxKeys = null, CancellationToken cancellationToken = default)
     {
         var result = new ListDataResult();
 
@@ -149,8 +150,11 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
             return Task.FromResult(result);
         }
 
-        // Sort keys lexicographically (S3 requirement)
-        IEnumerable<string> keys = bucketData.Keys.OrderBy(k => k, StringComparer.Ordinal);
+        // Sort keys lexicographically for General Purpose buckets only
+        // Directory buckets should maintain insertion/enumeration order (non-lexicographical)
+        IEnumerable<string> keys = bucketType == BucketType.GeneralPurpose
+            ? bucketData.Keys.OrderBy(k => k, StringComparer.Ordinal)
+            : bucketData.Keys;
 
         // Apply prefix filter
         if (!string.IsNullOrEmpty(prefix))

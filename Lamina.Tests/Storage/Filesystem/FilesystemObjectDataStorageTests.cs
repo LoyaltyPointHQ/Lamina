@@ -1,6 +1,7 @@
 using System.IO.Pipelines;
 using System.Text;
 using System.Text.Json;
+using Lamina.Models;
 using Lamina.Storage.Filesystem;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
@@ -254,7 +255,7 @@ public class FilesystemObjectDataStorageTests : IDisposable
         File.WriteAllText(tempFilePath, "temporary content");
 
         // Act
-        var keys = await _storage.ListDataKeysAsync(bucketName);
+        var keys = await _storage.ListDataKeysAsync(bucketName, BucketType.GeneralPurpose);
 
         // Assert
         var keyList = keys.Keys;
@@ -400,7 +401,7 @@ public class FilesystemObjectDataStorageTests : IDisposable
         File.WriteAllText(customTempFile, "custom temp content");
 
         // Act
-        var keys = await customStorage.ListDataKeysAsync(bucketName);
+        var keys = await customStorage.ListDataKeysAsync(bucketName, BucketType.GeneralPurpose);
         var defaultTempExists = await customStorage.DataExistsAsync(bucketName, ".lamina-tmp-abc123");
         var customTempExists = await customStorage.DataExistsAsync(bucketName, ".custom-temp-xyz789");
 

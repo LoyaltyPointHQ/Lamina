@@ -55,6 +55,8 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
     private class BucketMetadata
     {
         public string? Region { get; set; }
+        public BucketType Type { get; set; } = BucketType.GeneralPurpose;
+        public string? StorageClass { get; set; }
         public Dictionary<string, string>? Tags { get; set; }
     }
 
@@ -73,6 +75,8 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
             Name = bucketName,
             CreationDate = dirInfo.CreationTimeUtc,
             Region = request?.Region ?? "us-east-1",
+            Type = request?.Type ?? BucketType.GeneralPurpose,
+            StorageClass = request?.StorageClass,
             Tags = new Dictionary<string, string>()
         };
 
@@ -95,6 +99,7 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
             Name = bucketName,
             CreationDate = dirInfo.CreationTimeUtc,
             Region = "us-east-1",
+            Type = BucketType.GeneralPurpose,
             Tags = new Dictionary<string, string>()
         };
 
@@ -107,6 +112,8 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
             if (metadata != null)
             {
                 bucket.Region = metadata.Region ?? "us-east-1";
+                bucket.Type = metadata.Type;
+                bucket.StorageClass = metadata.StorageClass;
                 bucket.Tags = metadata.Tags ?? new Dictionary<string, string>();
             }
         }
@@ -171,6 +178,8 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
             var metadata = new BucketMetadata
             {
                 Region = bucket.Region,
+                Type = bucket.Type,
+                StorageClass = bucket.StorageClass,
                 Tags = bucket.Tags
             };
 
