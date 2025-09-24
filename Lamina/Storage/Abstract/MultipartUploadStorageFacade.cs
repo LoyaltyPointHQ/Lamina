@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Lamina.Models;
 using Lamina.Streaming.Chunked;
 using Lamina.Streaming.Validation;
+using Lamina.Helpers;
 
 namespace Lamina.Storage.Abstract;
 
@@ -98,6 +99,30 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             throw new InvalidOperationException($"Upload '{request.UploadId}' not found");
         }
 
+        // Phase 3 & 4 Validation: Part size and ETag validation
+        var storedParts = await _dataStorage.GetStoredPartsAsync(bucketName, key, request.UploadId, cancellationToken);
+        var storedPartsDict = storedParts.ToDictionary(p => p.PartNumber, p => p);
+
+        for (int i = 0; i < request.Parts.Count; i++)
+        {
+            var requestedPart = request.Parts[i];
+
+            // Check if part exists in storage
+            if (!storedPartsDict.TryGetValue(requestedPart.PartNumber, out var storedPart))
+            {
+                throw new InvalidOperationException($"InvalidPart:Part number {requestedPart.PartNumber} does not exist");
+            }
+
+            // ETag validation
+            if (!string.Equals(requestedPart.ETag.Trim('"'), storedPart.ETag.Trim('"'), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"InvalidPart:Part number {requestedPart.PartNumber} ETag does not match. Expected: {storedPart.ETag}, Got: {requestedPart.ETag}");
+            }
+
+            // Note: Part size validation (5MB minimum) should be enforced during upload, not here.
+            // S3 allows completing multipart uploads with parts smaller than 5MB as long as they were accepted during upload.
+        }
+
         // Get readers for all parts
         var partReaders = await _dataStorage.GetPartReadersAsync(bucketName, key, request.UploadId, request.Parts, cancellationToken);
         var readersList = partReaders.ToList();
@@ -113,11 +138,15 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             Metadata = upload.Metadata
         };
 
-        // Store multipart data directly using the new streaming method
-        var (size, etag) = await _objectDataStorage.StoreMultipartDataAsync(bucketName, key, readersList, cancellationToken);
+        // Phase 5: Compute proper multipart ETag from individual part ETags
+        var partETags = request.Parts.Select(p => storedPartsDict[p.PartNumber].ETag).ToList();
+        var multipartETag = ETagHelper.ComputeMultipartETag(partETags);
 
-        // Store metadata
-        await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, etag, size, putRequest, cancellationToken);
+        // Store multipart data directly using the streaming method
+        var (size, _) = await _objectDataStorage.StoreMultipartDataAsync(bucketName, key, readersList, cancellationToken);
+
+        // Store metadata with the correct multipart ETag
+        await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, cancellationToken);
 
         // Clean up multipart upload
         await _dataStorage.DeleteAllPartsAsync(bucketName, key, request.UploadId, cancellationToken);
@@ -127,7 +156,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         {
             BucketName = bucketName,
             Key = key,
-            ETag = etag  // Use the ETag computed by StoreMultipartDataAsync
+            ETag = multipartETag  // Use the proper multipart ETag
         };
     }
 

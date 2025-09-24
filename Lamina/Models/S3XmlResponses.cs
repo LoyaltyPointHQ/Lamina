@@ -151,6 +151,21 @@ public class CompleteMultipartUploadResult
 
     [XmlElement("ETag")]
     public string ETag { get; set; } = string.Empty;
+
+    [XmlElement("ChecksumCRC32")]
+    public string? ChecksumCRC32 { get; set; }
+
+    [XmlElement("ChecksumCRC32C")]
+    public string? ChecksumCRC32C { get; set; }
+
+    [XmlElement("ChecksumCRC64NVME")]
+    public string? ChecksumCRC64NVME { get; set; }
+
+    [XmlElement("ChecksumSHA1")]
+    public string? ChecksumSHA1 { get; set; }
+
+    [XmlElement("ChecksumSHA256")]
+    public string? ChecksumSHA256 { get; set; }
 }
 
 [XmlRoot("ListPartsResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
@@ -296,6 +311,21 @@ public class CompletedPartXml
 
     [XmlElement("ETag")]
     public string ETag { get; set; } = string.Empty;
+
+    [XmlElement("ChecksumCRC32")]
+    public string? ChecksumCRC32 { get; set; }
+
+    [XmlElement("ChecksumCRC32C")]
+    public string? ChecksumCRC32C { get; set; }
+
+    [XmlElement("ChecksumCRC64NVME")]
+    public string? ChecksumCRC64NVME { get; set; }
+
+    [XmlElement("ChecksumSHA1")]
+    public string? ChecksumSHA1 { get; set; }
+
+    [XmlElement("ChecksumSHA256")]
+    public string? ChecksumSHA256 { get; set; }
 }
 
 [XmlRoot("Part")]
@@ -306,4 +336,19 @@ public class CompletedPartXmlNoNamespace
 
     [XmlElement("ETag")]
     public string ETag { get; set; } = string.Empty;
+
+    [XmlElement("ChecksumCRC32")]
+    public string? ChecksumCRC32 { get; set; }
+
+    [XmlElement("ChecksumCRC32C")]
+    public string? ChecksumCRC32C { get; set; }
+
+    [XmlElement("ChecksumCRC64NVME")]
+    public string? ChecksumCRC64NVME { get; set; }
+
+    [XmlElement("ChecksumSHA1")]
+    public string? ChecksumSHA1 { get; set; }
+
+    [XmlElement("ChecksumSHA256")]
+    public string? ChecksumSHA256 { get; set; }
 }

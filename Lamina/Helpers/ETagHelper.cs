@@ -41,4 +41,49 @@ public static class ETagHelper
         var hash = await md5.ComputeHashAsync(stream);
         return Convert.ToHexString(hash).ToLower();
     }
+
+    /// <summary>
+    /// Computes a multipart ETag from individual part ETags according to S3 specification.
+    /// The multipart ETag is computed by taking the MD5 of the concatenated binary MD5 hashes
+    /// of each part, followed by a dash and the number of parts.
+    /// </summary>
+    /// <param name="partETags">The ETags of individual parts (without quotes).</param>
+    /// <returns>The multipart ETag in format "{hash}-{partCount}" (without quotes).</returns>
+    public static string ComputeMultipartETag(IEnumerable<string> partETags)
+    {
+        var etagList = partETags.ToList();
+        if (etagList.Count == 0)
+        {
+            throw new ArgumentException("Part ETags list cannot be empty", nameof(partETags));
+        }
+
+        // Convert each part ETag hex string to binary (16 bytes each)
+        var concatenatedBytes = new List<byte>();
+
+        foreach (var etag in etagList)
+        {
+            var cleanETag = etag.Trim('"');
+            try
+            {
+                var bytes = Convert.FromHexString(cleanETag);
+                if (bytes.Length != 16)
+                {
+                    throw new ArgumentException($"Invalid ETag format: {cleanETag}. Expected 32 hex characters.");
+                }
+                concatenatedBytes.AddRange(bytes);
+            }
+            catch (FormatException)
+            {
+                throw new ArgumentException($"Invalid ETag hex format: {cleanETag}");
+            }
+        }
+
+        // Compute MD5 of the concatenated binary MD5s
+        using var md5 = MD5.Create();
+        var finalHash = md5.ComputeHash(concatenatedBytes.ToArray());
+        var finalETag = Convert.ToHexString(finalHash).ToLower();
+
+        // Return in S3 multipart format: {hash}-{partCount}
+        return $"{finalETag}-{etagList.Count}";
+    }
 }

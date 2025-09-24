@@ -393,7 +393,12 @@ public class S3ObjectsController : ControllerBase
                     parts = completeRequestNoNs.Parts.Select(p => new CompletedPart
                     {
                         PartNumber = p.PartNumber,
-                        ETag = p.ETag
+                        ETag = p.ETag,
+                        ChecksumCRC32 = p.ChecksumCRC32,
+                        ChecksumCRC32C = p.ChecksumCRC32C,
+                        ChecksumCRC64NVME = p.ChecksumCRC64NVME,
+                        ChecksumSHA1 = p.ChecksumSHA1,
+                        ChecksumSHA256 = p.ChecksumSHA256
                     }).ToList();
                 }
             }
@@ -409,14 +414,69 @@ public class S3ObjectsController : ControllerBase
                     parts = completeRequestWithNs.Parts.Select(p => new CompletedPart
                     {
                         PartNumber = p.PartNumber,
-                        ETag = p.ETag
+                        ETag = p.ETag,
+                        ChecksumCRC32 = p.ChecksumCRC32,
+                        ChecksumCRC32C = p.ChecksumCRC32C,
+                        ChecksumCRC64NVME = p.ChecksumCRC64NVME,
+                        ChecksumSHA1 = p.ChecksumSHA1,
+                        ChecksumSHA256 = p.ChecksumSHA256
                     }).ToList();
                 }
             }
 
             if (parts.Count == 0)
             {
-                return BadRequest();
+                return BadRequest(new S3Error
+                {
+                    Code = "MalformedXML",
+                    Message = "The XML you provided was not well-formed or did not validate against our published schema.",
+                    Resource = $"{bucketName}/{key}",
+                    RequestId = HttpContext.TraceIdentifier
+                });
+            }
+
+            // Phase 2 Validation: Part number ordering (parts must be consecutive starting from 1)
+            // Check if the provided parts are already in ascending order
+            bool isInOrder = true;
+            for (int i = 0; i < parts.Count - 1; i++)
+            {
+                if (parts[i].PartNumber >= parts[i + 1].PartNumber)
+                {
+                    isInOrder = false;
+                    break;
+                }
+            }
+
+            if (!isInOrder)
+            {
+                var error = new S3Error
+                {
+                    Code = "InvalidPartOrder",
+                    Message = "The list of parts was not in ascending order. The parts list must be specified in order by part number.",
+                    Resource = $"{bucketName}/{key}",
+                    RequestId = HttpContext.TraceIdentifier
+                };
+                Response.StatusCode = 400;
+                Response.ContentType = "application/xml";
+                return new ObjectResult(error);
+            }
+
+            // Additional validation: Part numbers must be between 1 and 10000
+            foreach (var part in parts)
+            {
+                if (part.PartNumber < 1 || part.PartNumber > 10000)
+                {
+                    var error = new S3Error
+                    {
+                        Code = "InvalidPartOrder",
+                        Message = "Part numbers must be between 1 and 10000.",
+                        Resource = $"{bucketName}/{key}",
+                        RequestId = HttpContext.TraceIdentifier
+                    };
+                    Response.StatusCode = 400;
+                    Response.ContentType = "application/xml";
+                    return new ObjectResult(error);
+                }
             }
 
             var completeRequest = new CompleteMultipartUploadRequest
@@ -435,18 +495,71 @@ public class S3ObjectsController : ControllerBase
                 ETag = $"\"{completeResponse.ETag}\""
             };
 
+            // Add S3-compliant response headers
+            Response.Headers.Append("x-amz-version-id", "null");
+
+            // Add checksum headers if any were provided in the request parts
+            var firstPartWithChecksum = parts.FirstOrDefault(p =>
+                !string.IsNullOrEmpty(p.ChecksumCRC32) ||
+                !string.IsNullOrEmpty(p.ChecksumCRC32C) ||
+                !string.IsNullOrEmpty(p.ChecksumSHA1) ||
+                !string.IsNullOrEmpty(p.ChecksumSHA256));
+
+            if (firstPartWithChecksum != null)
+            {
+                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumCRC32))
+                    Response.Headers.Append("x-amz-checksum-crc32", firstPartWithChecksum.ChecksumCRC32);
+                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumCRC32C))
+                    Response.Headers.Append("x-amz-checksum-crc32c", firstPartWithChecksum.ChecksumCRC32C);
+                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumSHA1))
+                    Response.Headers.Append("x-amz-checksum-sha1", firstPartWithChecksum.ChecksumSHA1);
+                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumSHA256))
+                    Response.Headers.Append("x-amz-checksum-sha256", firstPartWithChecksum.ChecksumSHA256);
+            }
+
             Response.ContentType = "application/xml";
             return Ok(result);
         }
         catch (InvalidOperationException ex)
         {
-            var error = new S3Error
+            S3Error error;
+
+            // Parse custom error codes from the exception message
+            if (ex.Message.StartsWith("InvalidPart:"))
             {
-                Code = "NoSuchUpload",
-                Message = ex.Message,
-                Resource = $"{bucketName}/{key}"
-            };
-            Response.StatusCode = 404;
+                error = new S3Error
+                {
+                    Code = "InvalidPart",
+                    Message = ex.Message.Substring("InvalidPart:".Length),
+                    Resource = $"{bucketName}/{key}",
+                    RequestId = HttpContext.TraceIdentifier
+                };
+                Response.StatusCode = 400;
+            }
+            else if (ex.Message.StartsWith("EntityTooSmall:"))
+            {
+                error = new S3Error
+                {
+                    Code = "EntityTooSmall",
+                    Message = ex.Message.Substring("EntityTooSmall:".Length),
+                    Resource = $"{bucketName}/{key}",
+                    RequestId = HttpContext.TraceIdentifier
+                };
+                Response.StatusCode = 400;
+            }
+            else
+            {
+                // Default to NoSuchUpload for other InvalidOperationExceptions
+                error = new S3Error
+                {
+                    Code = "NoSuchUpload",
+                    Message = ex.Message,
+                    Resource = $"{bucketName}/{key}",
+                    RequestId = HttpContext.TraceIdentifier
+                };
+                Response.StatusCode = 404;
+            }
+
             Response.ContentType = "application/xml";
             return new ObjectResult(error);
         }

@@ -56,6 +56,11 @@ public class CompletedPart
 {
     public int PartNumber { get; set; }
     public string ETag { get; set; } = string.Empty;
+    public string? ChecksumCRC32 { get; set; }
+    public string? ChecksumCRC32C { get; set; }
+    public string? ChecksumCRC64NVME { get; set; }
+    public string? ChecksumSHA1 { get; set; }
+    public string? ChecksumSHA256 { get; set; }
 }
 
 public class CompleteMultipartUploadResponse
@@ -64,4 +69,9 @@ public class CompleteMultipartUploadResponse
     public string BucketName { get; set; } = string.Empty;
     public string Key { get; set; } = string.Empty;
     public string ETag { get; set; } = string.Empty;
+    public string? ChecksumCRC32 { get; set; }
+    public string? ChecksumCRC32C { get; set; }
+    public string? ChecksumCRC64NVME { get; set; }
+    public string? ChecksumSHA1 { get; set; }
+    public string? ChecksumSHA256 { get; set; }
 }
