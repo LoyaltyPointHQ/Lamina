@@ -1,269 +1,205 @@
-# Lamina - S3-Compatible Storage API
+# Lamina
 
-A lightweight, S3-compatible storage API implementation built with .NET 9.0 and ASP.NET Core. This project provides both in-memory and filesystem storage backends with full support for essential S3 operations, making it ideal for development, testing, and production use cases.
+**Lamina** is a lightweight, high-performance S3-compatible storage gateway that exposes filesystem directories as S3 buckets. Built with .NET 9.0, Lamina provides a standards-compliant Amazon S3 REST API interface while storing data directly on your local filesystem or network storage.
 
-## Features
+[![Docker Image](https://img.shields.io/badge/docker-ghcr.io%2Floyaltypointhq%2Flamina-blue)](https://github.com/LoyaltyPointHQ/Lamina/pkgs/container/lamina)
+[![GitHub Repository](https://img.shields.io/badge/github-LoyaltyPointHQ%2FLamina-blue)](https://github.com/LoyaltyPointHQ/Lamina)
 
-- **Full S3 API Compatibility**: Implements core S3 operations with XML request/response format matching AWS S3 specifications
-- **Dual Storage Backends**:
-  - **In-Memory Storage**: Fast, thread-safe storage using ConcurrentDictionary
-  - **Filesystem Storage**: Persistent storage with separate data and metadata directories
-- **Bucket Management**: Create, list, delete (including force delete), and check bucket existence
-- **Object Operations**: Upload, download, delete, and list objects with metadata support
-- **Multipart Uploads**: Complete support for large file uploads using S3's multipart upload protocol with streaming assembly
-- **AWS Signature V4 Authentication**: Optional authentication with per-bucket permissions
-- **Automatic Cleanup**: Background service for cleaning up stale multipart uploads
-- **Thread-Safe Operations**: FileSystemLockManager ensures concurrent access safety
-- **SHA1 ETags**: Secure ETag generation using SHA1 hash algorithm
-- **Comprehensive Testing**: 65+ tests covering all operations with both unit and integration tests
-- **Docker Support**: Ready-to-deploy containerized application
+## 🎯 Key Features
 
-## Quick Start
+- **Full S3 API Compatibility**: Implements the official Amazon S3 REST API specification with strict compliance
+- **Metadata Storage**: Three metadata modes - separate directories, inline storage, or POSIX extended attributes (Linux/macOS)
+- **Network Filesystem Ready**: Special support for CIFS and NFS with retry logic and atomic operations
+- **Background Services**: Automatic cleanup of temporary files, orphaned metadata, and stale multipart uploads
 
-### Prerequisites
+## 🚀 Quick Start
 
-- .NET 9.0 SDK
-- Docker (optional, for containerized deployment)
-
-### Docker Image
-
-Pre-built Docker images are available from GitHub Container Registry:
+### Using Docker
 
 ```bash
-# Pull the latest image
-docker pull ghcr.io/loyaltypointhq/lamina:latest
-
-# Run the container
+# Run with in-memory storage (development)
 docker run -p 8080:8080 ghcr.io/loyaltypointhq/lamina:latest
+
+# Run with filesystem storage
+docker run -p 8080:8080 \
+  -v /your/data/path:/app/data \
+  -e StorageType=Filesystem \
+  -e FilesystemStorage__DataDirectory=/app/data \
+  ghcr.io/loyaltypointhq/lamina:latest
 ```
 
-Images are automatically built and published for:
-- Every push to master branch (tagged as `latest`)
-- Every release tag (e.g., `v1.0.0`)
-
-### Running the Application
+### Local Development
 
 ```bash
 # Clone the repository
 git clone https://github.com/LoyaltyPointHQ/Lamina.git
 cd Lamina
 
-# Build the project
+# Build and run
 dotnet build
-
-# Run the application
 dotnet run --project Lamina/Lamina.csproj
-
-# The API will be available at:
-# http://localhost:5214 (HTTP)
-# https://localhost:7179 (HTTPS)
 ```
 
-### Running with Docker
+The API will be available at `http://localhost:5214` (or `https://localhost:7179` for HTTPS).
+
+### Using Helm (Kubernetes/OpenShift)
+
+Deploy to Kubernetes or OpenShift using the included Helm chart with automatic platform detection:
 
 ```bash
-# Using pre-built image from GitHub Container Registry
-docker run -p 8080:8080 ghcr.io/loyaltypointhq/lamina:latest
+# Basic installation with in-memory storage
+helm install lamina ./chart
 
-# Or build your own image
-docker build -f Lamina/Dockerfile -t lamina .
-docker run -p 8080:8080 lamina
+# Install with persistent filesystem storage
+helm install lamina ./chart \
+  --set config.StorageType=Filesystem \
+  --set persistentVolume.enabled=true \
+  --set persistentVolume.size=20Gi
+
+# Install with authentication enabled
+helm install lamina ./chart \
+  --set config.Authentication.Enabled=true \
+  --set config.Authentication.Users[0].AccessKeyId=admin \
+  --set config.Authentication.Users[0].SecretAccessKey=secret123
 ```
 
-### Running Tests
+**Platform-Specific Features:**
+- **Kubernetes**: Automatic Ingress configuration for external access
+- **OpenShift**: Route creation with TLS termination and ImageStream support
+- **Auto-Detection**: Automatically detects platform and configures appropriate resources (i.e. Route instead of Ingress)
 
-```bash
-# Run all tests
-dotnet test
+For detailed Helm chart configuration, see [`chart/README.md`](chart/README.md).
 
-# Run with detailed output
-dotnet test --logger "console;verbosity=detailed"
+## 🏗️ Architecture
 
-# Run only unit tests
-dotnet test --filter "FullyQualifiedName~Lamina.Tests.Services"
+Lamina uses a **data-first architecture** where:
+- **Data is the source of truth** - object existence is determined by data presence
+- **Metadata is optional** - automatically generated when missing
+- **Content-Type detection** - intelligent MIME type detection based on file extensions
+- **Optimized storage** - metadata only stored when it differs from defaults
 
-# Run only integration tests
-dotnet test --filter "FullyQualifiedName~Lamina.Tests.Controllers"
+### Filesystem Storage
+- Production-ready with multiple metadata modes
+- Supports local and network filesystems (CIFS, NFS)
+- Three metadata storage options:
+
+**1. Separate Directory Mode** (default)
+```
+/data/bucket/object.txt          # Object data
+/metadata/bucket/object.txt.json # Object metadata
 ```
 
-## S3-Compatible API Endpoints
-
-This implementation follows the S3 REST API specification with XML responses.
-
-### Bucket Operations
-
-| Operation | Method | Endpoint | Description |
-|-----------|--------|----------|-------------|
-| Create Bucket | PUT | `/{bucketName}` | Creates a new bucket |
-| List Buckets | GET | `/` | Lists all buckets |
-| Delete Bucket | DELETE | `/{bucketName}` | Deletes an empty bucket |
-| Delete Bucket (Force) | DELETE | `/{bucketName}?force=true` | Deletes bucket and all contents |
-| Head Bucket | HEAD | `/{bucketName}` | Checks if bucket exists |
-| List Objects | GET | `/{bucketName}?prefix=...&max-keys=...&delimiter=...` | Lists objects in bucket |
-
-### Object Operations
-
-| Operation | Method | Endpoint | Description |
-|-----------|--------|----------|-------------|
-| Put Object | PUT | `/{bucketName}/{key}` | Uploads an object |
-| Get Object | GET | `/{bucketName}/{key}` | Downloads an object |
-| Delete Object | DELETE | `/{bucketName}/{key}` | Deletes an object |
-| Head Object | HEAD | `/{bucketName}/{key}` | Gets object metadata |
-
-### Multipart Upload Operations
-
-| Operation | Method | Endpoint | Description |
-|-----------|--------|----------|-------------|
-| Initiate Upload | POST | `/{bucket}/{key}?uploads` | Starts multipart upload |
-| Upload Part | PUT | `/{bucket}/{key}?partNumber=N&uploadId=ID` | Uploads a part |
-| Complete Upload | POST | `/{bucket}/{key}?uploadId=ID` | Completes upload |
-| Abort Upload | DELETE | `/{bucket}/{key}?uploadId=ID` | Cancels upload |
-| List Parts | GET | `/{bucket}/{key}?uploadId=ID` | Lists uploaded parts |
-| List Uploads | GET | `/{bucket}?uploads` | Lists active uploads |
-
-## Usage Examples
-
-### Using AWS CLI
-
-```bash
-# Configure AWS CLI to use local endpoint
-aws configure set default.s3.signature_version s3v4
-export AWS_ACCESS_KEY_ID=test
-export AWS_SECRET_ACCESS_KEY=test
-
-# Create a bucket
-aws s3 mb s3://my-bucket --endpoint-url http://localhost:5214
-
-# Upload a file
-aws s3 cp file.txt s3://my-bucket/file.txt --endpoint-url http://localhost:5214
-
-# List objects
-aws s3 ls s3://my-bucket --endpoint-url http://localhost:5214
-
-# Download a file
-aws s3 cp s3://my-bucket/file.txt downloaded.txt --endpoint-url http://localhost:5214
+**2. Inline Mode**
+```
+/data/bucket/object.txt                    # Object data
+/data/bucket/.lamina-meta/object.txt.json  # Object metadata
 ```
 
-### Using curl
-
-```bash
-# Create a bucket
-curl -X PUT http://localhost:5214/my-bucket
-
-# Upload an object
-curl -X PUT http://localhost:5214/my-bucket/test.txt \
-  -H "Content-Type: text/plain" \
-  -d "Hello, World!"
-
-# Get an object
-curl http://localhost:5214/my-bucket/test.txt
-
-# List objects in bucket (returns XML)
-curl http://localhost:5214/my-bucket
+**3. Extended Attributes Mode** (Linux/macOS)
+```
+/data/bucket/object.txt  # Object data + metadata as xattrs
 ```
 
-### Multipart Upload Example
+## 📊 S3 API Compatibility
 
-```bash
-# 1. Initiate multipart upload (returns XML with UploadId)
-curl -X POST http://localhost:5214/my-bucket/large-file.bin?uploads
+Lamina implements comprehensive S3 API compatibility. Here's how it compares to other S3-compatible storage solutions:
 
-# 2. Upload parts (save ETags from response headers)
-curl -X PUT "http://localhost:5214/my-bucket/large-file.bin?partNumber=1&uploadId=$UPLOAD_ID" \
-  -d "Part 1 data" -i
+| Feature | Lamina | MinIO | SeaweedFS | Garage |
+|---------|--------|-------|-----------|--------|
+| **Core Object Operations** |
+| GetObject | ✅ | ✅ | ✅ | ✅ |
+| PutObject | ✅ | ✅ | ✅ | ✅ |
+| DeleteObject | ✅ | ✅ | ✅ | ✅ |
+| HeadObject | ✅ | ✅ | ✅ | ✅ |
+| ListObjects | ✅ | ✅ | ✅ | ✅ |
+| ListObjectsV2 | ✅ | ✅ | ✅ | ✅ |
+| **Bucket Operations** |
+| CreateBucket | ✅ | ✅ | ✅ | ✅ |
+| DeleteBucket | ✅ | ✅ | ✅ | ✅ |
+| HeadBucket | ✅ | ✅ | ✅ | ✅ |
+| ListBuckets | ✅ | ✅ | ✅ | ✅ |
+| **Multipart Uploads** |
+| CreateMultipartUpload | ✅ | ✅ | ✅ | ✅ |
+| UploadPart | ✅ | ✅ | ✅ | ✅ |
+| CompleteMultipartUpload | ✅ | ✅ | ✅ | ✅ |
+| AbortMultipartUpload | ✅ | ✅ | ✅ | ✅ |
+| ListParts | ✅ | ✅ | ✅ | ✅ |
+| ListMultipartUploads | ✅ | ✅ | ✅ | ✅ |
+| **Authentication** |
+| AWS Signature V4 | ✅ | ✅ | ✅ | ✅ |
+| AWS Signature V2 | ❌ | ✅ | ❌ | ❌ |
+| Streaming Auth | ✅ | ✅ | ❌ | ❌ |
+| **Advanced Features** |
+| Server-Side Encryption | ❌ | ✅ | ✅ | ✅ |
+| Versioning | ❌ | ✅ | ❌ | ❌ |
+| Object Locking | ❌ | ✅ | ❌ | ❌ |
+| Lifecycle Management | ❌ | ✅ | ❌ | ❌ |
+| **Storage Focus** |
+| Filesystem Gateway | ✅ | ❌ | ⚠️ | ❌ |
+| Distributed Storage | ❌ | ✅ | ✅ | ✅ |
+| Cloud-Native | ❌ | ✅ | ✅ | ✅ |
 
-curl -X PUT "http://localhost:5214/my-bucket/large-file.bin?partNumber=2&uploadId=$UPLOAD_ID" \
-  -d "Part 2 data" -i
+**Legend**: ✅ Supported | ❌ Not supported | ⚠️ Partial support
 
-# 3. Complete the upload (use ETags from part uploads)
-curl -X POST "http://localhost:5214/my-bucket/large-file.bin?uploadId=$UPLOAD_ID" \
-  -H "Content-Type: application/xml" \
-  -d '<?xml version="1.0" encoding="UTF-8"?>
-<CompleteMultipartUpload>
-    <Part>
-        <PartNumber>1</PartNumber>
-        <ETag>etag-from-part1</ETag>
-    </Part>
-    <Part>
-        <PartNumber>2</PartNumber>
-        <ETag>etag-from-part2</ETag>
-    </Part>
-</CompleteMultipartUpload>'
-```
+### Why Choose Lamina?
 
-## Technical Details
+- **🎯 Focused Purpose**: Specifically designed as a filesystem-to-S3 gateway
+- **🔧 Simple Setup**: No complex clustering or distributed storage configuration
+- **📁 Direct Filesystem Access**: Data remains accessible via standard filesystem tools
 
-### Architecture
+## ⚙️ Configuration
 
-The application follows a layered architecture with clear separation of concerns:
+### Storage Configuration
 
-- **Controllers**: Handle HTTP requests and S3 API compatibility
-- **Storage Layer**: Organized into three main components:
-  - **Abstract**: Interfaces and facade implementations that orchestrate operations
-  - **InMemory**: In-memory storage implementations
-  - **Filesystem**: Filesystem-based storage implementations
-- **Services**: Supporting services like authentication and cleanup
-- **Models**: Data models and S3 XML response DTOs
+Configure storage backend in `appsettings.json`:
 
-### Storage Layer Organization
-
-The storage layer uses a facade pattern to orchestrate operations between data and metadata storage components. It is organized into three main directories:
-
-- **Abstract**: Contains interfaces and facade implementations that define the storage contracts
-- **InMemory**: In-memory storage implementations using ConcurrentDictionary for thread-safety
-- **Filesystem**: Filesystem-based storage implementations with FileSystemLockManager for concurrent access
-
-### S3 Compatibility
-- **XML Responses**: All responses use S3-compliant XML format
-- **HTTP Headers**: Supports standard S3 headers (ETag, Content-Type, x-amz-meta-*, etc.)
-- **Error Responses**: Returns S3-compatible error XML with appropriate HTTP status codes
-- **Namespace Support**: Handles both namespaced and non-namespaced XML for client compatibility
-- **AWS Signature V4**: Optional authentication compatible with AWS SDKs and CLI
-
-### Storage Implementations
-
-#### In-Memory Storage
-- **Thread-Safe**: Uses `ConcurrentDictionary` for concurrent access
-- **Fast Performance**: All data is stored in memory
-- **Non-Persistent**: Data is lost on restart
-- **Best For**: Development, testing, temporary storage
-- **Implementation**: Located in `Storage/InMemory/` directory
-
-#### Filesystem Storage
-- **Persistent**: Data survives application restarts
-- **Thread-Safe**: FileSystemLockManager ensures safe concurrent access
-- **Scalable**: Limited only by disk space
-- **Directory Structure**:
-  - Data: `/configured/path/data/{bucket}/{key}`
-  - Metadata: `/configured/path/metadata/{bucket}/{key}.json`
-- **Best For**: Production use, persistent storage needs
-- **Implementation**: Located in `Storage/Filesystem/` directory
-
-### Common Features
-- **ETag Generation**: SHA1 hash of object content (more secure than MD5)
-- **Metadata Support**: Custom metadata with `x-amz-meta-*` headers
-- **Binary Data**: Full support for binary file uploads/downloads
-- **Streaming**: Efficient streaming for multipart assembly and object transfers
-- **Automatic Cleanup**: Configurable background service for stale upload cleanup
-
-### Configuration Options
-
-#### Storage Backend
 ```json
 {
-  "StorageType": "InMemory",  // or "Filesystem"
+  "StorageType": "Filesystem",
   "FilesystemStorage": {
-    "DataDirectory": "/tmp/laminas/data",
-    "MetadataDirectory": "/tmp/laminas/metadata"
+    "DataDirectory": "/data",
+    "MetadataMode": "Inline",
+    "MetadataDirectory": "/metadata",
+    "InlineMetadataDirectoryName": ".lamina-meta",
+    "NetworkMode": "None",
+    "RetryCount": 3,
+    "RetryDelayMs": 100
   }
 }
 ```
 
-#### Authentication
+#### Metadata Modes
+
+**Separate Directory** - Metadata stored in separate directory tree:
+```json
+{
+  "MetadataMode": "SeparateDirectory",
+  "MetadataDirectory": "/metadata"
+}
+```
+
+**Inline** - Metadata stored alongside data:
+```json
+{
+  "MetadataMode": "Inline",
+  "InlineMetadataDirectoryName": ".lamina-meta"
+}
+```
+
+**Extended Attributes** - Metadata stored as POSIX xattrs (Linux/macOS):
+```json
+{
+  "MetadataMode": "Xattr",
+  "XattrPrefix": "user.lamina"
+}
+```
+
+### Authentication Configuration
+
 ```json
 {
   "Authentication": {
-    "Enabled": false,  // Set to true to enable AWS Signature V4
+    "Enabled": true,
     "Users": [
       {
         "AccessKeyId": "your-access-key",
@@ -271,8 +207,8 @@ The storage layer uses a facade pattern to orchestrate operations between data a
         "Name": "username",
         "BucketPermissions": [
           {
-            "BucketName": "*",  // Wildcard for all buckets
-            "Permissions": ["*"]  // Or specific: ["read", "write", "list", "delete"]
+            "BucketName": "*",
+            "Permissions": ["*"]
           }
         ]
       }
@@ -281,116 +217,56 @@ The storage layer uses a facade pattern to orchestrate operations between data a
 }
 ```
 
-#### Multipart Upload Cleanup
+### Cleanup Services Configuration
+
 ```json
 {
   "MultipartUploadCleanup": {
-    "Enabled": true,  // Enable/disable automatic cleanup
-    "CleanupIntervalMinutes": 60,  // How often to run cleanup (default: 60)
-    "UploadTimeoutHours": 24  // Uploads older than this are cleaned up (default: 24)
+    "Enabled": true,
+    "CleanupIntervalMinutes": 60,
+    "UploadTimeoutHours": 24
+  },
+  "MetadataCleanup": {
+    "Enabled": true,
+    "CleanupIntervalMinutes": 120,
+    "BatchSize": 1000
+  },
+  "TempFileCleanup": {
+    "Enabled": true,
+    "CleanupIntervalMinutes": 60,
+    "TempFileAgeMinutes": 30,
+    "BatchSize": 100
   }
 }
 ```
 
-### Current Limitations
-- No versioning support
-- No bucket policies or ACLs
-- No server-side encryption
-- No support for pre-signed URLs
-- No support for object tagging
-- No support for bucket lifecycle rules
-- No cross-region replication
-- No S3 Select or analytics features
+## 🛠️ Development
 
-## Deployment
+### Build Requirements
 
-### Kubernetes/OpenShift Deployment with Helm
+- .NET 9.0 SDK
+- Optional: Docker for containerized development
 
-The project includes a Helm chart for easy deployment to Kubernetes or OpenShift clusters:
+## 📚 Use Cases
 
-```bash
-# Add the Helm repository (if published)
-# helm repo add lamina https://loyaltypointhq.github.io/lamina
-# helm repo update
+### Production Scenarios
+- **Filesystem Bridge**: Expose existing filesystem data via S3 API
+- **Edge Computing**: S3 API at edge locations with local storage
+- **Backup Solutions**: S3-compatible interface for backup applications
+- **Legacy System Integration**: Add S3 capability to existing file-based systems
 
-# Install using local chart
-helm install lamina ./chart
+### Network Storage Integration
+- **NAS Exposure**: Make NAS devices accessible via S3 API
+- **CIFS/SMB Gateway**: S3 interface for Windows file shares
+- **NFS Gateway**: S3 API for Unix network filesystems
 
-# Install with custom values
-helm install lamina ./chart -f custom-values.yaml
-
-# Upgrade existing deployment
-helm upgrade lamina ./chart
-```
-
-The Helm chart automatically detects whether it's running on OpenShift or Kubernetes and applies the appropriate configurations.
-
-## Development
-
-### Building from Source
-
-```bash
-# Clone the repository
-git clone https://github.com/LoyaltyPointHQ/Lamina.git
-cd Lamina
-
-# Restore dependencies
-dotnet restore
-
-# Build the solution
-dotnet build
-
-# Run tests
-dotnet test
-```
-
-### Adding New Features
-
-1. Check the [AWS S3 API Reference](https://docs.aws.amazon.com/AmazonS3/latest/API/Welcome.html)
-2. Add XML models to `S3XmlResponses.cs` if needed
-3. Update controllers with new endpoints
-4. Implement service methods in the in-memory services
-5. Add comprehensive unit and integration tests
-
-### Debugging Tips
-
-- Enable console logging in controllers to see raw XML requests/responses
-- Use `dotnet test --logger "console;verbosity=detailed"` for detailed test output
-- Check XML namespace compatibility when dealing with different S3 clients
-- Monitor ETag handling - stored without quotes internally, returned with quotes
-- ETags use SHA1 hashing (not MD5) for improved security
-- Check cleanup service logs to monitor stale multipart upload removal
-
-## Testing Coverage
-
-The project includes 65+ comprehensive tests:
-
-- **Unit Tests (39 tests)**
-  - BucketServiceTests: 10 tests
-  - ObjectServiceTests: 16 tests
-  - MultipartUploadServiceTests: 10 tests
-  - MultipartUploadCleanupServiceTests: 3 tests
-
-- **Integration Tests (26 tests)**
-  - BucketsControllerIntegrationTests: 10 tests
-  - ObjectsControllerIntegrationTests: 16 tests
-
-All tests verify both positive and negative scenarios, including error handling and edge cases.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit pull requests or open issues for bugs and feature requests.
-
-### Guidelines
-- Follow existing code patterns and conventions
-- Add tests for any new functionality
-- Ensure all tests pass before submitting PR
-- Update documentation as needed
-
-## License
+## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Acknowledgments
+## 🙏 Acknowledgments
 
-This implementation is inspired by the AWS S3 API specification and designed for educational, development, and testing purposes. It provides a lightweight alternative to full S3 or MinIO for scenarios where a simple S3-compatible API is needed.
+- **Amazon S3**: For defining the de-facto object storage API standard
+- **MinIO**: For S3 compatibility reference implementations
+- **Garage**: For comprehensive S3 compatibility documentation and comparison tables
+- **.NET Community**: For excellent tooling and framework support

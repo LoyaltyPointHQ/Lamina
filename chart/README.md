@@ -48,9 +48,9 @@ helm install lamina ./chart -f my-values.yaml
 
 # Install with specific parameters
 helm install lamina ./chart \
-  --set config.storageType=Filesystem \
-  --set config.filesystemStorage.enabled=true \
-  --set config.authentication.enabled=true
+  --set config.StorageType=Filesystem \
+  --set persistentVolume.enabled=true \
+  --set config.Authentication.Enabled=true
 ```
 
 ## Configuration
@@ -61,15 +61,16 @@ Key configuration options:
 |-----------|-------------|---------|
 | `platform.type` | Platform type (`auto`, `kubernetes`, `openshift`) | `auto` |
 | `replicaCount` | Number of replicas | `1` |
-| `image.repository` | Container image repository | `lamina` |
+| `image.repository` | Container image repository | `ghcr.io/loyaltypointhq/lamina` |
 | `image.tag` | Container image tag | `Chart.AppVersion` |
 | `imageStream.enabled` | Enable ImageStream (OpenShift) | `auto` |
 | `service.type` | Kubernetes service type | `ClusterIP` |
 | `service.port` | Service port | `80` |
-| `ingress.enabled` | Enable Ingress (Kubernetes) | `auto` |
-| `route.enabled` | Enable Route (OpenShift) | `auto` |
-| `config.storageType` | Storage type (`InMemory`, `Filesystem`) | `InMemory` |
-| `config.authentication.enabled` | Enable authentication | `false` |
+| `ingress.enabled` | Enable Ingress (Kubernetes) | `false` |
+| `route.enabled` | Enable Route (OpenShift) | `false` |
+| `persistentVolume.enabled` | Enable persistent volume for data | `false` |
+| `metadataPersistentVolume.enabled` | Enable persistent volume for metadata | `false` |
+| `config` | Application configuration (JSON object) | `{}` |
 
 ### Storage Configuration
 
@@ -77,43 +78,66 @@ Key configuration options:
 
 ```yaml
 config:
-  storageType: InMemory
+  StorageType: InMemory
 ```
 
 #### Filesystem Storage with Persistent Volume
 
 ```yaml
 config:
-  storageType: Filesystem
-  filesystemStorage:
-    enabled: true
-    dataDirectory: /data/lamina/data
-    metadataDirectory: /data/lamina/metadata
-    persistentVolume:
-      enabled: true
-      storageClass: standard
-      size: 10Gi
+  StorageType: Filesystem
+  FilesystemStorage:
+    DataDirectory: /data
+    MetadataDirectory: /metadata
+    MetadataMode: SeparateDirectory
+
+persistentVolume:
+  enabled: true
+  storageClass: standard
+  size: 10Gi
+
+metadataPersistentVolume:
+  enabled: true
+  storageClass: standard
+  size: 5Gi
+```
+
+#### Filesystem Storage with Single Volume (Inline Metadata)
+
+```yaml
+config:
+  StorageType: Filesystem
+  FilesystemStorage:
+    DataDirectory: /data
+    MetadataMode: Inline
+
+persistentVolume:
+  enabled: true
+  storageClass: standard
+  size: 10Gi
+
+sameVolumeForDataAndMeta: true
 ```
 
 ### Authentication Configuration
 
 ```yaml
 config:
-  authentication:
-    enabled: true
-    users:
-      - accessKeyId: admin
-        secretAccessKey: supersecret
-        name: admin-user
-        bucketPermissions:
-          - bucketName: "*"
-            permissions: ["*"]
-      - accessKeyId: readonly
-        secretAccessKey: readonlysecret
-        name: readonly-user
-        bucketPermissions:
-          - bucketName: public-*
-            permissions: ["read", "list"]
+  Authentication:
+    Enabled: true
+    Users:
+      - AccessKeyId: admin
+        SecretAccessKey: supersecret
+        Name: admin-user
+        BucketPermissions:
+          - BucketName: "*"
+            Permissions: ["*"]
+      - AccessKeyId: readonly
+        SecretAccessKey: readonlysecret
+        Name: readonly-user
+        BucketPermissions:
+          - BucketName: public-*
+            Permissions: ["read", "list"]
 ```
 
 ### Platform-Specific Configuration
@@ -154,10 +178,11 @@ imageStream:
 
 ```bash
 helm install lamina ./chart \
-  --set config.storageType=Filesystem \
-  --set config.filesystemStorage.enabled=true \
-  --set config.filesystemStorage.persistentVolume.enabled=true \
-  --set config.filesystemStorage.persistentVolume.size=20Gi
+  --set config.StorageType=Filesystem \
+  --set persistentVolume.enabled=true \
+  --set persistentVolume.size=20Gi \
+  --set metadataPersistentVolume.enabled=true \
+  --set metadataPersistentVolume.size=5Gi
 ```
 
 ### Deploy to Kubernetes with Ingress
@@ -173,12 +198,10 @@ helm install lamina ./chart \
 
 ```bash
 helm install lamina ./chart \
-  --set config.authentication.enabled=true \
-  --set 'config.authentication.users[0].accessKeyId=admin' \
-  --set 'config.authentication.users[0].secretAccessKey=secret123' \
-  --set 'config.authentication.users[0].name=admin' \
-  --set config.limits.maxBuckets=50 \
-  --set config.limits.maxObjectSize=1073741824
+  --set config.Authentication.Enabled=true \
+  --set 'config.Authentication.Users[0].AccessKeyId=admin' \
+  --set 'config.Authentication.Users[0].SecretAccessKey=secret123' \
+  --set 'config.Authentication.Users[0].Name=admin'
 ```
 
 ## Testing the Deployment
