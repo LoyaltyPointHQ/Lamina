@@ -133,7 +133,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
         var shouldCheckTruncation = request.MaxKeys > 0 && request.MaxKeys < 1000;
         var requestLimit = shouldCheckTruncation ? effectiveMaxKeys + 1 : effectiveMaxKeys;
 
-        var dataResult = await _dataStorage.ListDataKeysWithDelimiterAsync(
+        var dataResult = await _dataStorage.ListDataKeysAsync(
             bucketName,
             request.Prefix,
             request.Delimiter,

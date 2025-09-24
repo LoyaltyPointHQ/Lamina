@@ -112,12 +112,8 @@ public class DataFirstObjectStorageTests
         var testData = Encoding.UTF8.GetBytes("Test content");
         var expectedEtag = ETagHelper.ComputeETag(testData);
 
-        // Data storage returns additional keys (one with metadata, one without)
-        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, null, default))
-            .ReturnsAsync(new[] { "file-with-metadata.txt", "file-without-metadata.txt" });
-
         // Setup the new delimiter-aware method
-        _dataStorageMock.Setup(x => x.ListDataKeysWithDelimiterAsync(bucketName, null, null, null, null, default))
+        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, null, null, null, null, default))
             .ReturnsAsync(new ListDataResult
             {
                 Keys = new List<string> { "file-with-metadata.txt", "file-without-metadata.txt" },
@@ -238,44 +234,5 @@ public class DataFirstObjectStorageTests
             Assert.NotNull(objectInfo);
             Assert.Equal(expectedContentType, objectInfo.ContentType);
         }
-    }
-
-    [Fact]
-    public async Task InMemoryDataStorage_ImplementsNewMethods()
-    {
-        // Test that InMemoryObjectDataStorage properly implements the new interface methods
-        var mockChunkedDataParser = new Mock<IChunkedDataParser>();
-        var storage = new InMemoryObjectDataStorage(mockChunkedDataParser.Object);
-        var bucketName = "test-bucket";
-        var key = "test-key";
-        var testData = Encoding.UTF8.GetBytes("Test content");
-
-        // Store some data first
-        var pipe = new Pipe();
-        var writeTask = pipe.Writer.WriteAsync(testData).AsTask();
-        await pipe.Writer.CompleteAsync();
-        await writeTask;
-
-        var (size, etag) = await storage.StoreDataAsync(bucketName, key, pipe.Reader);
-
-        // Test DataExistsAsync
-        var exists = await storage.DataExistsAsync(bucketName, key);
-        Assert.True(exists);
-
-        // Test GetDataInfoAsync
-        var dataInfo = await storage.GetDataInfoAsync(bucketName, key);
-        Assert.NotNull(dataInfo);
-        Assert.Equal(testData.Length, dataInfo.Value.size);
-
-        // Test ListDataKeysAsync
-        var keys = await storage.ListDataKeysAsync(bucketName);
-        Assert.Contains(key, keys);
-
-        // Test with prefix
-        var keysWithPrefix = await storage.ListDataKeysAsync(bucketName, "test");
-        Assert.Contains(key, keysWithPrefix);
-
-        var keysWithWrongPrefix = await storage.ListDataKeysAsync(bucketName, "wrong");
-        Assert.Empty(keysWithWrongPrefix);
     }
 }

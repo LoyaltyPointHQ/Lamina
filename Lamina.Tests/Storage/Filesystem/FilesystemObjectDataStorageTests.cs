@@ -257,7 +257,7 @@ public class FilesystemObjectDataStorageTests : IDisposable
         var keys = await _storage.ListDataKeysAsync(bucketName);
 
         // Assert
-        var keyList = keys.ToList();
+        var keyList = keys.Keys;
         Assert.Single(keyList); // Only the normal object should be listed
         Assert.Contains(normalKey, keyList);
         Assert.DoesNotContain(".lamina-tmp-abc123", keyList);
@@ -405,7 +405,7 @@ public class FilesystemObjectDataStorageTests : IDisposable
         var customTempExists = await customStorage.DataExistsAsync(bucketName, ".custom-temp-xyz789");
 
         // Assert
-        var keyList = keys.ToList();
+        var keyList = keys.Keys;
         Assert.Contains(normalKey, keyList); // Normal object should be listed
         Assert.Contains(".lamina-tmp-abc123", keyList); // Default prefix should be listed (not filtered)
         Assert.DoesNotContain(".custom-temp-xyz789", keyList); // Custom prefix should be filtered

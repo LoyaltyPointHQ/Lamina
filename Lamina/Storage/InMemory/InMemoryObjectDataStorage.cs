@@ -140,24 +140,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         return Task.FromResult<(long size, DateTime lastModified)?>(null);
     }
 
-    public Task<IEnumerable<string>> ListDataKeysAsync(string bucketName, string? prefix = null, CancellationToken cancellationToken = default)
-    {
-        if (!_data.TryGetValue(bucketName, out var bucketData))
-        {
-            return Task.FromResult(Enumerable.Empty<string>());
-        }
-
-        var keys = bucketData.Keys.AsEnumerable();
-
-        if (!string.IsNullOrEmpty(prefix))
-        {
-            keys = keys.Where(k => k.StartsWith(prefix));
-        }
-
-        return Task.FromResult(keys);
-    }
-
-    public Task<ListDataResult> ListDataKeysWithDelimiterAsync(string bucketName, string? prefix = null, string? delimiter = null, string? startAfter = null, int? maxKeys = null, CancellationToken cancellationToken = default)
+    public Task<ListDataResult> ListDataKeysAsync(string bucketName, string? prefix = null, string? delimiter = null, string? startAfter = null, int? maxKeys = null, CancellationToken cancellationToken = default)
     {
         var result = new ListDataResult();
 
