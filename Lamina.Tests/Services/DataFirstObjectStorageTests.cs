@@ -117,7 +117,7 @@ public class DataFirstObjectStorageTests
             .ReturnsAsync(new[] { "file-with-metadata.txt", "file-without-metadata.txt" });
 
         // Setup the new delimiter-aware method
-        _dataStorageMock.Setup(x => x.ListDataKeysWithDelimiterAsync(bucketName, null, null, default))
+        _dataStorageMock.Setup(x => x.ListDataKeysWithDelimiterAsync(bucketName, null, null, null, null, default))
             .ReturnsAsync(new ListDataResult
             {
                 Keys = new List<string> { "file-with-metadata.txt", "file-without-metadata.txt" },

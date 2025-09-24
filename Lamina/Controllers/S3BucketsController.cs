@@ -145,6 +145,8 @@ public class S3BucketsController : ControllerBase
         [FromQuery(Name = "upload-id-marker")] string? uploadIdMarker,
         [FromQuery(Name = "max-uploads")] int? maxUploads,
         [FromQuery(Name = "continuation-token")] string? continuationToken,
+        [FromQuery(Name = "start-after")] string? startAfter,
+        [FromQuery(Name = "fetch-owner")] bool fetchOwner = false,
         CancellationToken cancellationToken = default)
     {
         // List multipart uploads
@@ -166,41 +168,81 @@ public class S3BucketsController : ControllerBase
             return new ObjectResult(error);
         }
 
+        // Determine API version: listType=2 means ListObjectsV2, otherwise ListObjects V1
+        var isV2 = listType == 2;
+
         // Get objects from service
         var listRequest = new ListObjectsRequest
         {
             Prefix = prefix,
             Delimiter = delimiter,
             MaxKeys = maxKeys ?? 1000,
-            ContinuationToken = continuationToken ?? marker
+            ContinuationToken = continuationToken ?? marker,
+            ListType = listType ?? 1,
+            StartAfter = startAfter,
+            FetchOwner = fetchOwner
         };
 
         var objects = await _objectStorage.ListObjectsAsync(bucketName, listRequest, cancellationToken);
 
-        var result = new ListBucketResult
-        {
-            Name = bucketName,
-            Prefix = prefix,
-            Marker = marker,
-            MaxKeys = maxKeys ?? 1000,
-            IsTruncated = objects.IsTruncated,
-            ContentsList = objects.Contents.Select(o => new Contents
-            {
-                Key = o.Key,
-                LastModified = o.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
-                ETag = $"\"{o.ETag}\"",
-                Size = o.Size,
-                StorageClass = "STANDARD",
-                Owner = new Owner()
-            }).ToList(),
-            CommonPrefixesList = objects.CommonPrefixes.Select(cp => new CommonPrefixes
-            {
-                Prefix = cp
-            }).ToList()
-        };
-
         Response.ContentType = "application/xml";
-        return Ok(result);
+
+        if (isV2)
+        {
+            // ListObjectsV2 response
+            var resultV2 = new ListBucketResultV2
+            {
+                Name = bucketName,
+                Prefix = prefix,
+                StartAfter = startAfter,
+                ContinuationToken = continuationToken,
+                NextContinuationToken = objects.IsTruncated ? objects.NextContinuationToken : null,
+                KeyCount = objects.Contents.Count,
+                MaxKeys = maxKeys ?? 1000,
+                IsTruncated = objects.IsTruncated,
+                ContentsList = objects.Contents.Select(o => new Contents
+                {
+                    Key = o.Key,
+                    LastModified = o.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
+                    ETag = $"\"{o.ETag}\"",
+                    Size = o.Size,
+                    StorageClass = "STANDARD",
+                    Owner = fetchOwner ? new Owner() : null  // Only include owner if requested in V2
+                }).ToList(),
+                CommonPrefixesList = objects.CommonPrefixes.Select(cp => new CommonPrefixes
+                {
+                    Prefix = cp
+                }).ToList()
+            };
+            return Ok(resultV2);
+        }
+        else
+        {
+            // ListObjects V1 response
+            var result = new ListBucketResult
+            {
+                Name = bucketName,
+                Prefix = prefix,
+                Marker = marker,
+                MaxKeys = maxKeys ?? 1000,
+                IsTruncated = objects.IsTruncated,
+                NextMarker = objects.IsTruncated ? objects.NextContinuationToken : null,
+                ContentsList = objects.Contents.Select(o => new Contents
+                {
+                    Key = o.Key,
+                    LastModified = o.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
+                    ETag = $"\"{o.ETag}\"",
+                    Size = o.Size,
+                    StorageClass = "STANDARD",
+                    Owner = new Owner()  // Always include owner in V1
+                }).ToList(),
+                CommonPrefixesList = objects.CommonPrefixes.Select(cp => new CommonPrefixes
+                {
+                    Prefix = cp
+                }).ToList()
+            };
+            return Ok(result);
+        }
     }
 
     [HttpDelete("{bucketName}")]

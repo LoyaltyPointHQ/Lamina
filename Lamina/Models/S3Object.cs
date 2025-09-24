@@ -18,6 +18,11 @@ public class ListObjectsRequest
     public string? Delimiter { get; set; }
     public int MaxKeys { get; set; } = 1000;
     public string? ContinuationToken { get; set; }
+
+    // V2-specific fields
+    public int ListType { get; set; } = 1; // 1 for ListObjects, 2 for ListObjectsV2
+    public string? StartAfter { get; set; }
+    public bool FetchOwner { get; set; } = false; // Only for V2, defaults to false
 }
 
 public class ListObjectsResponse

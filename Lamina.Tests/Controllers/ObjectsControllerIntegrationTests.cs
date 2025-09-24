@@ -537,4 +537,214 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         Assert.Contains(result.Uploads, u => u.Key == "upload1.bin");
         Assert.Contains(result.Uploads, u => u.Key == "upload2.bin");
     }
+
+    [Fact]
+    public async Task ListObjects_WithMaxKeys_LimitsResults()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create 5 objects
+        for (int i = 1; i <= 5; i++)
+        {
+            await Client.PutAsync($"/{bucketName}/file{i:D2}.txt",
+                new StringContent($"Content {i}", Encoding.UTF8, "text/plain"));
+        }
+
+        // Request only 3 objects
+        var response = await Client.GetAsync($"/{bucketName}?max-keys=3");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResult?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+        Assert.Equal(3, result.MaxKeys);
+        Assert.Equal(3, result.ContentsList.Count);
+        Assert.True(result.IsTruncated);
+        Assert.NotNull(result.NextMarker);
+        Assert.Equal("file03.txt", result.NextMarker);
+
+        // Check keys are in lexicographic order
+        Assert.Equal("file01.txt", result.ContentsList[0].Key);
+        Assert.Equal("file02.txt", result.ContentsList[1].Key);
+        Assert.Equal("file03.txt", result.ContentsList[2].Key);
+    }
+
+    [Fact]
+    public async Task ListObjects_WithMarker_ContinuesFromSpecificKey()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create 5 objects
+        for (int i = 1; i <= 5; i++)
+        {
+            await Client.PutAsync($"/{bucketName}/file{i:D2}.txt",
+                new StringContent($"Content {i}", Encoding.UTF8, "text/plain"));
+        }
+
+        // Request objects starting after file02.txt
+        var response = await Client.GetAsync($"/{bucketName}?marker=file02.txt");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResult?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+        Assert.Equal(3, result.ContentsList.Count);
+        Assert.False(result.IsTruncated);
+        Assert.Null(result.NextMarker);
+
+        // Check we got the remaining objects
+        Assert.Equal("file03.txt", result.ContentsList[0].Key);
+        Assert.Equal("file04.txt", result.ContentsList[1].Key);
+        Assert.Equal("file05.txt", result.ContentsList[2].Key);
+    }
+
+    [Fact]
+    public async Task ListObjects_WithMaxKeysAndMarker_CombinesProperly()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create 6 objects
+        for (int i = 1; i <= 6; i++)
+        {
+            await Client.PutAsync($"/{bucketName}/file{i:D2}.txt",
+                new StringContent($"Content {i}", Encoding.UTF8, "text/plain"));
+        }
+
+        // First request: get first 2 objects
+        var response1 = await Client.GetAsync($"/{bucketName}?max-keys=2");
+        var xmlContent1 = await response1.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResult));
+        using var reader1 = new StringReader(xmlContent1);
+        var result1 = (ListBucketResult?)serializer.Deserialize(reader1);
+
+        Assert.NotNull(result1);
+        Assert.Equal(2, result1.ContentsList.Count);
+        Assert.True(result1.IsTruncated);
+        Assert.Equal("file02.txt", result1.NextMarker);
+
+        // Second request: continue from where we left off
+        var response2 = await Client.GetAsync($"/{bucketName}?max-keys=2&marker={result1.NextMarker}");
+        var xmlContent2 = await response2.Content.ReadAsStringAsync();
+        using var reader2 = new StringReader(xmlContent2);
+        var result2 = (ListBucketResult?)serializer.Deserialize(reader2);
+
+        Assert.NotNull(result2);
+        Assert.Equal(2, result2.ContentsList.Count);
+        Assert.True(result2.IsTruncated);
+        Assert.Equal("file04.txt", result2.NextMarker);
+        Assert.Equal("file03.txt", result2.ContentsList[0].Key);
+        Assert.Equal("file04.txt", result2.ContentsList[1].Key);
+
+        // Third request: get remaining objects
+        var response3 = await Client.GetAsync($"/{bucketName}?marker={result2.NextMarker}");
+        var xmlContent3 = await response3.Content.ReadAsStringAsync();
+        using var reader3 = new StringReader(xmlContent3);
+        var result3 = (ListBucketResult?)serializer.Deserialize(reader3);
+
+        Assert.NotNull(result3);
+        Assert.Equal(2, result3.ContentsList.Count);
+        Assert.False(result3.IsTruncated);
+        Assert.Null(result3.NextMarker);
+        Assert.Equal("file05.txt", result3.ContentsList[0].Key);
+        Assert.Equal("file06.txt", result3.ContentsList[1].Key);
+    }
+
+    [Fact]
+    public async Task ListObjects_WithDelimiterAndPagination_HandlesBothKeysAndCommonPrefixes()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create objects and "directories"
+        await Client.PutAsync($"/{bucketName}/a-file.txt", new StringContent("Content", Encoding.UTF8));
+        await Client.PutAsync($"/{bucketName}/b-file.txt", new StringContent("Content", Encoding.UTF8));
+        await Client.PutAsync($"/{bucketName}/dir1/file.txt", new StringContent("Content", Encoding.UTF8));
+        await Client.PutAsync($"/{bucketName}/dir2/file.txt", new StringContent("Content", Encoding.UTF8));
+        await Client.PutAsync($"/{bucketName}/z-file.txt", new StringContent("Content", Encoding.UTF8));
+
+        // Request with max-keys=3 and delimiter
+        var response = await Client.GetAsync($"/{bucketName}?delimiter=/&max-keys=3");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResult?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+        Assert.Equal(3, result.MaxKeys);
+        Assert.True(result.IsTruncated);
+        Assert.NotNull(result.NextMarker);
+
+        // Should have a mix of files and common prefixes, limited to 3 total
+        var totalItems = result.ContentsList.Count + result.CommonPrefixesList.Count;
+        Assert.Equal(3, totalItems);
+    }
+
+    [Fact]
+    public async Task ListObjects_ExactlyMaxKeys_DoesNotSetTruncated()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create exactly 3 objects
+        for (int i = 1; i <= 3; i++)
+        {
+            await Client.PutAsync($"/{bucketName}/file{i}.txt",
+                new StringContent($"Content {i}", Encoding.UTF8, "text/plain"));
+        }
+
+        // Request exactly 3 objects
+        var response = await Client.GetAsync($"/{bucketName}?max-keys=3");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResult?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+        Assert.Equal(3, result.ContentsList.Count);
+        Assert.False(result.IsTruncated); // Should NOT be truncated
+        Assert.Null(result.NextMarker); // Should NOT have NextMarker
+    }
+
+    [Fact]
+    public async Task ListObjects_WithContinuationToken_WorksLikeMarker()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create 4 objects
+        for (int i = 1; i <= 4; i++)
+        {
+            await Client.PutAsync($"/{bucketName}/item{i:D2}.txt",
+                new StringContent($"Content {i}", Encoding.UTF8, "text/plain"));
+        }
+
+        // Test continuation-token parameter (same behavior as marker)
+        var response = await Client.GetAsync($"/{bucketName}?continuation-token=item02.txt");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResult?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+        Assert.Equal(2, result.ContentsList.Count);
+        Assert.False(result.IsTruncated);
+
+        // Should get items after item02.txt
+        Assert.Equal("item03.txt", result.ContentsList[0].Key);
+        Assert.Equal("item04.txt", result.ContentsList[1].Key);
+    }
 }

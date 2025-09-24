@@ -51,6 +51,9 @@ public class ListBucketResult
     [XmlElement("IsTruncated")]
     public bool IsTruncated { get; set; }
 
+    [XmlElement("NextMarker")]
+    public string? NextMarker { get; set; }
+
     [XmlElement("Contents")]
     public List<Contents> ContentsList { get; set; } = new();
 
@@ -78,6 +81,40 @@ public class Contents
 
     [XmlElement("Owner")]
     public Owner? Owner { get; set; }
+}
+
+[XmlRoot("ListBucketResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class ListBucketResultV2
+{
+    [XmlElement("Name")]
+    public string Name { get; set; } = string.Empty;
+
+    [XmlElement("Prefix")]
+    public string? Prefix { get; set; }
+
+    [XmlElement("StartAfter")]
+    public string? StartAfter { get; set; }
+
+    [XmlElement("ContinuationToken")]
+    public string? ContinuationToken { get; set; }
+
+    [XmlElement("NextContinuationToken")]
+    public string? NextContinuationToken { get; set; }
+
+    [XmlElement("KeyCount")]
+    public int KeyCount { get; set; }
+
+    [XmlElement("MaxKeys")]
+    public int MaxKeys { get; set; }
+
+    [XmlElement("IsTruncated")]
+    public bool IsTruncated { get; set; }
+
+    [XmlElement("Contents")]
+    public List<Contents> ContentsList { get; set; } = new();
+
+    [XmlElement("CommonPrefixes")]
+    public List<CommonPrefixes> CommonPrefixesList { get; set; } = new();
 }
 
 [XmlRoot("CommonPrefixes")]

@@ -19,6 +19,6 @@ public interface IObjectDataStorage
     Task<bool> DataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     Task<(long size, DateTime lastModified)?> GetDataInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     Task<IEnumerable<string>> ListDataKeysAsync(string bucketName, string? prefix = null, CancellationToken cancellationToken = default);
-    Task<ListDataResult> ListDataKeysWithDelimiterAsync(string bucketName, string? prefix = null, string? delimiter = null, CancellationToken cancellationToken = default);
+    Task<ListDataResult> ListDataKeysWithDelimiterAsync(string bucketName, string? prefix = null, string? delimiter = null, string? startAfter = null, int? maxKeys = null, CancellationToken cancellationToken = default);
     Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default);
 }

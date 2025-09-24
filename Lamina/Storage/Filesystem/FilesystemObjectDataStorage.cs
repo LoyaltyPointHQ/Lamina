@@ -411,7 +411,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         }
     }
 
-    public Task<ListDataResult> ListDataKeysWithDelimiterAsync(string bucketName, string? prefix = null, string? delimiter = null, CancellationToken cancellationToken = default)
+    public Task<ListDataResult> ListDataKeysWithDelimiterAsync(string bucketName, string? prefix = null, string? delimiter = null, string? startAfter = null, int? maxKeys = null, CancellationToken cancellationToken = default)
     {
         var result = new ListDataResult();
 
@@ -427,24 +427,59 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             return Task.FromResult(result);
         }
 
-        // If no delimiter, use the existing method logic
+        // If no delimiter, use the existing method logic with pagination
         if (string.IsNullOrEmpty(delimiter))
         {
             var allKeys = new List<string>();
             CollectKeys(bucketPath, bucketName, prefix, allKeys);
-            result.Keys.AddRange(allKeys.OrderBy(k => k));
+
+            // Sort keys lexicographically (S3 requirement)
+            IEnumerable<string> sortedKeys = allKeys.OrderBy(k => k, StringComparer.Ordinal);
+
+            // Apply startAfter filter
+            if (!string.IsNullOrEmpty(startAfter))
+            {
+                sortedKeys = sortedKeys.Where(k => string.Compare(k, startAfter, StringComparison.Ordinal) > 0);
+            }
+
+            // Apply maxKeys limit
+            if (maxKeys.HasValue)
+            {
+                sortedKeys = sortedKeys.Take(maxKeys.Value);
+            }
+
+            result.Keys.AddRange(sortedKeys);
             return Task.FromResult(result);
         }
 
-        // Process with delimiter logic
+        // Process with delimiter logic and pagination
         var prefixLength = prefix?.Length ?? 0;
         var commonPrefixSet = new HashSet<string>();
         var directKeys = new List<string>();
 
         CollectKeysWithDelimiter(bucketPath, bucketName, prefix, delimiter, prefixLength, directKeys, commonPrefixSet);
 
-        result.Keys.AddRange(directKeys.OrderBy(k => k));
-        result.CommonPrefixes.AddRange(commonPrefixSet.OrderBy(p => p));
+        // Combine and sort all items (keys and common prefixes)
+        var allItems = new List<(string item, bool isPrefix)>();
+        allItems.AddRange(directKeys.Select(k => (k, false)));
+        allItems.AddRange(commonPrefixSet.Select(p => (p, true)));
+
+        // Sort lexicographically
+        allItems.Sort((x, y) => string.Compare(x.item, y.item, StringComparison.Ordinal));
+
+        // Apply startAfter filter
+        if (!string.IsNullOrEmpty(startAfter))
+        {
+            allItems = allItems.Where(item => string.Compare(item.item, startAfter, StringComparison.Ordinal) > 0).ToList();
+        }
+
+        // Apply maxKeys limit
+        var effectiveMaxKeys = maxKeys ?? int.MaxValue;
+        var limitedItems = allItems.Take(effectiveMaxKeys).ToList();
+
+        // Separate back into keys and common prefixes
+        result.Keys.AddRange(limitedItems.Where(item => !item.isPrefix).Select(item => item.item));
+        result.CommonPrefixes.AddRange(limitedItems.Where(item => item.isPrefix).Select(item => item.item));
 
         return Task.FromResult(result);
     }
