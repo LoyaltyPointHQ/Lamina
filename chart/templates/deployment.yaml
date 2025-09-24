@@ -73,13 +73,21 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
-            {{- /* Mount Redis connection string secret */ -}}
+            {{- /* Mount Redis connection string with password from user-provided secret */ -}}
             {{- if and .Values.config.Redis .Values.config.Redis.ConnectionString (contains "@" .Values.config.Redis.ConnectionString) }}
             - name: Redis__ConnectionString
               valueFrom:
                 secretKeyRef:
                   name: {{ $secretName }}
                   key: redis-connection
+            {{- end }}
+            {{- end }}
+            {{- /* Mount Redis connection string as environment variable if it contains password */ -}}
+            {{- $redisConnectionString := include "lamina.redisConnectionString" . }}
+            {{- if and $redisConnectionString (contains "password=" $redisConnectionString) }}
+            {{- if not (and .Values.config.Redis .Values.config.Redis.ConnectionString (contains "@" .Values.config.Redis.ConnectionString)) }}
+            - name: Redis__ConnectionString
+              value: {{ $redisConnectionString | quote }}
             {{- end }}
             {{- end }}
             {{- range .Values.env }}

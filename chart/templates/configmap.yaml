@@ -16,9 +16,18 @@ data:
     {{- end }}
     {{- end }}
     {{- end }}
-    {{- if $config.Redis }}
-    {{- if and $config.Redis.ConnectionString (contains "@" $config.Redis.ConnectionString) }}
+    {{- /* Handle Redis connection string */ -}}
+    {{- $redisConnectionString := include "lamina.redisConnectionString" . }}
+    {{- if $redisConnectionString }}
+    {{- if not $config.Redis }}
+    {{- $_ := set $config "Redis" dict }}
+    {{- end }}
+    {{- if contains "password=" $redisConnectionString }}
+    {{- /* Connection string with password will be handled by environment variable */ -}}
     {{- $_ := unset $config.Redis "ConnectionString" }}
+    {{- else }}
+    {{- /* Connection string without password can go in configmap */ -}}
+    {{- $_ := set $config.Redis "ConnectionString" $redisConnectionString }}
     {{- end }}
     {{- end }}
     {{- if kindIs "string" $config }}

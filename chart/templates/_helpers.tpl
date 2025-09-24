@@ -134,3 +134,27 @@ Get the image reference
 {{- printf "%s:%s" .Values.image.repository $tag }}
 {{- end }}
 {{- end }}
+
+{{/*
+Get Redis connection string with precedence:
+1. User-provided config.Redis.ConnectionString (highest priority)
+2. Auto-generated from Redis subchart if redis.enabled=true
+3. No connection string (empty)
+*/}}
+{{- define "lamina.redisConnectionString" -}}
+{{- if and .Values.config.Redis .Values.config.Redis.ConnectionString }}
+{{- .Values.config.Redis.ConnectionString }}
+{{- else if .Values.redis.enabled }}
+{{- $serviceName := printf "%s-redis-master" .Release.Name }}
+{{- if .Values.redis.auth.enabled }}
+{{- if not .Values.redis.auth.password }}
+{{- fail "Redis authentication is enabled but no password provided. Please set redis.auth.password in values, provide Redis.ConnectionString manualy or disable authentication with redis.auth.enabled=false" }}
+{{- end }}
+{{- printf "%s:6379,password=%s" $serviceName .Values.redis.auth.password }}
+{{- else }}
+{{- printf "%s:6379" $serviceName }}
+{{- end }}
+{{- else }}
+{{- "" }}
+{{- end }}
+{{- end }}

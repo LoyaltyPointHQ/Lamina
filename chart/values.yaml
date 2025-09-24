@@ -167,3 +167,35 @@ volumeMounts: []
 
 # Extra volumes
 volumes: []
+
+# Redis subchart configuration
+# When enabled, provides Redis instance for distributed locking
+redis:
+  enabled: false
+
+  # Redis configuration - can be overridden
+  auth:
+    enabled: false
+    # If auth is enabled, password MUST be provided as plaintext in values
+    password: ""
+
+  # Use standalone architecture by default for simplicity
+  architecture: standalone
+
+  # Memory-only configuration - no persistence to disk
+  commonConfiguration: |-
+    # Disable AOF persistence
+    appendonly no
+    # Disable RDB snapshots
+    save ""
+
+  # Master configuration - memory-only by default
+  master:
+    persistence:
+      enabled: false
+    resources:
+      limits:
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi

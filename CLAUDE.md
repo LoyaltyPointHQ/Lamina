@@ -315,11 +315,61 @@ The project includes a comprehensive Helm chart for deploying Lamina on Kubernet
 - **Security Management**: Automatic extraction of sensitive data to Kubernetes Secrets
 - **Scalability**: HorizontalPodAutoscaler support for auto-scaling based on metrics
 - **Production Ready**: Comprehensive health checks, security contexts, and monitoring
+- **Redis Integration**: Optional Redis dependency for distributed locking with automatic configuration
+
+### Redis Dependency
+
+The Helm chart includes optional Redis integration using the Bitnami Redis chart as a dependency:
+
+**Default Configuration (Recommended)**:
+- Redis disabled by default (`redis.enabled: false`)
+- When enabled, uses memory-only storage (no persistence)
+- Authentication disabled for simplicity
+- Standalone architecture (single instance)
+
+**Key Features**:
+- **Automatic Connection String Generation**: When `redis.enabled=true`, automatically generates connection string
+- **User Override Priority**: User-provided `config.Redis.ConnectionString` always takes precedence
+- **Memory-Only by Default**: No PVC created, persistence disabled (`appendonly no`, `save ""`)
+- **Validation**: Fails fast with clear error if authentication is enabled without password
+
+**Usage Examples**:
+
+```bash
+# Enable Redis with no authentication (recommended)
+helm install lamina ./chart \
+  --set redis.enabled=true
+
+# Enable Redis with authentication (password required)
+helm install lamina ./chart \
+  --set redis.enabled=true \
+  --set redis.auth.enabled=true \
+  --set redis.auth.password="your-password"
+
+# Use external Redis (highest priority)
+helm install lamina ./chart \
+  --set redis.enabled=true \
+  --set config.Redis.ConnectionString="external-redis:6379"
+
+# Use external Redis with authentication
+helm install lamina ./chart \
+  --set config.Redis.ConnectionString="external-redis:6379,password=secret"
+```
+
+**Connection String Priority**:
+1. **User-provided** `config.Redis.ConnectionString` (highest priority)
+2. **Auto-generated** from Redis subchart when `redis.enabled=true`
+3. **None** (no Redis configuration)
+
+**Security Handling**:
+- Connection strings without passwords: Stored in ConfigMaps
+- Connection strings with passwords: Stored in environment variables or Secrets
+- Auto-generated passwords: Embedded directly in connection string (plaintext in values required)
 
 ### Chart Structure
 
 The Helm chart (`./chart/`) includes:
-- **Chart.yaml**: Metadata, version, and dependencies
+- **Chart.yaml**: Metadata, version, and dependencies (includes Bitnami Redis chart dependency)
 - **values.yaml**: Configurable parameters with sensible defaults
 - **README.md**: Comprehensive deployment and configuration guide
 - **templates/**: Kubernetes/OpenShift resource templates with conditional logic
@@ -560,6 +610,9 @@ Lamina includes special support for network filesystems to handle their unique c
 ```
 
 ### Distributed Locking Configuration (Redis)
+
+**Note**: When using the Helm chart with `redis.enabled=true`, the Redis connection string is automatically configured for distributed locking.
+
 ```json
 {
   "LockManager": "Redis",  // "InMemory" (default) or "Redis"
