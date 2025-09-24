@@ -52,6 +52,36 @@ spec:
               value: "http://+:{{ .Values.service.targetPort }}"
             - name: ASPNETCORE_ENVIRONMENT
               value: "Production"
+            {{- if and .Values.secrets (or .Values.secrets.create .Values.secrets.existingSecret) }}
+            {{- $secretName := .Values.secrets.existingSecret | default (printf "%s-secrets" (include "lamina.fullname" .)) }}
+            {{- /* Mount authentication secrets from main config */ -}}
+            {{- if and .Values.config.Authentication .Values.config.Authentication.Users }}
+            {{- range $i, $user := .Values.config.Authentication.Users }}
+            {{- if $user.AccessKeyId }}
+            - name: Authentication__Users__{{ $i }}__AccessKeyId
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: auth-user-{{ $i }}-access-key
+            {{- end }}
+            {{- if $user.SecretAccessKey }}
+            - name: Authentication__Users__{{ $i }}__SecretAccessKey
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: auth-user-{{ $i }}-secret-key
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- /* Mount Redis connection string secret */ -}}
+            {{- if and .Values.config.Redis .Values.config.Redis.ConnectionString (contains "@" .Values.config.Redis.ConnectionString) }}
+            - name: Redis__ConnectionString
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: redis-connection
+            {{- end }}
+            {{- end }}
             {{- range .Values.env }}
             - name: {{ .name }}
               value: {{ .value | quote }}

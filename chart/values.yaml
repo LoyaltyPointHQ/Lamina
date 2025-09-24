@@ -122,8 +122,19 @@ tolerations: []
 # Affinity
 affinity: {}
 
-# Application configuration
+# Application configuration (non-sensitive data only)
 config: {}
+
+# Secrets configuration for sensitive data
+# When secrets.create=true, sensitive fields from config (AccessKeyId, SecretAccessKey, Redis passwords)
+# are automatically moved to Kubernetes Secrets and removed from ConfigMaps
+secrets:
+  # Create a new secret (set to false to use existingSecret)
+  create: true
+
+  # Use an existing secret instead of creating a new one
+  existingSecret: ""
+
 
 # Liveness and readiness probes
 livenessProbe:

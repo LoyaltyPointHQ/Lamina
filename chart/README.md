@@ -121,23 +121,108 @@ sameVolumeForDataAndMeta: true
 
 ### Authentication Configuration
 
+**Important**: For security, authentication credentials should be stored in Kubernetes Secrets, not ConfigMaps.
+
+#### Using Kubernetes Secrets (Recommended)
+
+When `secrets.create=true`, sensitive fields (AccessKeyId, SecretAccessKey) are automatically moved from ConfigMap to Secrets:
+
+```yaml
+# Define users in config as normal - sensitive fields will be moved to secrets automatically
+config:
+  Authentication:
+    Enabled: true
+    Users:
+      - AccessKeyId: admin
+        SecretAccessKey: "admin-super-secret-key"
+        Name: admin-user
+        BucketPermissions:
+          - BucketName: "*"
+            Permissions: ["*"]
+      - AccessKeyId: readonly
+        SecretAccessKey: "readonly-secret-key"
+        Name: readonly-user
+        BucketPermissions:
+          - BucketName: "public-*"
+            Permissions: ["read", "list"]
+
+# Enable automatic secret creation
+secrets:
+  create: true
+```
+
+Install with secrets:
+```bash
+helm install lamina ./chart \
+  --set secrets.create=true \
+  --set config.Authentication.Enabled=true \
+  --set config.Authentication.Users[0].AccessKeyId=admin \
+  --set-string config.Authentication.Users[0].SecretAccessKey="admin-super-secret" \
+  --set config.Authentication.Users[0].Name=admin-user
+```
+
+#### Using Existing Kubernetes Secret
+
+```yaml
+secrets:
+  create: false
+  existingSecret: "my-lamina-secrets"
+
+# Still define your users in config (without sensitive fields)
+config:
+  Authentication:
+    Enabled: true
+    Users:
+      - Name: admin-user
+        BucketPermissions:
+          - BucketName: "*"
+            Permissions: ["*"]
+
+# Your existing secret must contain keys like:
+# authentication__users__0__accesskeyid: <base64-encoded-access-key>
+# authentication__users__0__secretaccesskey: <base64-encoded-secret-key>
+```
+
+#### Legacy Configuration (Less Secure)
+
+For development or non-production environments, you can still store credentials in ConfigMaps:
+
 ```yaml
 config:
   Authentication:
     Enabled: true
     Users:
       - AccessKeyId: admin
-        SecretAccessKey: supersecret
+        SecretAccessKey: supersecret  # Not recommended for production
         Name: admin-user
         BucketPermissions:
           - BucketName: "*"
             Permissions: ["*"]
-      - AccessKeyId: readonly
-        SecretAccessKey: readonlysecret
-        Name: readonly-user
-        BucketPermissions:
-          - BucketName: public-*
-            Permissions: ["read", "list"]
+```
+
+### Redis Configuration with Authentication
+
+When using Redis with authentication, connection strings with passwords are automatically moved to secrets:
+
+```yaml
+config:
+  LockManager: Redis
+  Redis:
+    ConnectionString: "redis://:password@redis-host:6379/0"  # Will be moved to secret automatically
+    LockExpirySeconds: 30
+    RetryCount: 3
+    Database: 0
+
+secrets:
+  create: true  # Automatically moves Redis password to secret
+```
+
+Install with Redis secrets:
+```bash
+helm install lamina ./chart \
+  --set config.LockManager=Redis \
+  --set secrets.create=true \
+  --set-string config.Redis.ConnectionString="redis://:mypassword@redis:6379/0"
 ```
 
 ### Platform-Specific Configuration
@@ -294,6 +379,31 @@ config:
     persistentVolume:
       storageClass: your-storage-class
 ```
+
+### Secrets Not Working
+
+If authentication or Redis secrets aren't being applied:
+
+1. Check if the secret exists:
+   ```bash
+   kubectl get secrets
+   kubectl describe secret <release-name>-secrets
+   ```
+
+2. Verify secret data is correctly encoded:
+   ```bash
+   kubectl get secret <release-name>-secrets -o yaml
+   echo "<base64-value>" | base64 -d
+   ```
+
+3. Check environment variables in the pod:
+   ```bash
+   kubectl exec <pod-name> -- env | grep -E "(Authentication|Redis)__"
+   ```
+
+4. Verify the secret keys match the expected format:
+   - Authentication: `authentication__users__0__accesskeyid` and `authentication__users__0__secretaccesskey`
+   - Redis: `redis__connectionstring`
 
 ## Development
 

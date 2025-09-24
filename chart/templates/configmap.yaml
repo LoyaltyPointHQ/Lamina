@@ -6,8 +6,23 @@ metadata:
     {{- include "lamina.labels" . | nindent 4 }}
 data:
   appsettings.Production.json: |
-    {{- if kindIs "string" .Values.config }}
-    {{- .Values.config | nindent 4 }}
+    {{- $config := deepCopy .Values.config }}
+    {{- /* Remove sensitive data from config */ -}}
+    {{- if $config.Authentication }}
+    {{- if $config.Authentication.Users }}
+    {{- range $i, $user := $config.Authentication.Users }}
+    {{- $_ := unset $user "AccessKeyId" }}
+    {{- $_ := unset $user "SecretAccessKey" }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+    {{- if $config.Redis }}
+    {{- if and $config.Redis.ConnectionString (contains "@" $config.Redis.ConnectionString) }}
+    {{- $_ := unset $config.Redis "ConnectionString" }}
+    {{- end }}
+    {{- end }}
+    {{- if kindIs "string" $config }}
+    {{- $config | nindent 4 }}
     {{- else }}
-    {{- .Values.config | toPrettyJson | nindent 4 }}
+    {{- $config | toPrettyJson | nindent 4 }}
     {{- end }}
