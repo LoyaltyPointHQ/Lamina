@@ -62,6 +62,41 @@ docker build -f Lamina/Dockerfile -t lamina .
 docker run -p 8080:8080 lamina
 ```
 
+### Helm Chart (Kubernetes/OpenShift)
+```bash
+# Deploy with default settings (in-memory storage)
+helm install lamina ./chart
+
+# Deploy with filesystem storage and persistent volumes
+helm install lamina ./chart \
+  --set config.StorageType=Filesystem \
+  --set persistentVolume.enabled=true \
+  --set persistentVolume.size=20Gi \
+  --set metadataPersistentVolume.enabled=true \
+  --set metadataPersistentVolume.size=5Gi
+
+# Deploy with authentication enabled (using secrets)
+helm install lamina ./chart \
+  --set secrets.create=true \
+  --set config.Authentication.Enabled=true \
+  --set config.Authentication.Users[0].AccessKeyId=admin \
+  --set-string config.Authentication.Users[0].SecretAccessKey="admin-secret"
+
+# Deploy on OpenShift with route
+helm install lamina ./chart \
+  --set route.enabled=true \
+  --set route.host=s3.apps.openshift.example.com
+
+# Deploy on Kubernetes with ingress
+helm install lamina ./chart \
+  --set ingress.enabled=true \
+  --set ingress.hosts[0].host=s3.example.com \
+  --set ingress.className=nginx
+
+# Uninstall
+helm uninstall lamina
+```
+
 ## Project Structure
 
 ### Core Components
@@ -69,6 +104,23 @@ docker run -p 8080:8080 lamina
 - **Lamina/Controllers/**:
   - `S3BucketsController.cs`: Handles bucket operations (PUT, GET, DELETE, HEAD)
   - `S3ObjectsController.cs`: Handles object operations including multipart uploads
+
+### Helm Chart
+- **chart/**: Kubernetes/OpenShift Helm chart for deployment
+  - **Chart.yaml**: Chart metadata and version information
+  - **values.yaml**: Default configuration values with comprehensive options
+  - **templates/**: Kubernetes resource templates
+    - `deployment.yaml`: Main application deployment with platform detection
+    - `service.yaml`: Service definition for pod access
+    - `ingress.yaml`: Kubernetes ingress for external access
+    - `route.yaml`: OpenShift route for external access
+    - `configmap.yaml`: Application configuration (non-sensitive data)
+    - `secret.yaml`: Sensitive configuration data (auth credentials, Redis passwords)
+    - `pvc.yaml`: Persistent volume claim for data storage
+    - `metadataPvc.yaml`: Persistent volume claim for metadata storage
+    - `hpa.yaml`: Horizontal Pod Autoscaler for scaling
+    - `serviceaccount.yaml`: Service account for pod identity
+    - `imagestream.yaml`: OpenShift ImageStream for image management
 
 ### Models
 - **Lamina/Models/**:
@@ -243,6 +295,70 @@ docker run -p 8080:8080 lamina
 - **Unit Tests**: Test storage logic in isolation
 - **XML Validation**: Tests verify both request and response XML formats
 - **Multipart Flow**: Comprehensive tests for complete upload lifecycle
+
+## Helm Chart Deployment
+
+The project includes a comprehensive Helm chart for deploying Lamina on Kubernetes or OpenShift clusters.
+
+### Key Features
+
+- **Automatic Platform Detection**: Detects Kubernetes vs OpenShift and configures resources accordingly
+- **Dual Platform Support**: 
+  - **Kubernetes**: Uses Ingress for external access, standard Deployments
+  - **OpenShift**: Uses Routes for external access, ImageStreams for image management
+- **Flexible Storage Options**: In-memory or filesystem storage with persistent volume support
+- **Security Management**: Automatic extraction of sensitive data to Kubernetes Secrets
+- **Scalability**: HorizontalPodAutoscaler support for auto-scaling based on metrics
+- **Production Ready**: Comprehensive health checks, security contexts, and monitoring
+
+### Chart Structure
+
+The Helm chart (`./chart/`) includes:
+- **Chart.yaml**: Metadata, version, and dependencies
+- **values.yaml**: Configurable parameters with sensible defaults
+- **README.md**: Comprehensive deployment and configuration guide
+- **templates/**: Kubernetes/OpenShift resource templates with conditional logic
+
+### Quick Start
+
+```bash
+# Basic deployment (in-memory storage)
+helm install lamina ./chart
+
+# Production deployment with persistent storage
+helm install lamina ./chart \
+  --set config.StorageType=Filesystem \
+  --set persistentVolume.enabled=true \
+  --set persistentVolume.size=50Gi \
+  --set secrets.create=true \
+  --set config.Authentication.Enabled=true
+```
+
+### Platform-Specific Deployments
+
+**OpenShift:**
+```bash
+helm install lamina ./chart \
+  --set route.enabled=true \
+  --set route.host=s3.apps.cluster.example.com \
+  --set imageStream.enabled=true
+```
+
+**Kubernetes with Ingress:**
+```bash
+helm install lamina ./chart \
+  --set ingress.enabled=true \
+  --set ingress.hosts[0].host=s3.example.com \
+  --set ingress.className=nginx
+```
+
+### Security Best Practices
+
+The chart automatically handles sensitive data by:
+- Moving authentication credentials from ConfigMaps to Secrets
+- Supporting both generated and existing Kubernetes Secrets
+- Extracting Redis passwords from connection strings
+- Using appropriate security contexts for each platform
 
 ## Configuration
 
