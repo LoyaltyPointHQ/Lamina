@@ -39,7 +39,7 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
         Directory.CreateDirectory(_dataDirectory);
     }
 
-    public async Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest? request = null, CancellationToken cancellationToken = default)
+    public async Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest request, CancellationToken cancellationToken = default)
     {
         if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
@@ -56,21 +56,21 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
         try
         {
             // Store region if provided
-            var region = request?.Region ?? "us-east-1";
+            var region = request.Region ?? "us-east-1";
             if (!_xattrHelper.SetAttribute(bucketPath, RegionAttributeName, region))
             {
                 _logger.LogWarning("Failed to store region attribute for bucket {BucketName}", bucketName);
             }
 
             // Store bucket type
-            var bucketType = request?.Type ?? BucketType.GeneralPurpose;
+            var bucketType = request.Type ?? BucketType.GeneralPurpose;
             if (!_xattrHelper.SetAttribute(bucketPath, TypeAttributeName, bucketType.ToString()))
             {
                 _logger.LogWarning("Failed to store type attribute for bucket {BucketName}", bucketName);
             }
 
             // Store storage class if provided
-            if (!string.IsNullOrEmpty(request?.StorageClass))
+            if (!string.IsNullOrEmpty(request.StorageClass))
             {
                 if (!_xattrHelper.SetAttribute(bucketPath, StorageClassAttributeName, request.StorageClass))
                 {
@@ -87,7 +87,7 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
                 CreationDate = dirInfo.CreationTimeUtc,
                 Region = region,
                 Type = bucketType,
-                StorageClass = request?.StorageClass,
+                StorageClass = request.StorageClass,
                 Tags = new Dictionary<string, string>()
             };
         }

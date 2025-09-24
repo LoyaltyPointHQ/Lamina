@@ -1,5 +1,7 @@
 using System.Text.RegularExpressions;
+using Lamina.Configuration;
 using Lamina.Models;
+using Microsoft.Extensions.Options;
 
 namespace Lamina.Storage.Abstract;
 
@@ -7,6 +9,7 @@ public class BucketStorageFacade : IBucketStorageFacade
 {
     private readonly IBucketDataStorage _dataStorage;
     private readonly IBucketMetadataStorage _metadataStorage;
+    private readonly BucketDefaultsSettings _bucketDefaults;
     private readonly ILogger<BucketStorageFacade> _logger;
     private static readonly Regex BucketNameRegex = new(@"^[a-z0-9][a-z0-9.-]*[a-z0-9]$", RegexOptions.Compiled);
     private static readonly Regex IpAddressRegex = new(@"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", RegexOptions.Compiled);
@@ -14,10 +17,12 @@ public class BucketStorageFacade : IBucketStorageFacade
     public BucketStorageFacade(
         IBucketDataStorage dataStorage,
         IBucketMetadataStorage metadataStorage,
+        IOptions<BucketDefaultsSettings> bucketDefaultsOptions,
         ILogger<BucketStorageFacade> logger)
     {
         _dataStorage = dataStorage;
         _metadataStorage = metadataStorage;
+        _bucketDefaults = bucketDefaultsOptions.Value;
         _logger = logger;
     }
 
@@ -27,6 +32,17 @@ public class BucketStorageFacade : IBucketStorageFacade
         {
             _logger.LogWarning("Invalid bucket name: {BucketName}", bucketName);
             return null;
+        }
+
+        // Create default request if null was provided
+        if (request == null)
+        {
+            request = new CreateBucketRequest
+            {
+                Region = _bucketDefaults.Region,
+                Type = _bucketDefaults.Type,
+                StorageClass = _bucketDefaults.StorageClass
+            };
         }
 
         // Create bucket in data service

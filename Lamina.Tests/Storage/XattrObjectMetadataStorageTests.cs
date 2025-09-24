@@ -1,3 +1,4 @@
+using Lamina.Configuration;
 using Lamina.Models;
 using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem;
@@ -33,7 +34,7 @@ public class XattrObjectMetadataStorageTests : IDisposable
         // Create bucket storage for testing
         var bucketDataStorage = new InMemoryBucketDataStorage();
         var bucketMetadataStorage = new InMemoryBucketMetadataStorage(bucketDataStorage);
-        _bucketStorage = new BucketStorageFacade(bucketDataStorage, bucketMetadataStorage, loggerFactory.CreateLogger<BucketStorageFacade>());
+        _bucketStorage = new BucketStorageFacade(bucketDataStorage, bucketMetadataStorage, Options.Create(new BucketDefaultsSettings()), loggerFactory.CreateLogger<BucketStorageFacade>());
 
         _storage = new XattrObjectMetadataStorage(
             Options.Create(settings),
@@ -59,7 +60,7 @@ public class XattrObjectMetadataStorageTests : IDisposable
 
             var bucketDataStorage = new InMemoryBucketDataStorage();
             var bucketMetadataStorage = new InMemoryBucketMetadataStorage(bucketDataStorage);
-            var bucketStorage = new BucketStorageFacade(bucketDataStorage, bucketMetadataStorage, loggerFactory.CreateLogger<BucketStorageFacade>());
+            var bucketStorage = new BucketStorageFacade(bucketDataStorage, bucketMetadataStorage, Options.Create(new BucketDefaultsSettings()), loggerFactory.CreateLogger<BucketStorageFacade>());
 
             Assert.Throws<NotSupportedException>(() => new XattrObjectMetadataStorage(
                 Options.Create(settings),

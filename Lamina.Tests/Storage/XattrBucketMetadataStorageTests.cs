@@ -113,7 +113,7 @@ public class XattrBucketMetadataStorageTests : IDisposable
         }
 
         // Act
-        var result = await _storage.StoreBucketMetadataAsync("non-existent-bucket");
+        var result = await _storage.StoreBucketMetadataAsync("non-existent-bucket", new CreateBucketRequest());
 
         // Assert
         Assert.Null(result);
@@ -198,7 +198,7 @@ public class XattrBucketMetadataStorageTests : IDisposable
         // Arrange
         const string bucketName = "test-bucket";
         await _bucketDataStorage.CreateBucketAsync(bucketName);
-        await _storage.StoreBucketMetadataAsync(bucketName);
+        await _storage.StoreBucketMetadataAsync(bucketName, new CreateBucketRequest());
 
         var tags = new Dictionary<string, string>
         {
@@ -229,7 +229,7 @@ public class XattrBucketMetadataStorageTests : IDisposable
         // Arrange
         const string bucketName = "test-bucket";
         await _bucketDataStorage.CreateBucketAsync(bucketName);
-        await _storage.StoreBucketMetadataAsync(bucketName);
+        await _storage.StoreBucketMetadataAsync(bucketName, new CreateBucketRequest());
 
         // First set some tags
         var initialTags = new Dictionary<string, string> { { "ToRemove", "Value" } };
@@ -329,7 +329,7 @@ public class XattrBucketMetadataStorageTests : IDisposable
         // Arrange
         const string bucketName = "test-bucket";
         await _bucketDataStorage.CreateBucketAsync(bucketName);
-        await _storage.StoreBucketMetadataAsync(bucketName);
+        await _storage.StoreBucketMetadataAsync(bucketName, new CreateBucketRequest());
 
         // Act & Assert - Initial state (no tags)
         var bucket = await _storage.GetBucketMetadataAsync(bucketName);

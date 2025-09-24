@@ -47,8 +47,8 @@ public class BucketTypeStorageTests
         var bucketName = "test-default-bucket";
         await dataStorage.CreateBucketAsync(bucketName);
 
-        // Create bucket with no specific request
-        var bucket = await storage.StoreBucketMetadataAsync(bucketName, null);
+        // Create bucket with default request
+        var bucket = await storage.StoreBucketMetadataAsync(bucketName, new CreateBucketRequest());
 
         Assert.NotNull(bucket);
         Assert.Equal(BucketType.GeneralPurpose, bucket.Type);

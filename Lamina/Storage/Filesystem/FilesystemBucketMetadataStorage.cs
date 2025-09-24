@@ -60,7 +60,7 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
         public Dictionary<string, string>? Tags { get; set; }
     }
 
-    public async Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest? request = null, CancellationToken cancellationToken = default)
+    public async Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest request, CancellationToken cancellationToken = default)
     {
         if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
@@ -74,9 +74,9 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
         {
             Name = bucketName,
             CreationDate = dirInfo.CreationTimeUtc,
-            Region = request?.Region ?? "us-east-1",
-            Type = request?.Type ?? BucketType.GeneralPurpose,
-            StorageClass = request?.StorageClass,
+            Region = request.Region ?? "us-east-1",
+            Type = request.Type ?? BucketType.GeneralPurpose,
+            StorageClass = request.StorageClass,
             Tags = new Dictionary<string, string>()
         };
 

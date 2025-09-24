@@ -14,7 +14,7 @@ public class InMemoryBucketMetadataStorage : IBucketMetadataStorage
         _dataStorage = dataStorage;
     }
 
-    public async Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest? request = null, CancellationToken cancellationToken = default)
+    public async Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest request, CancellationToken cancellationToken = default)
     {
         // Check if bucket exists in data service
         if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
@@ -26,9 +26,9 @@ public class InMemoryBucketMetadataStorage : IBucketMetadataStorage
         {
             Name = bucketName,
             CreationDate = DateTime.UtcNow,
-            Region = request?.Region ?? "us-east-1",
-            Type = request?.Type ?? BucketType.GeneralPurpose,
-            StorageClass = request?.StorageClass,
+            Region = request.Region ?? "us-east-1",
+            Type = request.Type ?? BucketType.GeneralPurpose,
+            StorageClass = request.StorageClass,
             Tags = new Dictionary<string, string>()
         };
 
