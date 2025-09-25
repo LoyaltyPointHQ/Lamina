@@ -4,6 +4,6 @@ namespace Lamina.Configuration;
 
 public class BucketDefaultsSettings
 {
-    public BucketType Type { get; set; } = BucketType.GeneralPurpose;
+    public BucketType Type { get; set; } = BucketType.Directory;
     public string? StorageClass { get; set; }
 }
