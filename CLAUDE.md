@@ -4,870 +4,195 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a .NET 9.0 ASP.NET Core Web API project called "Lamina" that implements an S3-compatible storage API.
+.NET 9.0 ASP.NET Core Web API implementing S3-compatible storage API with strict compliance to Amazon S3 REST API specification.
 
-**IMPORTANT**: This project implements the official Amazon S3 REST API specification and must maintain strict compliance with it. Any deviations from the S3 specification are considered bugs and should be fixed. All API endpoints, request/response formats, headers, status codes, and behaviors must exactly match the official S3 API documentation.
+**Repository**: https://github.com/LoyaltyPointHQ/Lamina
+**Docker**: `ghcr.io/loyaltypointhq/lamina:latest`
 
-**GitHub Repository**: https://github.com/LoyaltyPointHQ/Lamina
-**Docker Image**: `ghcr.io/loyaltypointhq/lamina:latest`
+### Storage Backends
+- **In-Memory**: Default, uses ConcurrentDictionary
+- **Filesystem**: Disk storage with configurable metadata modes
 
-The application provides two storage backends (configurable via appsettings.json):
+### Key Features
+- Complete S3 API operations (buckets, objects, multipart uploads)
+- AWS Signature V4 authentication with streaming support
+- Data-first architecture (data is source of truth)
+- Thread-safe operations with distributed locking
 
-1. **In-Memory Storage**: Default option, stores all data in memory using ConcurrentDictionary
-2. **Filesystem Storage**: Stores objects on disk with separate data and metadata directories
+## Commands
 
-Features supported:
-- Bucket operations (create, list, delete, force delete non-empty buckets)
-- Object operations (put, get, delete, head, list with prefix/delimiter support)
-- Multipart uploads (initiate, upload parts, complete, abort, list parts)
-- S3-compliant XML responses
-- AWS Signature V4 authentication (optional, configurable)
-- AWS Streaming with Signature V4 (STREAMING-AWS4-HMAC-SHA256-PAYLOAD)
-- AWS Streaming with Trailers (STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER)
-- Thread-safe file operations with FileSystemLockManager
-
-## Development Commands
-
-### Build and Run
+### Build & Test
 ```bash
-# Build the solution
+# Build and run
 dotnet build
-
-# Run the application (development)
 dotnet run --project Lamina/Lamina.csproj
 
-# Run with specific profile
-dotnet run --project Lamina/Lamina.csproj --launch-profile http   # Port 5214
-dotnet run --project Lamina/Lamina.csproj --launch-profile https  # Ports 7179/5214
-```
-
-### Testing
-```bash
-# Run all tests
+# Test
 dotnet test
-
-# Run specific test
-dotnet test --filter "FullyQualifiedName~TestName"
-
-# Run with detailed output
-dotnet test --logger "console;verbosity=detailed"
 ```
 
 ### Docker
 ```bash
-# Build Docker image
 docker build -f Lamina/Dockerfile -t lamina .
-
-# Run containerized application
 docker run -p 8080:8080 lamina
 ```
 
-### Helm Chart (Kubernetes/OpenShift)
+### Helm Deployment
 ```bash
-# Deploy with default settings (in-memory storage)
+# Basic deployment
 helm install lamina ./chart
 
-# Deploy with filesystem storage and persistent volumes
+# Production with persistent storage
 helm install lamina ./chart \
   --set config.StorageType=Filesystem \
   --set persistentVolume.enabled=true \
-  --set persistentVolume.size=20Gi \
-  --set metadataPersistentVolume.enabled=true \
-  --set metadataPersistentVolume.size=5Gi
-
-# Deploy with authentication enabled (using secrets)
-helm install lamina ./chart \
-  --set secrets.create=true \
-  --set config.Authentication.Enabled=true \
-  --set config.Authentication.Users[0].AccessKeyId=admin \
-  --set-string config.Authentication.Users[0].SecretAccessKey="admin-secret"
-
-# Deploy on OpenShift with route
-helm install lamina ./chart \
-  --set route.enabled=true \
-  --set route.host=s3.apps.openshift.example.com
-
-# Deploy on Kubernetes with ingress
-helm install lamina ./chart \
-  --set ingress.enabled=true \
-  --set ingress.hosts[0].host=s3.example.com \
-  --set ingress.className=nginx
-
-# Uninstall
-helm uninstall lamina
+  --set persistentVolume.size=50Gi
 ```
 
 ## Project Structure
 
 ### Core Components
-- **Lamina/Program.cs**: Main application entry point with service registration
-- **Lamina/Controllers/**:
-  - `S3BucketsController.cs`: Handles bucket operations (PUT, GET, DELETE, HEAD)
-  - `S3ObjectsController.cs`: Handles object operations including multipart uploads
+- **Controllers**: `S3BucketsController`, `S3ObjectsController`
+- **Storage Layer**: Facade pattern with separate Data/Metadata components
+  - **Abstract**: Interfaces and facades
+  - **InMemory**: ConcurrentDictionary implementations
+  - **Filesystem**: Disk-based storage with 3 metadata modes
+- **Streaming**: AWS chunked encoding and signature validation
+- **Services**: Authentication, cleanup services (multipart, metadata, temp files)
 
-### Helm Chart
-- **chart/**: Kubernetes/OpenShift Helm chart for deployment
-  - **Chart.yaml**: Chart metadata and version information
-  - **values.yaml**: Default configuration values with comprehensive options
-  - **templates/**: Kubernetes resource templates
-    - `deployment.yaml`: Main application deployment with platform detection
-    - `service.yaml`: Service definition for pod access
-    - `ingress.yaml`: Kubernetes ingress for external access
-    - `route.yaml`: OpenShift route for external access
-    - `configmap.yaml`: Application configuration (non-sensitive data)
-    - `secret.yaml`: Sensitive configuration data (auth credentials, Redis passwords)
-    - `pvc.yaml`: Persistent volume claim for data storage
-    - `metadataPvc.yaml`: Persistent volume claim for metadata storage
-    - `hpa.yaml`: Horizontal Pod Autoscaler for scaling
-    - `serviceaccount.yaml`: Service account for pod identity
-    - `imagestream.yaml`: OpenShift ImageStream for image management
-
-### Models
-- **Lamina/Models/**:
-  - `Bucket.cs`: Bucket entity model
-  - `S3Object.cs`: Object entity and related models (PutObjectRequest, GetObjectResponse, etc.)
-  - `MultipartUpload.cs`: Multipart upload related models
-  - `S3XmlResponses.cs`: XML response DTOs for S3 API compliance
-  - `StreamingTrailer.cs`: Models for AWS streaming trailer support
-
-### Storage Layer
-
-**Architecture**: The storage layer uses a Facade pattern with separate Data and Metadata storage components:
-
-- **Lamina/Storage/Abstract/** (Interfaces and Facade implementations):
-  - **Facade Interfaces & Implementations** (Main entry points):
-    - `IBucketStorageFacade` / `BucketStorageFacade`: Orchestrates bucket operations
-    - `IObjectStorageFacade` / `ObjectStorageFacade`: Orchestrates object operations
-    - `IMultipartUploadStorageFacade` / `MultipartUploadStorageFacade`: Orchestrates multipart uploads
-
-  - **Storage Interfaces** (Define storage contracts):
-    - `IBucketDataStorage`: Interface for bucket data operations
-    - `IBucketMetadataStorage`: Interface for bucket metadata
-    - `IObjectDataStorage`: Interface for object data operations
-    - `IObjectMetadataStorage`: Interface for object metadata
-    - `IMultipartUploadDataStorage`: Interface for multipart data operations
-    - `IMultipartUploadMetadataStorage`: Interface for multipart metadata
-
-- **Lamina/Storage/InMemory/** (In-memory implementations):
-  - `InMemoryBucketDataStorage`: In-memory bucket data storage
-  - `InMemoryBucketMetadataStorage`: In-memory bucket metadata storage
-  - `InMemoryObjectDataStorage`: In-memory object data storage
-  - `InMemoryObjectMetadataStorage`: In-memory object metadata storage
-  - `InMemoryMultipartUploadDataStorage`: In-memory multipart data storage
-  - `InMemoryMultipartUploadMetadataStorage`: In-memory multipart metadata storage
-
-- **Lamina/Storage/Filesystem/** (Filesystem implementations):
-  - `FilesystemBucketDataStorage`: Filesystem bucket data storage
-  - `FilesystemBucketMetadataStorage`: Filesystem bucket metadata storage
-  - `FilesystemObjectDataStorage`: Filesystem object data storage
-  - `FilesystemObjectMetadataStorage`: Filesystem object metadata storage
-  - `FilesystemMultipartUploadDataStorage`: Filesystem multipart data storage
-  - `FilesystemMultipartUploadMetadataStorage`: Filesystem multipart metadata storage
-  - `FileSystemLockManager`: Thread-safe file operations manager
-
-### Streaming Support
-
-- **Lamina/Streaming/** (AWS streaming authentication and chunk processing):
-  - **Core Services**:
-    - `IStreamingAuthenticationService` / `StreamingAuthenticationService`: Creates chunk validators for streaming requests
-
-  - **Chunked Data Processing** (`Lamina/Streaming/Chunked/`):
-    - `ChunkConstants.cs`: Constants for AWS chunked encoding
-    - `ChunkHeader.cs`: Models chunk header information
-    - `ChunkBuffer.cs`: Manages chunk data buffering
-    - `IChunkedDataParser` / `ChunkedDataParser`: Parses AWS chunked encoding format (registered as DI service)
-
-  - **Signature Validation** (`Lamina/Streaming/Validation/`):
-    - `IChunkSignatureValidator` / `ChunkSignatureValidator`: Validates chunk signatures
-    - `SignatureCalculator.cs`: AWS Signature V4 calculations for streaming
-
-  - **Trailer Support** (`Lamina/Streaming/Trailers/`):
-    - `TrailerParser.cs`: Parses HTTP trailers in streaming requests
-
-### Services
-
-- **Lamina/Services/**:
-  - `IAuthenticationService` / `AuthenticationService`: AWS Signature V4 authentication
-  - `MultipartUploadCleanupService`: Background service for automatic cleanup of stale multipart uploads
-  - `MetadataCleanupService`: Background service for automatic cleanup of orphaned metadata (metadata without corresponding data)
-  - `TempFileCleanupService`: Background service for automatic cleanup of stale temporary files in filesystem storage
-
-### Helpers
-- **Lamina/Helpers/**:
-  - `ETagHelper.cs`: Centralized ETag computation using MD5 (supports byte arrays, files, and streams)
-
-### Tests
-- **Lamina.Tests/**:
-  - `Controllers/BucketsControllerIntegrationTests.cs`: Bucket API integration tests
-  - `Controllers/ObjectsControllerIntegrationTests.cs`: Object API integration tests
-  - `Controllers/StreamingAuthenticationIntegrationTests.cs`: Streaming authentication integration tests
-  - `Controllers/StreamingMultipartUploadIntegrationTests.cs`: Streaming multipart upload tests
-  - `Controllers/StreamingTrailerIntegrationTests.cs`: Streaming with trailers integration tests
-  - `Services/BucketServiceTests.cs`: Bucket storage unit tests
-  - `Services/ObjectServiceTests.cs`: Object storage unit tests
-  - `Services/MultipartUploadServiceTests.cs`: Multipart upload tests
-  - `Services/MultipartUploadCleanupServiceTests.cs`: Cleanup service tests
-  - `Services/MetadataCleanupServiceTests.cs`: Metadata cleanup service tests
-  - `Services/TempFileCleanupServiceTests.cs`: Temporary file cleanup service tests
-  - `Services/StreamingAuthenticationServiceTests.cs`: Streaming authentication service tests
-  - `Services/StreamingTrailerSupportTests.cs`: Streaming trailer support tests
-  - `Helpers/AwsChunkedEncodingStreamTests.cs`: Chunked encoding stream processing tests
-  - `Helpers/AwsChunkedEncodingTrailerTests.cs`: Chunked encoding with trailers tests
-  - `Models/StreamingTrailerModelTests.cs`: Streaming trailer model tests
-
-## S3 API Implementation Details
-
-### XML Response Format
-- All responses use S3-compliant XML format
-- Controllers are configured with `[Produces("application/xml")]`
-- XML models use appropriate `XmlRoot` and `XmlElement` attributes
-- Supports both namespaced and non-namespaced XML for compatibility
-
-### Routing Structure
-- Bucket operations: `/{bucketName}`
-- Object operations: `/{bucketName}/{*key}` (catch-all for nested paths)
-- Query parameters determine operation type (e.g., `?uploads` for multipart operations)
-
-### Multipart Upload Flow
-1. **Initiate**: `POST /{bucket}/{key}?uploads`
-2. **Upload Part**: `PUT /{bucket}/{key}?partNumber=N&uploadId=ID`
-3. **Complete**: `POST /{bucket}/{key}?uploadId=ID` (with XML body)
-4. **Abort**: `DELETE /{bucket}/{key}?uploadId=ID`
-5. **List Parts**: `GET /{bucket}/{key}?uploadId=ID`
-6. **List Uploads**: `GET /{bucket}?uploads`
-
-### ETag Handling
-- ETags are computed using MD5 hash of content (S3 standard)
-- Stored internally without quotes
-- Returned in responses with quotes (e.g., `"etag-value"`)
-- Comparison normalizes by trimming quotes
-- ETag computation is centralized in `ETagHelper` class
-
-### Known S3 Incompatibilities
-
-#### Region Support
-- **Lamina operates as a single-region storage system**
-- Buckets are not bound to specific regions and exist in a virtual region concept
-- Region constraints in bucket creation requests are **accepted but ignored**
-- Any region can be used in AWS Signature V4 authentication (for client compatibility)
-- Cross-region replication is **not supported**
-- Region-specific endpoints are **not supported**
-- HEAD bucket responses do **not** include `x-amz-bucket-region` header
-- **Impact**: Clients expecting region-specific behavior may not work as expected, though basic S3 API operations remain fully compatible
-
-### Important Implementation Notes
-
-1. **XML Deserialization**: CompleteMultipartUpload supports both:
-   - Non-namespaced XML (common from clients)
-   - Namespaced XML (S3 spec: `http://s3.amazonaws.com/doc/2006-03-01/`)
-
-2. **Route Disambiguation**: Query parameters determine operation type:
-   - Use `Request.Query.ContainsKey()` to check for parameter presence
-   - Parameter value can be empty (e.g., `?uploads` vs `?uploads=`)
-
-3. **Error Responses**: Return S3-compliant error XML with appropriate HTTP status codes
-
-4. **Data-First Architecture**:
-   - **Data is the source of truth** - object existence is determined by data presence, not metadata
-   - **Metadata is optional** - if metadata doesn't exist but data does, metadata is generated on-the-fly
-   - **Content Type Detection** - automatically detects MIME types based on file extensions
-   - **Optimized metadata storage** - metadata is only stored when it differs from auto-generated defaults (custom content types or user metadata)
-   - **Automatic metadata generation** - missing metadata is generated for read operations but not persisted, making this the normal case
-
-5. **Storage Backends**:
-
-   **In-Memory Storage**:
-   - Uses `ConcurrentDictionary` for thread-safety
-   - Multipart uploads store parts temporarily until completion
-   - Combined data is created on CompleteMultipartUpload
-
-   **Filesystem Storage**:
-   - Data stored in: `{DataDirectory}/{bucketName}/{key}`
-   - Metadata storage depends on mode:
-     - **SeparateDirectory**: `{MetadataDirectory}/{bucketName}/{key}.json` and `{MetadataDirectory}/_buckets/{bucketName}.json`
-     - **Inline**: `{DataDirectory}/{bucketName}/.lamina-meta/{key}.json` and `{DataDirectory}/.lamina-meta/_buckets/{bucketName}.json`
-     - **Xattr**: POSIX extended attributes on data files and bucket directories (Linux/macOS only)
-   - Multipart uploads: `{MetadataDirectory}/_multipart_uploads/{uploadId}/`
-   - File size is ALWAYS read from filesystem (not stored in metadata)
-   - **Optimized Listing Performance**:
-     - **Delimiter-based queries** (e.g., `delimiter="/"`) use single-directory scans instead of recursive traversal
-     - **Algorithm**: For prefix `a/b/c` with delimiter `/`, scans only directory `a/b/` for entries starting with `c`
-     - **Performance**: O(files_in_parent_directory) instead of O(total_files_in_bucket)
-     - **Compatibility**: Maintains S3 API semantics and handles edge cases correctly
-   - Metadata format (JSON for file modes, binary for xattr):
-     ```json
-     {
-       "Key": "object-key",
-       "BucketName": "bucket-name",
-       "LastModified": "2025-09-18T12:23:54.7926647Z",
-       "ETag": "md5-hash",  // Note: MD5 hash for S3 compatibility
-       "ContentType": "text/plain",
-       "UserMetadata": {}
-     }
-     ```
-
-## Testing Strategy
-
-- **Integration Tests**: Use `WebApplicationFactory` to test full HTTP pipeline
-- **Unit Tests**: Test storage logic in isolation
-- **XML Validation**: Tests verify both request and response XML formats
-- **Multipart Flow**: Comprehensive tests for complete upload lifecycle
-
-## Helm Chart Deployment
-
-The project includes a comprehensive Helm chart for deploying Lamina on Kubernetes or OpenShift clusters.
-
-### Key Features
-
-- **Automatic Platform Detection**: Detects Kubernetes vs OpenShift and configures resources accordingly
-- **Dual Platform Support**: 
-  - **Kubernetes**: Uses Ingress for external access, standard Deployments
-  - **OpenShift**: Uses Routes for external access, ImageStreams for image management
-- **Flexible Storage Options**: In-memory or filesystem storage with persistent volume support
-- **Security Management**: Automatic extraction of sensitive data to Kubernetes Secrets
-- **Scalability**: HorizontalPodAutoscaler support for auto-scaling based on metrics
-- **Production Ready**: Comprehensive health checks, security contexts, and monitoring
-- **Redis Integration**: Optional Redis dependency for distributed locking with automatic configuration
-
-### Redis Dependency
-
-The Helm chart includes optional Redis integration using the Bitnami Redis chart as a dependency:
-
-**Default Configuration (Recommended)**:
-- Redis disabled by default (`redis.enabled: false`)
-- When enabled, uses memory-only storage (no persistence)
-- Authentication disabled for simplicity
-- Standalone architecture (single instance)
-
-**Key Features**:
-- **Automatic Connection String Generation**: When `redis.enabled=true`, automatically generates connection string
-- **User Override Priority**: User-provided `config.Redis.ConnectionString` always takes precedence
-- **Memory-Only by Default**: No PVC created, persistence disabled (`appendonly no`, `save ""`)
-- **Validation**: Fails fast with clear error if authentication is enabled without password
-
-**Usage Examples**:
-
-```bash
-# Enable Redis with no authentication (recommended)
-helm install lamina ./chart \
-  --set redis.enabled=true
-
-# Enable Redis with authentication (password required)
-helm install lamina ./chart \
-  --set redis.enabled=true \
-  --set redis.auth.enabled=true \
-  --set redis.auth.password="your-password"
-
-# Use external Redis (highest priority)
-helm install lamina ./chart \
-  --set redis.enabled=true \
-  --set config.Redis.ConnectionString="external-redis:6379"
-
-# Use external Redis with authentication
-helm install lamina ./chart \
-  --set config.Redis.ConnectionString="external-redis:6379,password=secret"
-```
-
-**Connection String Priority**:
-1. **User-provided** `config.Redis.ConnectionString` (highest priority)
-2. **Auto-generated** from Redis subchart when `redis.enabled=true`
-3. **None** (no Redis configuration)
-
-**Security Handling**:
-- Connection strings without passwords: Stored in ConfigMaps
-- Connection strings with passwords: Stored in environment variables or Secrets
-- Auto-generated passwords: Embedded directly in connection string (plaintext in values required)
-
-### Chart Structure
-
-The Helm chart (`./chart/`) includes:
-- **Chart.yaml**: Metadata, version, and dependencies (includes Bitnami Redis chart dependency)
-- **values.yaml**: Configurable parameters with sensible defaults
-- **README.md**: Comprehensive deployment and configuration guide
-- **templates/**: Kubernetes/OpenShift resource templates with conditional logic
-
-### Quick Start
-
-```bash
-# Basic deployment (in-memory storage)
-helm install lamina ./chart
-
-# Production deployment with persistent storage
-helm install lamina ./chart \
-  --set config.StorageType=Filesystem \
-  --set persistentVolume.enabled=true \
-  --set persistentVolume.size=50Gi \
-  --set secrets.create=true \
-  --set config.Authentication.Enabled=true
-```
-
-### Platform-Specific Deployments
-
-**OpenShift:**
-```bash
-helm install lamina ./chart \
-  --set route.enabled=true \
-  --set route.host=s3.apps.cluster.example.com \
-  --set imageStream.enabled=true
-```
-
-**Kubernetes with Ingress:**
-```bash
-helm install lamina ./chart \
-  --set ingress.enabled=true \
-  --set ingress.hosts[0].host=s3.example.com \
-  --set ingress.className=nginx
-```
-
-### Security Best Practices
-
-The chart automatically handles sensitive data by:
-- Moving authentication credentials from ConfigMaps to Secrets
-- Supporting both generated and existing Kubernetes Secrets
-- Extracting Redis passwords from connection strings
-- Using appropriate security contexts for each platform
+### Storage Implementations
+- **InMemory**: Thread-safe dictionaries
+- **Filesystem**:
+  - **SeparateDirectory**: `DataDir/` + `MetadataDir/` (default)
+  - **Inline**: Metadata in `.lamina-meta/` subdirectories
+  - **Xattr**: POSIX extended attributes (Linux/macOS only)
 
 ## Configuration
 
-### Storage Backend Selection
-Configure in `appsettings.json` or `appsettings.Development.json`:
-
+### Storage
 ```json
 {
   "StorageType": "InMemory",  // or "Filesystem"
   "FilesystemStorage": {
     "DataDirectory": "/tmp/laminas/data",
-    "MetadataDirectory": "/tmp/laminas/metadata",  // Required for SeparateDirectory mode
-    "MetadataMode": "Inline",  // or "SeparateDirectory" or "Xattr" (default: Inline)
-    "InlineMetadataDirectoryName": ".lamina-meta",  // Name of metadata directory in inline mode (default: .lamina-meta)
-    "TempFilePrefix": ".lamina-tmp-",  // Prefix for temporary files (default: .lamina-tmp-)
-    "XattrPrefix": "user.lamina",  // Prefix for extended attributes in Xattr mode (default: user.lamina)
-    "NetworkMode": "None",  // or "CIFS" or "NFS" for network filesystem support
-    "RetryCount": 3,  // Number of retries for file operations (used with CIFS/NFS)
-    "RetryDelayMs": 100  // Initial delay between retries in milliseconds
+    "MetadataDirectory": "/tmp/laminas/metadata",
+    "MetadataMode": "SeparateDirectory",  // or "Inline" or "Xattr"
+    "NetworkMode": "None"  // or "CIFS" or "NFS"
   }
 }
 ```
 
-#### Metadata Storage Modes
-
-**SeparateDirectory Mode** (default):
-- Metadata is stored in a separate directory tree specified by `MetadataDirectory`
-- Data: `/tmp/laminas/data/bucket/key`
-- Metadata: `/tmp/laminas/metadata/bucket/key.json`
-- Multipart uploads: `/tmp/laminas/metadata/_multipart_uploads/`
-
-**Inline Mode**:
-- Metadata is stored alongside data in special directories
-- Data: `/tmp/laminas/data/bucket/path/to/object.zip`
-- Metadata: `/tmp/laminas/data/bucket/path/to/.lamina-meta/object.zip.json`
-- Multipart uploads: `/tmp/laminas/data/.lamina-meta/_multipart_uploads/`
-- The metadata directory name is configurable via `InlineMetadataDirectoryName`
-- Objects with keys containing the metadata directory name are forbidden
-- Metadata directories are automatically excluded from object listings
-
-Example inline mode configuration:
-```json
-{
-  "StorageType": "Filesystem",
-  "FilesystemStorage": {
-    "DataDirectory": "/tmp/laminas/data",
-    "MetadataMode": "Inline",
-    "InlineMetadataDirectoryName": ".lamina-meta"
-  }
-}
-```
-
-**Xattr Mode** (POSIX extended attributes):
-- Metadata is stored as POSIX extended attributes directly on data files and bucket directories
-- Object data: `/tmp/laminas/data/bucket/key` (with object metadata as xattr)
-- Bucket directories: `/tmp/laminas/data/bucket` (with bucket metadata as xattr)
-- No separate metadata files or directories needed
-- Attributes use configurable prefix (default: `user.lamina`)
-- Platform-specific: Only works on Linux and macOS
-- Atomic operations: Metadata automatically deleted with file/directory
-
-Example xattr mode configuration:
-```json
-{
-  "StorageType": "Filesystem",
-  "FilesystemStorage": {
-    "DataDirectory": "/tmp/laminas/data",
-    "MetadataMode": "Xattr",
-    "XattrPrefix": "user.lamina"
-  }
-}
-```
-
-**Xattr Mode Benefits**:
-- **Atomic operations**: Metadata is automatically managed with file/directory operations
-- **No orphaned metadata**: Metadata cannot exist without corresponding data/bucket
-- **Simplified storage**: No separate metadata files or directories to manage
-- **Better performance**: Single filesystem operation for both data and metadata
-- **Native integration**: Works with standard Unix tools (`getfattr`, `setfattr`)
-- **Automatic cleanup**: Metadata is deleted when file/directory is deleted
-- **Unified storage**: Both object and bucket metadata use the same xattr approach
-
-**Xattr Mode Limitations**:
-- **Platform-specific**: Only works on Linux and macOS (not Windows)
-- **Filesystem support**: Not all filesystems support extended attributes (e.g., FAT32, some network filesystems)
-- **Size limits**: Extended attributes have size limitations (typically 64KB per attribute)
-- **Metadata truncation**: Large metadata will be truncated to fit size limits
-- **Backup compatibility**: Some backup tools may not preserve extended attributes
-- **Network filesystems**: May not work reliably on CIFS/NFS mounts
-
-#### Network Filesystem Support (CIFS/NFS)
-
-Lamina includes special support for network filesystems to handle their unique characteristics:
-
-**CIFS Configuration Example** (`appsettings.CIFS.json`):
-```json
-{
-  "StorageType": "Filesystem",
-  "FilesystemStorage": {
-    "DataDirectory": "/mnt/cifs/lamina/data",
-    "MetadataDirectory": "/mnt/cifs/lamina/metadata",
-    "MetadataMode": "SeparateDirectory",
-    "NetworkMode": "CIFS",
-    "RetryCount": 5,  // More retries for CIFS
-    "RetryDelayMs": 200  // Longer initial delay
-  }
-}
-```
-
-**NFS Configuration Example** (`appsettings.NFS.json`):
-```json
-{
-  "StorageType": "Filesystem",
-  "FilesystemStorage": {
-    "DataDirectory": "/mnt/nfs/lamina/data",
-    "MetadataDirectory": "/mnt/nfs/lamina/metadata",
-    "MetadataMode": "SeparateDirectory",
-    "NetworkMode": "NFS",
-    "RetryCount": 3,
-    "RetryDelayMs": 100
-  }
-}
-```
-
-**Network Filesystem Features**:
-- **Retry Logic**: Automatic retry with exponential backoff for transient network errors
-- **CIFS-Safe Atomic Moves**: Special handling for file overwrites on CIFS
-- **ESTALE Error Handling**: Automatic detection and retry of stale NFS file handles
-- **Network-Aware Error Detection**: Recognizes network-specific error patterns
-
-**Lock Manager Support**:
-- **InMemory Lock Manager**: Default option, provides thread-safe file operations within a single Lamina instance
-- **Redis Lock Manager**: Distributed locking for multi-instance deployments using Redis and RedLock algorithm
-- **Multi-Instance Deployments**: Use Redis lock manager for proper coordination across multiple Lamina instances
-
-**Recommended Mount Options**:
-- **NFS**: `mount -t nfs4 -o vers=4.2,hard,timeo=600,retrans=2,rsize=1048576,wsize=1048576`
-- **CIFS**: `mount -t cifs -o vers=3.0,cache=none,actimeo=0`
-
-### Authentication Configuration
+### Authentication
 ```json
 {
   "Authentication": {
-    "Enabled": false,  // Set to true to enable AWS Signature V4 authentication
-    "Users": [  // Note: Changed from "AccessKeys" to "Users"
+    "Enabled": false,
+    "Users": [
       {
-        "AccessKeyId": "your-access-key",
-        "SecretAccessKey": "your-secret-key",
-        "Name": "username",
-        "BucketPermissions": [
-          {
-            "BucketName": "*",  // Wildcard for all buckets
-            "Permissions": ["*"]  // Or specific: ["read", "write", "list", "delete"]
-          }
-        ]
+        "AccessKeyId": "key",
+        "SecretAccessKey": "secret",
+        "BucketPermissions": [{"BucketName": "*", "Permissions": ["*"]}]
       }
     ]
   }
 }
 ```
 
-### Multipart Upload Cleanup Configuration
-```json
-{
-  "MultipartUploadCleanup": {
-    "Enabled": true,  // Enable/disable automatic cleanup
-    "CleanupIntervalMinutes": 60,  // How often to run cleanup
-    "UploadTimeoutHours": 24  // Uploads older than this are considered stale
-  }
-}
-```
-
-### Metadata Cleanup Configuration
-```json
-{
-  "MetadataCleanup": {
-    "Enabled": true,  // Enable/disable automatic metadata cleanup
-    "CleanupIntervalMinutes": 120,  // How often to run cleanup (default: every 2 hours)
-    "BatchSize": 1000  // Number of metadata entries to process per batch
-  }
-}
-```
-
-### Temporary File Cleanup Configuration
-```json
-{
-  "TempFileCleanup": {
-    "Enabled": true,  // Enable/disable automatic temp file cleanup
-    "CleanupIntervalMinutes": 60,  // How often to run cleanup (default: every hour)
-    "TempFileAgeMinutes": 30,  // Files older than this are considered stale (default: 30 minutes)
-    "BatchSize": 100  // Number of files to process per batch (default: 100)
-  }
-}
-```
-
-### Distributed Locking Configuration (Redis)
-
-**Note**: When using the Helm chart with `redis.enabled=true`, the Redis connection string is automatically configured for distributed locking.
-
+### Redis Distributed Locking
 ```json
 {
   "LockManager": "Redis",  // "InMemory" (default) or "Redis"
   "Redis": {
-    "ConnectionString": "localhost:6379",  // Redis connection string
-    "LockExpirySeconds": 30,  // How long locks are held before automatic expiry
-    "RetryCount": 3,  // Number of retries for lock acquisition
-    "RetryDelayMs": 100,  // Initial delay between retries in milliseconds
-    "Database": 0,  // Redis database number
-    "LockKeyPrefix": "lamina:lock"  // Prefix for Redis lock keys
+    "ConnectionString": "localhost:6379",
+    "LockExpirySeconds": 30
   }
 }
 ```
 
-#### Redis Lock Manager Features
-- **Distributed Locking**: Uses RedLock algorithm for consensus across Redis instances
-- **Automatic Expiry**: Locks automatically expire to prevent deadlocks from crashed processes
-- **Retry Logic**: Configurable retry attempts with exponential backoff
-- **Connection Resilience**: Handles Redis connection failures gracefully
-- **Path-based Locking**: Normalizes file paths to ensure consistent locking across instances
-- **Operation-specific Locks**: Separate lock keys for read, write, and delete operations
-- **Configurable Key Prefix**: Customizable Redis key prefix to avoid conflicts with other applications
-- **Multi-Instance Support**: Enables safe multi-instance deployments on shared storage
+## S3 Implementation Notes
 
-## Recent Updates
+### Routing
+- Buckets: `/{bucketName}`
+- Objects: `/{bucketName}/{*key}`
+- Query parameters determine operations (`?uploads`, `?partNumber=N`)
 
-### Optimized Delimiter-Based Directory Listing (Performance Enhancement)
-- **Single-Directory Scan Optimization**: Dramatically improved performance for delimiter-based listing operations (e.g., S3 ListObjects with delimiter="/")
-- **Intelligent Path Analysis**: When delimiter is "/" and provided, performs single-level directory scan instead of recursive filesystem traversal
-- **Massive Performance Gains**: Reduces I/O operations from O(total_files_in_bucket) to O(files_in_parent_directory) for hierarchical data
-- **S3 Compatibility Maintained**: Preserves correct S3 API semantics while providing 10-1000x performance improvement for structured data
-- **Dual Implementation Strategy**:
-  - **Optimized Path**: Single directory scan for "/" delimiter (most common case)
-  - **Fallback Path**: Full enumeration for other delimiters (rare cases)
-- **Bucket Type Awareness**:
-  - **General-Purpose Buckets**: Maintains lexicographical sorting of results
-  - **Directory Buckets**: Uses filesystem enumeration order for maximum performance
-- **MinIO Performance Comparison**: Significantly outperforms MinIO for delimiter-based queries on structured hierarchical data
-- **Comprehensive Testing**: Full test suite covering optimization paths, edge cases, and S3 compatibility scenarios
-- **Real-World Impact**: Transforms listing operations from minutes to seconds for large buckets with deep hierarchies
+### Multipart Upload Flow
+1. Initiate: `POST /{bucket}/{key}?uploads`
+2. Upload Part: `PUT /{bucket}/{key}?partNumber=N&uploadId=ID`
+3. Complete: `POST /{bucket}/{key}?uploadId=ID`
 
-### Redis Distributed Lock Manager
-- **Distributed Locking Support**: Added Redis-based lock manager for multi-instance deployments using the RedLock algorithm
-- **Lock Manager Selection**: Configurable lock manager type (`InMemory` or `Redis`) via `LockManager` configuration setting
-- **RedLock Algorithm**: Implements the RedLock distributed locking algorithm for consensus across Redis instances
-- **Automatic Lock Expiry**: Prevents deadlocks from crashed processes by automatically expiring locks after configurable timeout
-- **Connection Resilience**: Graceful handling of Redis connection failures with proper error reporting
-- **Backward Compatibility**: Maintains full compatibility with existing InMemoryLockManager for single-instance deployments
-- **Comprehensive Testing**: Full test suite with conditional Redis availability checks and concurrent operation validation
-- **Production Ready**: Suitable for production multi-instance deployments on shared storage (NFS, CIFS)
+### Data-First Architecture
+- **Object existence** determined by data presence, not metadata
+- **Metadata is optional** - generated on-the-fly when missing
+- **Content type detection** based on file extensions
+- **Optimized storage** - metadata only stored when differs from defaults
 
-### Temporary File Cleanup Service
-- **Automated temporary file cleanup**: Background service that periodically scans and removes stale temporary files left by interrupted upload operations
-- **Filesystem storage specific**: Only operates when filesystem storage is configured, ensuring no unnecessary overhead for in-memory storage
-- **Age-based cleanup**: Removes temporary files older than a configurable threshold (default: 30 minutes) to avoid deleting files currently being written
-- **Recursive directory scanning**: Scans all subdirectories in the data directory to find temporary files with the configured prefix (`.lamina-tmp-*`)
-- **Batch processing**: Processes files in configurable batches for memory efficiency and performance monitoring
-- **Comprehensive error handling**: Gracefully handles file access errors, locked files, and permission issues without stopping the cleanup process
-- **Configurable intervals**: Customizable cleanup frequency and age thresholds for different deployment scenarios
+### Performance Optimizations
+- **Delimiter-based listing**: Single directory scans for `delimiter="/"`
+- **Streaming multipart assembly**: No memory overhead for large uploads
+- **Optimized metadata**: Only store non-default values
 
-### Metadata Cleanup Service
-- **Automated orphaned metadata cleanup**: Background service that periodically scans for and removes metadata entries that no longer have corresponding data files
-- **Provider-agnostic design**: Works with both InMemory and Filesystem storage implementations through storage interfaces
-- **Configurable intervals and batch processing**: Customizable cleanup frequency and batch sizes for optimal performance
-- **Comprehensive error handling**: Resilient to errors during cleanup operations, continues processing remaining entries
-- **Data-first approach**: Respects the data-first architecture where data existence is the source of truth
-- **Memory-efficient scanning**: Uses `IAsyncEnumerable` for streaming metadata enumeration without loading everything into memory
-- **Support for both metadata modes**: Handles both SeparateDirectory and Inline metadata storage modes in filesystem storage
+## Key Implementation Details
 
-### Optimized Metadata Storage
-- **Storage optimization**: Metadata is only stored when it differs from auto-generated defaults
-- **Smart comparison**: Compares provided content type with auto-detected type based on file extension
-- **User metadata detection**: Only stores metadata when custom user metadata is present
-- **Reduced storage overhead**: Eliminates redundant metadata files for typical object uploads
-- **Backward compatibility**: Existing metadata files are still read; missing metadata is generated on-the-fly
-- **Code refactoring**: Combined duplicate `PutObjectAsync` overloads using delegation pattern to reduce maintenance overhead
+### ETag Handling
+- MD5 hash for S3 compatibility (centralized in `ETagHelper`)
+- Stored without quotes, returned with quotes
 
-### Data-First Object Storage
-- **Data is now the source of truth** for object existence
-- Metadata is optional and generated on-the-fly when missing
-- Content type is intelligently detected based on file extensions
-- Generated metadata is not persisted to storage
-- `ObjectStorageFacade.ObjectExistsAsync` checks data existence, not metadata
-- List operations include orphaned data files without metadata
+### XML Responses
+- S3-compliant XML with namespace support
+- Both namespaced and non-namespaced XML accepted
 
-### MD5 ETags (S3 Standard)
-- All ETag computations use MD5 hash for S3 compatibility
-- Centralized in `ETagHelper` class for consistency
-- Supports byte arrays, files, and streams
-- Files are processed without loading into memory
+### Known S3 Incompatibilities
+- **Single-region system**: Region constraints accepted but ignored
+- **No cross-region replication**
+- **No region-specific endpoints**
 
-### Multipart Upload Cleanup Service
-- Background service that automatically cleans up stale/abandoned multipart uploads
-- Runs periodically (configurable interval)
-- Removes uploads older than configured timeout
-- Helps prevent storage leaks from incomplete uploads
+## Development Tasks
 
-### Streaming Multipart Assembly
-- Multipart uploads are now assembled using streaming to eliminate memory overhead
+### Adding S3 Operations
+1. Consult official S3 API documentation
+2. Add XML models to `S3XmlResponses.cs`
+3. Update controllers with exact S3 routing
+4. Implement in both storage backends
+5. Add comprehensive tests
 
-### AWS Streaming Authentication
-- **AWS Signature V4 Streaming Support**: Full implementation of STREAMING-AWS4-HMAC-SHA256-PAYLOAD authentication
-- **AWS Streaming with Trailers**: Support for STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER with HTTP trailers
-- **Refactored Architecture**: Streaming code moved from `Services/` to dedicated `Streaming/` namespace for better organization
-- **Modular Components**: Separated chunked data parsing, signature validation, and trailer processing into focused components
-- **Enhanced S3 Compatibility**: Improved compatibility with AWS SDKs and S3 clients using streaming uploads
-- **Middleware Integration**: Streaming authentication integrated into S3AuthenticationMiddleware for seamless handling
+### Testing Filesystem Storage
+```bash
+# Create test data
+curl -X PUT http://localhost:5214/test-bucket
+echo "content" | curl -X PUT --data-binary @- http://localhost:5214/test-bucket/test.txt
 
-### Inline Metadata Mode
-- New metadata storage mode where metadata is stored alongside data files
-- Metadata stored in configurable directories (default: `.lamina-meta`) within the data tree
-- Automatic filtering excludes metadata directories from object listings
-- Validation prevents operations on paths containing metadata directory names
-- Supports both inline and separate directory modes for different deployment scenarios
-- Parts are read directly from storage and written to the final object
-- Significantly reduces memory usage for large multipart uploads
+# Check storage structure
+ls -la /tmp/laminas/data/test-bucket/
+ls -la /tmp/laminas/metadata/test-bucket/  # SeparateDirectory mode
+```
 
-## Common Development Tasks
-
-### Adding New S3 Operations
-1. **Always consult the official S3 API documentation** for exact request/response format
-2. Ensure strict compliance with S3 specification - no custom extensions or deviations
-3. Add XML models to `S3XmlResponses.cs` matching S3's exact XML schema
-4. Update controller with new endpoint/query parameter handling per S3 spec
-5. Add corresponding storage interface methods in `Storage/Abstract/`
-6. Implement in both `Storage/InMemory/` and `Storage/Filesystem/`
-7. Add integration and unit tests that verify S3 specification compliance
-
-### Debugging XML Issues
-1. Enable console logging in controller to see raw XML
-2. Check for namespace mismatches
-3. Verify XmlElement names match exactly (case-sensitive)
-4. Test with both namespaced and non-namespaced XML
-
-### Running S3 Client Tests
-The API is compatible with standard S3 clients. Test with:
+### S3 Client Testing
 - AWS CLI: `aws s3 --endpoint-url http://localhost:5214`
 - MinIO Client: `mc alias set local http://localhost:5214`
-- AWS SDKs with custom endpoint configuration
 
-### Working with Filesystem Storage
+## Helm Chart Features
 
-**Important Implementation Details:**
-- File size is **never** stored in metadata; it's always read from the filesystem
-- This ensures size is always accurate even if files are modified directly on disk
-- Object keys with '/' are stored as nested directories on filesystem
-- Metadata files have `.json` extension appended to the object key
-- Both data and metadata directories are created automatically on startup
-- Thread-safe file operations are ensured through FileSystemLockManager
-- Directory cleanup: Empty subdirectories are automatically removed after object deletion, but bucket directories are always preserved even when empty
-- Multipart uploads use temporary directories until completion
+- **Platform detection**: Kubernetes vs OpenShift
+- **Storage options**: In-memory or filesystem with PVs
+- **Redis integration**: Optional distributed locking
+- **Security**: Automatic secret management
+- **Auto-scaling**: HPA support
 
-**Testing Filesystem Storage:**
+## Cleanup Services
 
-*SeparateDirectory Mode:*
-```bash
-# Edit appsettings.json: "MetadataMode": "SeparateDirectory"
-# Run the application
-dotnet run --project Lamina/Lamina.csproj
-
-# Create bucket and upload object
-curl -X PUT http://localhost:5214/test-bucket
-echo "test content" | curl -X PUT -H "Content-Type: text/plain" --data-binary @- http://localhost:5214/test-bucket/test.txt
-
-# Check filesystem
-ls -la /tmp/laminas/data/test-bucket/
-ls -la /tmp/laminas/metadata/test-bucket/
-
-# Verify metadata doesn't contain size
-cat /tmp/laminas/metadata/test-bucket/test.txt.json | jq .
-```
-
-*Inline Mode:*
-```bash
-# Use inline metadata configuration
-dotnet run --project Lamina/Lamina.csproj --launch-profile http -- --config appsettings.InlineMetadata.json
-
-# Create bucket and upload object
-curl -X PUT http://localhost:5214/test-bucket
-echo "test content" | curl -X PUT -H "Content-Type: text/plain" --data-binary @- http://localhost:5214/test-bucket/path/to/test.txt
-
-# Check filesystem - metadata is in .lamina-meta directories
-ls -la /tmp/laminas/data/test-bucket/path/to/
-ls -la /tmp/laminas/data/test-bucket/path/to/.lamina-meta/
-
-# Verify metadata file exists
-cat /tmp/laminas/data/test-bucket/path/to/.lamina-meta/test.txt.json | jq .
-
-# Try to create object with forbidden key (will fail)
-curl -X PUT http://localhost:5214/test-bucket/.lamina-meta/forbidden.txt --data "test"
-```
-
-*Xattr Mode (Linux/macOS only):*
-```bash
-# Use xattr metadata configuration
-echo '{
-  "StorageType": "Filesystem",
-  "FilesystemStorage": {
-    "DataDirectory": "/tmp/laminas/data",
-    "MetadataMode": "Xattr",
-    "XattrPrefix": "user.lamina"
-  }
-}' > appsettings.Xattr.json
-
-dotnet run --project Lamina/Lamina.csproj --launch-profile http -- --config appsettings.Xattr.json
-
-# Create bucket and upload object
-curl -X PUT http://localhost:5214/test-bucket
-echo "test content" | curl -X PUT -H "Content-Type: text/plain" --data-binary @- http://localhost:5214/test-bucket/test.txt
-
-# Check filesystem - only data file exists
-ls -la /tmp/laminas/data/test-bucket/
-
-# View extended attributes (Linux)
-getfattr -d /tmp/laminas/data/test-bucket/test.txt
-
-# Or view with specific prefix (Linux)
-getfattr -n user.lamina.etag /tmp/laminas/data/test-bucket/test.txt
-getfattr -n user.lamina.content-type /tmp/laminas/data/test-bucket/test.txt
-
-# List all lamina attributes for object
-getfattr --match="user.lamina.*" -d /tmp/laminas/data/test-bucket/test.txt
-
-# View bucket metadata (stored on bucket directory)
-getfattr -d /tmp/laminas/data/test-bucket/
-
-# View specific bucket attributes
-getfattr -n user.lamina.region /tmp/laminas/data/test-bucket/
-
-# Test bucket tagging
-curl -X PUT -H "Content-Type: application/xml" --data '<Tagging><TagSet><Tag><Key>Environment</Key><Value>Production</Value></Tag></TagSet></Tagging>' http://localhost:5214/test-bucket?tagging
-
-# View bucket tags as xattr
-getfattr --match="user.lamina.tag.*" -d /tmp/laminas/data/test-bucket/
-```
+Three background services handle maintenance:
+- **Multipart Upload Cleanup**: Removes stale uploads
+- **Metadata Cleanup**: Removes orphaned metadata
+- **Temp File Cleanup**: Removes interrupted upload temp files
 
 ## Auto-Update Instructions
 
-After making significant code changes that affect the project structure, configuration, or implementation details documented in this file, update CLAUDE.md to reflect those changes. This includes:
-- New features or S3 operations added
-- Changes to storage implementations
-- Configuration option modifications
-- Significant architectural changes
-- New dependencies or services
+Update CLAUDE.md after significant changes:
+- New S3 operations or features
+- Storage implementation changes
+- Configuration modifications
+- Architectural changes
+- New dependencies/services
 
-Do not update for minor changes like bug fixes, refactoring without architectural impact, or test additions unless they introduce new concepts that should be documented.
+Do not update for minor bug fixes or refactoring.
