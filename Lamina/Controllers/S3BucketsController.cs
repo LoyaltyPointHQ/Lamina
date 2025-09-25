@@ -55,7 +55,7 @@ public class S3BucketsController : ControllerBase
         }
 
         // Parse bucket configuration from request body or headers
-        var createRequest = await ParseCreateBucketRequest(cancellationToken);
+        var createRequest = ParseCreateBucketRequest(cancellationToken);
 
         var bucket = await _bucketStorage.CreateBucketAsync(bucketName, createRequest, cancellationToken);
         if (bucket == null)
@@ -103,7 +103,7 @@ public class S3BucketsController : ControllerBase
         return true;
     }
 
-    private async Task<CreateBucketRequest> ParseCreateBucketRequest(CancellationToken cancellationToken)
+    private CreateBucketRequest ParseCreateBucketRequest(CancellationToken cancellationToken)
     {
         var request = new CreateBucketRequest();
 

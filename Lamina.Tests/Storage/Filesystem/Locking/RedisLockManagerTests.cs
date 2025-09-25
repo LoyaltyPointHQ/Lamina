@@ -19,9 +19,9 @@ namespace Lamina.Tests.Storage.Filesystem.Locking
     {
         private readonly Mock<ILogger<RedisLockManager>> _loggerMock;
         private readonly RedisSettings _redisSettings;
-        private readonly ConnectionMultiplexer _redis;
-        private readonly RedLockFactory _redLockFactory;
-        private readonly RedisLockManager _lockManager;
+        private readonly ConnectionMultiplexer? _redis;
+        private readonly RedLockFactory? _redLockFactory;
+        private readonly RedisLockManager? _lockManager;
         private readonly string _testFilePath;
         private readonly string _testDirectory;
 
@@ -81,6 +81,14 @@ namespace Lamina.Tests.Storage.Filesystem.Locking
             }
         }
 
+        private void RequireRedis()
+        {
+            if (!IsRedisAvailable() || _lockManager == null)
+            {
+                throw new InvalidOperationException("Redis is not available for testing");
+            }
+        }
+
         [Fact]
         public async Task ReadFileAsync_FileExists_ReturnsContent()
         {
@@ -92,7 +100,7 @@ namespace Lamina.Tests.Storage.Filesystem.Locking
             await File.WriteAllTextAsync(_testFilePath, expectedContent);
 
             // Act
-            var result = await _lockManager.ReadFileAsync(_testFilePath, content => Task.FromResult(content));
+            var result = await _lockManager!.ReadFileAsync(_testFilePath, content => Task.FromResult(content));
 
             // Assert
             Assert.Equal(expectedContent, result);
@@ -108,7 +116,7 @@ namespace Lamina.Tests.Storage.Filesystem.Locking
             var nonExistentPath = Path.Combine(_testDirectory, "nonexistent.txt");
 
             // Act
-            var result = await _lockManager.ReadFileAsync(nonExistentPath, content => Task.FromResult(content));
+            var result = await _lockManager!.ReadFileAsync(nonExistentPath, content => Task.FromResult(content));
 
             // Assert
             Assert.Null(result);
@@ -124,7 +132,7 @@ namespace Lamina.Tests.Storage.Filesystem.Locking
             var expectedContent = "content to write";
 
             // Act
-            await _lockManager.WriteFileAsync(_testFilePath, expectedContent);
+            await _lockManager!.WriteFileAsync(_testFilePath, expectedContent);
 
             // Assert
             var actualContent = await File.ReadAllTextAsync(_testFilePath);
@@ -142,7 +150,7 @@ namespace Lamina.Tests.Storage.Filesystem.Locking
             var content = "nested content";
 
             // Act
-            await _lockManager.WriteFileAsync(nestedPath, content);
+            await _lockManager!.WriteFileAsync(nestedPath, content);
 
             // Assert
             Assert.True(File.Exists(nestedPath));
@@ -161,7 +169,7 @@ namespace Lamina.Tests.Storage.Filesystem.Locking
             Assert.True(File.Exists(_testFilePath));
 
             // Act
-            var result = await _lockManager.DeleteFile(_testFilePath);
+            var result = await _lockManager!.DeleteFile(_testFilePath);
 
             // Assert
             Assert.True(result);
@@ -178,7 +186,7 @@ namespace Lamina.Tests.Storage.Filesystem.Locking
             var nonExistentPath = Path.Combine(_testDirectory, "nonexistent.txt");
 
             // Act
-            var result = await _lockManager.DeleteFile(nonExistentPath);
+            var result = await _lockManager!.DeleteFile(nonExistentPath);
 
             // Assert
             Assert.False(result);
@@ -199,8 +207,8 @@ namespace Lamina.Tests.Storage.Filesystem.Locking
             for (int i = 0; i < iterations; i++)
             {
                 int iteration = i;
-                var writeTask = _lockManager.WriteFileAsync(_testFilePath, $"{content}-{iteration}");
-                var readTask = _lockManager.ReadFileAsync(_testFilePath, c => Task.FromResult(c));
+                var writeTask = _lockManager!.WriteFileAsync(_testFilePath, $"{content}-{iteration}");
+                var readTask = _lockManager!.ReadFileAsync(_testFilePath, c => Task.FromResult(c));
 
                 tasks.Add(writeTask);
                 tasks.Add(readTask);
@@ -232,10 +240,10 @@ namespace Lamina.Tests.Storage.Filesystem.Locking
             };
 
             var shortTimeoutOptions = Options.Create(shortTimeoutSettings);
-            using var shortTimeoutLockManager = new RedisLockManager(_redis, _redLockFactory, shortTimeoutOptions, _loggerMock.Object);
+            using var shortTimeoutLockManager = new RedisLockManager(_redis!, _redLockFactory!, shortTimeoutOptions, _loggerMock.Object);
 
             // Create a long-running operation to hold the lock
-            var longRunningTask = _lockManager.WriteFileAsync(_testFilePath, "holding lock");
+            var longRunningTask = _lockManager!.WriteFileAsync(_testFilePath, "holding lock");
 
             // Act & Assert
             // Try to acquire the same lock with short timeout - should eventually fail
@@ -272,7 +280,7 @@ namespace Lamina.Tests.Storage.Filesystem.Locking
             await File.WriteAllTextAsync(_testFilePath, originalContent);
 
             // Act
-            var result = await _lockManager.ReadFileAsync(_testFilePath, content =>
+            var result = await _lockManager!.ReadFileAsync(_testFilePath, content =>
                 Task.FromResult(int.Parse(content) * 2));
 
             // Assert
@@ -298,7 +306,7 @@ namespace Lamina.Tests.Storage.Filesystem.Locking
             };
 
             var customOptions = Options.Create(customSettings);
-            using var customLockManager = new RedisLockManager(_redis, _redLockFactory, customOptions, _loggerMock.Object);
+            using var customLockManager = new RedisLockManager(_redis!, _redLockFactory!, customOptions, _loggerMock.Object);
 
             var testContent = "configurable prefix test";
             await File.WriteAllTextAsync(_testFilePath, testContent);

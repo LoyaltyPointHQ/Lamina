@@ -131,7 +131,7 @@ public class TempFileCleanupService : BackgroundService
         }
     }
 
-    private IEnumerable<string> FindTempFilesAsync(string directory, string tempFilePrefix, [EnumeratorCancellation] CancellationToken cancellationToken)
+    private IEnumerable<string> FindTempFilesAsync(string directory, string tempFilePrefix, CancellationToken cancellationToken)
     {
         var searchPattern = $"{tempFilePrefix}*";
 
@@ -141,7 +141,7 @@ public class TempFileCleanupService : BackgroundService
         }
     }
 
-    private IEnumerable<string> EnumerateFilesRecursivelyAsync(string directory, string searchPattern, [EnumeratorCancellation] CancellationToken cancellationToken)
+    private IEnumerable<string> EnumerateFilesRecursivelyAsync(string directory, string searchPattern, CancellationToken cancellationToken)
     {
         if (cancellationToken.IsCancellationRequested)
             yield break;
