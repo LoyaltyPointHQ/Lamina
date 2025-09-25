@@ -9,7 +9,7 @@
 
 - **Full S3 API Compatibility**: Implements the official Amazon S3 REST API specification with strict compliance
 - **High-Performance Listing**: Optimized code paths for delimiter-based listing, but maintaining compatibility with other listing queries (albeit slow)
-- **Metadata Storage**: Three metadata modes - separate directories, inline storage, or POSIX extended attributes (Linux/macOS)
+- **Flexible Metadata Storage**: Four metadata backend options - separate directories, inline storage, POSIX extended attributes (Linux/macOS), or SQL databases (SQLite/PostgreSQL)
 - **Network Filesystem Ready**: Special support for CIFS and NFS with retry logic and atomic operations
 - **Distributed Locking**: Redis-based distributed locking for safe multi-instance deployments
 - **Background Services**: Automatic cleanup of temporary files, orphaned metadata, and stale multipart uploads
@@ -80,10 +80,20 @@ Lamina uses a **data-first architecture** where:
 - **Content-Type detection** - intelligent MIME type detection based on file extensions
 - **Optimized storage** - metadata only stored when it differs from defaults
 
-### Filesystem Storage
-- Production-ready with multiple metadata modes
-- Supports local and network filesystems (CIFS, NFS)
-- Three metadata storage options:
+### Storage Options
+
+Lamina supports multiple storage backends for both data and metadata:
+
+#### Data Storage
+- **In-Memory**: Fast, ephemeral storage for development and testing
+- **Filesystem**: Production-ready local or network filesystem storage (CIFS, NFS)
+
+#### Metadata Storage
+- **In-Memory**: Ephemeral metadata storage for development and testing
+- **Filesystem**: Multiple modes for persistent metadata
+- **SQL Database**: SQLite or PostgreSQL for scalable metadata management
+
+#### Filesystem Metadata Modes
 
 **1. Separate Directory Mode** (default)
 ```
@@ -169,6 +179,7 @@ Lamina operates as a **single-region storage system** and does not implement AWS
 
 Configure storage backend in `appsettings.json`:
 
+#### Filesystem Storage
 ```json
 {
   "StorageType": "Filesystem",
@@ -180,6 +191,44 @@ Configure storage backend in `appsettings.json`:
     "NetworkMode": "None",
     "RetryCount": 3,
     "RetryDelayMs": 100
+  }
+}
+```
+
+#### SQL Metadata Storage
+
+For SQLite metadata storage (recommended for single-instance deployments):
+```json
+{
+  "StorageType": "Filesystem",
+  "MetadataStorageType": "Sql",
+  "FilesystemStorage": {
+    "DataDirectory": "/data"
+  },
+  "SqlStorage": {
+    "Provider": "SQLite",
+    "ConnectionString": "Data Source=/data/metadata.db",
+    "MigrateOnStartup": true,
+    "CommandTimeout": 30,
+    "EnableDetailedErrors": true
+  }
+}
+```
+
+For PostgreSQL metadata storage (recommended for multi-instance deployments):
+```json
+{
+  "StorageType": "Filesystem",
+  "MetadataStorageType": "Sql",
+  "FilesystemStorage": {
+    "DataDirectory": "/data"
+  },
+  "SqlStorage": {
+    "Provider": "PostgreSQL",
+    "ConnectionString": "Host=postgres;Database=lamina_metadata;Username=lamina;Password=secure_password",
+    "MigrateOnStartup": true,
+    "CommandTimeout": 60,
+    "EnableDetailedErrors": false
   }
 }
 ```
@@ -201,8 +250,9 @@ For multi-instance deployments, enable Redis-based distributed locking to ensure
 }
 ```
 
-#### Docker Compose with Redis
+#### Docker Compose Examples
 
+**Multi-Instance with Redis Locking:**
 ```yaml
 version: '3.8'
 services:
@@ -241,6 +291,41 @@ services:
       - "8081:8080"
     depends_on:
       - redis
+```
+
+**Filesystem Storage with PostgreSQL Metadata:**
+```yaml
+version: '3.8'
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=lamina_metadata
+      - POSTGRES_USER=lamina
+      - POSTGRES_PASSWORD=secure_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  lamina:
+    image: ghcr.io/loyaltypointhq/lamina:latest
+    environment:
+      - StorageType=Filesystem
+      - MetadataStorageType=Sql
+      - FilesystemStorage__DataDirectory=/app/data
+      - SqlStorage__Provider=PostgreSQL
+      - SqlStorage__ConnectionString=Host=postgres;Database=lamina_metadata;Username=lamina;Password=secure_password
+      - SqlStorage__MigrateOnStartup=true
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
 ```
 
 #### When to Use Redis Locking
@@ -339,7 +424,6 @@ services:
 - **Backup Solutions**: S3-compatible interface for backup applications with optimized browsing of time-based structures
 - **Legacy System Integration**: Add S3 capability to existing file-based systems while maintaining performance
 - **Document Management**: High-performance S3 interface for organized document hierarchies
-- **Media Storage**: Efficient browsing and listing of photo/video collections organized by date or category
 
 ### Network Storage Integration
 - **NAS Exposure**: Make NAS devices accessible via S3 API
