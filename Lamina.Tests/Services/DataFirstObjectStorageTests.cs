@@ -31,7 +31,6 @@ public class DataFirstObjectStorageTests
             {
                 Name = bucketName,
                 Type = BucketType.GeneralPurpose,
-                Region = "us-east-1",
                 CreationDate = DateTime.UtcNow
             });
 

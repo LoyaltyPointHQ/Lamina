@@ -61,7 +61,6 @@ public class DirectoryBucketIntegrationTests : IntegrationTestBase
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("Directory", response.Headers.GetValues("x-amz-bucket-type").FirstOrDefault());
         Assert.Equal("EXPRESS_ONEZONE", response.Headers.GetValues("x-amz-storage-class").FirstOrDefault());
-        Assert.Equal("us-east-1", response.Headers.GetValues("x-amz-bucket-region").FirstOrDefault());
     }
 
     [Fact]

@@ -26,7 +26,6 @@ public class InMemoryBucketMetadataStorage : IBucketMetadataStorage
         {
             Name = bucketName,
             CreationDate = DateTime.UtcNow,
-            Region = request.Region ?? "us-east-1",
             Type = request.Type ?? BucketType.GeneralPurpose,
             StorageClass = request.StorageClass,
             Tags = new Dictionary<string, string>()

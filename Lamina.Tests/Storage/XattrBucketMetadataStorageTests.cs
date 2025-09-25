@@ -87,10 +87,7 @@ public class XattrBucketMetadataStorageTests : IDisposable
         const string bucketName = "test-bucket";
         await _bucketDataStorage.CreateBucketAsync(bucketName);
 
-        var request = new CreateBucketRequest
-        {
-            Region = "eu-west-1"
-        };
+        var request = new CreateBucketRequest();
 
         // Act
         var result = await _storage.StoreBucketMetadataAsync(bucketName, request);
@@ -98,7 +95,6 @@ public class XattrBucketMetadataStorageTests : IDisposable
         // Assert
         Assert.NotNull(result);
         Assert.Equal(bucketName, result.Name);
-        Assert.Equal("eu-west-1", result.Region);
         Assert.NotEqual(DateTime.MinValue, result.CreationDate);
         Assert.Empty(result.Tags);
     }
@@ -132,7 +128,7 @@ public class XattrBucketMetadataStorageTests : IDisposable
         const string bucketName = "test-bucket";
         await _bucketDataStorage.CreateBucketAsync(bucketName);
 
-        var request = new CreateBucketRequest { Region = "ap-southeast-2" };
+        var request = new CreateBucketRequest();
         await _storage.StoreBucketMetadataAsync(bucketName, request);
 
         // Act
@@ -141,7 +137,6 @@ public class XattrBucketMetadataStorageTests : IDisposable
         // Assert
         Assert.NotNull(result);
         Assert.Equal(bucketName, result.Name);
-        Assert.Equal("ap-southeast-2", result.Region);
         Assert.NotEqual(DateTime.MinValue, result.CreationDate);
         Assert.Empty(result.Tags);
     }
@@ -165,7 +160,6 @@ public class XattrBucketMetadataStorageTests : IDisposable
         // Assert
         Assert.NotNull(result);
         Assert.Equal(bucketName, result.Name);
-        Assert.Equal("us-east-1", result.Region); // Default region
         Assert.NotEqual(DateTime.MinValue, result.CreationDate);
         Assert.Empty(result.Tags);
     }
@@ -255,7 +249,6 @@ public class XattrBucketMetadataStorageTests : IDisposable
         // Arrange
         const string bucketName = "test-bucket";
         await _bucketDataStorage.CreateBucketAsync(bucketName);
-        await _storage.StoreBucketMetadataAsync(bucketName, new CreateBucketRequest { Region = "us-west-2" });
 
         // Act
         var result = await _storage.DeleteBucketMetadataAsync(bucketName);
@@ -266,7 +259,6 @@ public class XattrBucketMetadataStorageTests : IDisposable
         // Verify metadata is gone (should return default values)
         var bucket = await _storage.GetBucketMetadataAsync(bucketName);
         Assert.NotNull(bucket);
-        Assert.Equal("us-east-1", bucket.Region); // Should revert to default
     }
 
     [Fact]
@@ -301,20 +293,14 @@ public class XattrBucketMetadataStorageTests : IDisposable
         await _bucketDataStorage.CreateBucketAsync(bucket1);
         await _bucketDataStorage.CreateBucketAsync(bucket2);
 
-        await _storage.StoreBucketMetadataAsync(bucket1, new CreateBucketRequest { Region = "us-west-1" });
-        await _storage.StoreBucketMetadataAsync(bucket2, new CreateBucketRequest { Region = "eu-central-1" });
 
         // Act
         var result = await _storage.GetAllBucketsMetadataAsync();
 
         // Assert
         Assert.Equal(2, result.Count);
-
-        var bucket1Result = result.First(b => b.Name == bucket1);
-        var bucket2Result = result.First(b => b.Name == bucket2);
-
-        Assert.Equal("us-west-1", bucket1Result.Region);
-        Assert.Equal("eu-central-1", bucket2Result.Region);
+        Assert.Contains(result, b => b.Name == bucket1);
+        Assert.Contains(result, b => b.Name == bucket2);
     }
 
     [Fact]

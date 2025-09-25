@@ -13,7 +13,6 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
     private readonly XattrHelper _xattrHelper;
     private readonly ILogger<XattrBucketMetadataStorage> _logger;
 
-    private const string RegionAttributeName = "region";
     private const string TypeAttributeName = "type";
     private const string StorageClassAttributeName = "storage-class";
     private const string TagPrefix = "tag";
@@ -55,13 +54,6 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
 
         try
         {
-            // Store region if provided
-            var region = request.Region ?? "us-east-1";
-            if (!_xattrHelper.SetAttribute(bucketPath, RegionAttributeName, region))
-            {
-                _logger.LogWarning("Failed to store region attribute for bucket {BucketName}", bucketName);
-            }
-
             // Store bucket type
             var bucketType = request.Type ?? BucketType.GeneralPurpose;
             if (!_xattrHelper.SetAttribute(bucketPath, TypeAttributeName, bucketType.ToString()))
@@ -85,7 +77,6 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
             {
                 Name = bucketName,
                 CreationDate = dirInfo.CreationTimeUtc,
-                Region = region,
                 Type = bucketType,
                 StorageClass = request.StorageClass,
                 Tags = new Dictionary<string, string>()
@@ -116,9 +107,6 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
             // Get directory creation time
             var dirInfo = new DirectoryInfo(bucketPath);
 
-            // Get region from xattr, default to us-east-1
-            var region = _xattrHelper.GetAttribute(bucketPath, RegionAttributeName) ?? "us-east-1";
-
             // Get bucket type from xattr, default to GeneralPurpose
             var typeString = _xattrHelper.GetAttribute(bucketPath, TypeAttributeName);
             var bucketType = BucketType.GeneralPurpose;
@@ -137,7 +125,6 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
             {
                 Name = bucketName,
                 CreationDate = dirInfo.CreationTimeUtc,
-                Region = region,
                 Type = bucketType,
                 StorageClass = storageClass,
                 Tags = tags

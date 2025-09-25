@@ -122,13 +122,7 @@ public class S3BucketsController : ControllerBase
             request.StorageClass = storageClassHeader.ToString();
         }
 
-        // Check for region in header
-        if (Request.Headers.TryGetValue("x-amz-bucket-region", out var regionHeader))
-        {
-            request.Region = regionHeader.ToString();
-        }
-
-        // TODO: Parse XML request body for CreateBucketConfiguration if needed
+// TODO: Parse XML request body for CreateBucketConfiguration if needed
         // For now, we'll just use headers and apply defaults
 
         // Apply defaults from configuration when not specified
@@ -137,12 +131,7 @@ public class S3BucketsController : ControllerBase
             request.Type = _bucketDefaults.Type;
         }
 
-        if (string.IsNullOrEmpty(request.Region))
-        {
-            request.Region = _bucketDefaults.Region;
-        }
-
-        if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketDefaults.StorageClass))
+if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketDefaults.StorageClass))
         {
             request.StorageClass = _bucketDefaults.StorageClass;
         }
@@ -384,7 +373,6 @@ public class S3BucketsController : ControllerBase
         {
             Response.Headers.Append("x-amz-storage-class", bucket.StorageClass);
         }
-        Response.Headers.Append("x-amz-bucket-region", bucket.Region);
 
         return Ok();
     }

@@ -39,7 +39,6 @@ public class BucketStorageFacade : IBucketStorageFacade
         {
             request = new CreateBucketRequest
             {
-                Region = _bucketDefaults.Region,
                 Type = _bucketDefaults.Type,
                 StorageClass = _bucketDefaults.StorageClass
             };

@@ -19,7 +19,6 @@ public class BucketTypeStorageTests
         {
             Type = BucketType.Directory,
             StorageClass = "EXPRESS_ONEZONE",
-            Region = "us-west-2"
         };
 
         var bucket = await storage.StoreBucketMetadataAsync(bucketName, createRequest);
@@ -27,7 +26,6 @@ public class BucketTypeStorageTests
         Assert.NotNull(bucket);
         Assert.Equal(BucketType.Directory, bucket.Type);
         Assert.Equal("EXPRESS_ONEZONE", bucket.StorageClass);
-        Assert.Equal("us-west-2", bucket.Region);
         Assert.Equal(bucketName, bucket.Name);
 
         // Verify retrieval
@@ -35,7 +33,6 @@ public class BucketTypeStorageTests
         Assert.NotNull(retrievedBucket);
         Assert.Equal(BucketType.Directory, retrievedBucket.Type);
         Assert.Equal("EXPRESS_ONEZONE", retrievedBucket.StorageClass);
-        Assert.Equal("us-west-2", retrievedBucket.Region);
     }
 
     [Fact]
@@ -53,7 +50,6 @@ public class BucketTypeStorageTests
         Assert.NotNull(bucket);
         Assert.Equal(BucketType.GeneralPurpose, bucket.Type);
         Assert.Null(bucket.StorageClass);
-        Assert.Equal("us-east-1", bucket.Region);
     }
 
     [Fact]
@@ -68,7 +64,7 @@ public class BucketTypeStorageTests
         var createRequest = new CreateBucketRequest
         {
             Type = BucketType.Directory
-            // StorageClass and Region not specified
+            // StorageClass not specified
         };
 
         var bucket = await storage.StoreBucketMetadataAsync(bucketName, createRequest);
@@ -76,7 +72,6 @@ public class BucketTypeStorageTests
         Assert.NotNull(bucket);
         Assert.Equal(BucketType.Directory, bucket.Type);
         Assert.Null(bucket.StorageClass);
-        Assert.Equal("us-east-1", bucket.Region); // Default value
     }
 
     [Fact]

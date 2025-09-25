@@ -243,6 +243,18 @@ helm uninstall lamina
 - Comparison normalizes by trimming quotes
 - ETag computation is centralized in `ETagHelper` class
 
+### Known S3 Incompatibilities
+
+#### Region Support
+- **Lamina operates as a single-region storage system**
+- Buckets are not bound to specific regions and exist in a virtual region concept
+- Region constraints in bucket creation requests are **accepted but ignored**
+- Any region can be used in AWS Signature V4 authentication (for client compatibility)
+- Cross-region replication is **not supported**
+- Region-specific endpoints are **not supported**
+- HEAD bucket responses do **not** include `x-amz-bucket-region` header
+- **Impact**: Clients expecting region-specific behavior may not work as expected, though basic S3 API operations remain fully compatible
+
 ### Important Implementation Notes
 
 1. **XML Deserialization**: CompleteMultipartUpload supports both:

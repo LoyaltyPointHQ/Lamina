@@ -14,7 +14,6 @@ public class BucketDefaultsSettingsTests
 
         Assert.Equal(BucketType.GeneralPurpose, settings.Type);
         Assert.Null(settings.StorageClass);
-        Assert.Equal("us-east-1", settings.Region);
     }
 
     [Fact]
@@ -23,8 +22,7 @@ public class BucketDefaultsSettingsTests
         var configurationData = new Dictionary<string, string?>
         {
             ["BucketDefaults:Type"] = "Directory",
-            ["BucketDefaults:StorageClass"] = "EXPRESS_ONEZONE",
-            ["BucketDefaults:Region"] = "us-west-2"
+            ["BucketDefaults:StorageClass"] = "EXPRESS_ONEZONE"
         };
 
         var configuration = new ConfigurationBuilder()
@@ -36,7 +34,6 @@ public class BucketDefaultsSettingsTests
 
         Assert.Equal(BucketType.Directory, settings.Type);
         Assert.Equal("EXPRESS_ONEZONE", settings.StorageClass);
-        Assert.Equal("us-west-2", settings.Region);
     }
 
     [Fact]
@@ -44,8 +41,7 @@ public class BucketDefaultsSettingsTests
     {
         var configurationData = new Dictionary<string, string?>
         {
-            ["BucketDefaults:Type"] = "InvalidType",
-            ["BucketDefaults:Region"] = "us-west-2"
+            ["BucketDefaults:Type"] = "InvalidType"
         };
 
         var configuration = new ConfigurationBuilder()

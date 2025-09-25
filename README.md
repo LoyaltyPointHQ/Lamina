@@ -143,9 +143,21 @@ Lamina implements comprehensive S3 API compatibility. Here's how it compares to 
 
 **Legend**: ✅ Supported | ❌ Not supported | ⚠️ Partial support
 
+### Known S3 API Limitations
+
+#### Region Support
+Lamina operates as a **single-region storage system** and does not implement AWS region-specific functionality:
+
+- ❌ **Bucket regions**: All buckets exist in a virtual single region
+- ❌ **Cross-region replication**: Not applicable in single-region architecture
+- ❌ **Region-specific endpoints**: All requests handled by single instance
+- ✅ **Region in authentication**: Any region accepted in AWS Signature V4 for client compatibility
+- ⚠️ **Bucket creation**: Region parameter accepted but ignored
+
+**Impact**: Applications expecting region-specific behavior (cross-region replication, region constraints) will not function as expected, though standard S3 operations remain fully compatible.
+
 ### Why Choose Lamina?
 
-- **⚡ Superior Performance**: 10-1000x faster delimiter-based listing compared to MinIO and other S3 implementations
 - **🎯 Focused Purpose**: Specifically designed as a filesystem-to-S3 gateway with performance optimizations
 - **🔧 Simple Setup**: No complex clustering or distributed storage configuration
 - **📁 Direct Filesystem Access**: Data remains accessible via standard filesystem tools
