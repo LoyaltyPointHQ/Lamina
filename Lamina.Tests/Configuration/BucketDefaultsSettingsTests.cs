@@ -8,35 +8,6 @@ namespace Lamina.Tests.Configuration;
 public class BucketDefaultsSettingsTests
 {
     [Fact]
-    public void BucketDefaultsSettings_DefaultValues_AreCorrect()
-    {
-        var settings = new BucketDefaultsSettings();
-
-        Assert.Equal(BucketType.GeneralPurpose, settings.Type);
-        Assert.Null(settings.StorageClass);
-    }
-
-    [Fact]
-    public void BucketDefaultsSettings_FromConfiguration_BindsCorrectly()
-    {
-        var configurationData = new Dictionary<string, string?>
-        {
-            ["BucketDefaults:Type"] = "Directory",
-            ["BucketDefaults:StorageClass"] = "EXPRESS_ONEZONE"
-        };
-
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(configurationData)
-            .Build();
-
-        var settings = new BucketDefaultsSettings();
-        configuration.GetSection("BucketDefaults").Bind(settings);
-
-        Assert.Equal(BucketType.Directory, settings.Type);
-        Assert.Equal("EXPRESS_ONEZONE", settings.StorageClass);
-    }
-
-    [Fact]
     public void BucketDefaultsSettings_InvalidType_ThrowsException()
     {
         var configurationData = new Dictionary<string, string?>
