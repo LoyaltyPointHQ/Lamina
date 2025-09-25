@@ -84,6 +84,9 @@ jobs:
             sed -i "s/^appVersion:.*/appVersion: \"${{ github.sha }}\"/" chart/Chart.yaml
           fi
 
+          # Download chart dependencies
+          helm dependency update chart/
+
           # Package the chart
           helm package chart/
 
