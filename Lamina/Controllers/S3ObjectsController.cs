@@ -213,7 +213,9 @@ public class S3ObjectsController : ControllerBase
         var objectInfo = await _objectStorage.GetObjectInfoAsync(bucketName, key, cancellationToken);
         if (objectInfo == null)
         {
-            return NotFound();
+            Response.StatusCode = 404;
+            Response.ContentType = "application/xml";
+            return new EmptyResult();
         }
 
         Response.Headers.Append("ETag", $"\"{objectInfo.ETag}\"");

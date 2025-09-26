@@ -370,6 +370,25 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task HeadObject_NonExistingObject_ReturnsS3CompliantResponse()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        var request = new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}/non-existing.txt");
+        var response = await Client.SendAsync(request);
+
+        // Should return 404
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+
+        // Should have XML content type for S3 compatibility
+        Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
+
+        // HEAD requests should not have a body
+        var content = await response.Content.ReadAsStringAsync();
+        Assert.Empty(content);
+    }
+
+    [Fact]
     public async Task InitiateMultipartUpload_ValidRequest_Returns200()
     {
         var bucketName = await CreateTestBucketAsync();
