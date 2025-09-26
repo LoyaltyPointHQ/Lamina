@@ -11,5 +11,5 @@ public class AutoBucketCreationSettings
 public class BucketConfiguration
 {
     public string Name { get; set; } = string.Empty;
-    public BucketType Type { get; set; }
+    public BucketType? Type { get; set; }
 }
