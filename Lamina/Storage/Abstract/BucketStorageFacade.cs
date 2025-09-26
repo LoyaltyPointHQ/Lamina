@@ -35,14 +35,10 @@ public class BucketStorageFacade : IBucketStorageFacade
         }
 
         // Create default request if null was provided
-        if (request == null)
-        {
-            request = new CreateBucketRequest
-            {
-                Type = _bucketDefaults.Type,
-                StorageClass = _bucketDefaults.StorageClass
-            };
-        }
+        request ??= new CreateBucketRequest();
+        request.Type ??= _bucketDefaults.Type;
+        request.StorageClass ??= _bucketDefaults.StorageClass;
+        
 
         // Create bucket in data service
         var created = await _dataStorage.CreateBucketAsync(bucketName, cancellationToken);
