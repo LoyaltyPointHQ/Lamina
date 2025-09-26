@@ -1,4 +1,5 @@
 using Lamina.Configuration;
+using Lamina.Models;
 using Lamina.Storage.Abstract;
 using Microsoft.Extensions.Options;
 
@@ -59,7 +60,10 @@ public class AutoBucketCreationService : IAutoBucketCreationService
 
                 _logger.LogInformation("Creating bucket: {BucketName}", bucketConfig.Name);
                 
-                var bucket = await _bucketStorage.CreateBucketAsync(bucketConfig.Name, null, cancellationToken);
+                var bucket = await _bucketStorage.CreateBucketAsync(bucketConfig.Name, new CreateBucketRequest()
+                {
+                    Type = bucketConfig.Type
+                }, cancellationToken);
                 
                 if (bucket == null)
                 {
