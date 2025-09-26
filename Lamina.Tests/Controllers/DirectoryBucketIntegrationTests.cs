@@ -222,4 +222,104 @@ public class DirectoryBucketIntegrationTests : IntegrationTestBase
         var bucketTypeHeader = headResponse.Headers.GetValues("x-amz-bucket-type").FirstOrDefault();
         Assert.Equal("GeneralPurpose", bucketTypeHeader);
     }
+
+    [Fact]
+    public async Task ListObjects_DirectoryBucket_AllowsPrefixWithoutDelimiter()
+    {
+        var bucketName = $"dir-prefix-no-delimiter-{Guid.NewGuid()}";
+
+        // Create Directory bucket
+        var createRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}");
+        createRequest.Headers.Add("x-amz-bucket-type", "Directory");
+        await Client.SendAsync(createRequest);
+
+        // List with prefix but no delimiter (should be allowed)
+        var response = await Client.GetAsync($"/{bucketName}?prefix=folder");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ListObjects_DirectoryBucket_AllowsEmptyPrefixWithDelimiter()
+    {
+        var bucketName = $"dir-empty-prefix-{Guid.NewGuid()}";
+
+        // Create Directory bucket
+        var createRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}");
+        createRequest.Headers.Add("x-amz-bucket-type", "Directory");
+        await Client.SendAsync(createRequest);
+
+        // List with empty prefix and delimiter (should be allowed)
+        var response = await Client.GetAsync($"/{bucketName}?delimiter=%2F"); // "/" delimiter
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ListObjects_DirectoryBucket_AllowsValidPrefixEndingWithDelimiter()
+    {
+        var bucketName = $"dir-valid-prefix-delimiter-{Guid.NewGuid()}";
+
+        // Create Directory bucket
+        var createRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}");
+        createRequest.Headers.Add("x-amz-bucket-type", "Directory");
+        await Client.SendAsync(createRequest);
+
+        // List with prefix ending with delimiter (should be allowed)
+        var response = await Client.GetAsync($"/{bucketName}?prefix=folder%2F&delimiter=%2F"); // "folder/" with "/" delimiter
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ListObjects_DirectoryBucket_RejectsMultipleSlashDelimiter()
+    {
+        var bucketName = $"dir-multiple-slash-{Guid.NewGuid()}";
+
+        // Create Directory bucket
+        var createRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}");
+        createRequest.Headers.Add("x-amz-bucket-type", "Directory");
+        await Client.SendAsync(createRequest);
+
+        // Try to list with multiple slash delimiter (should fail)
+        var response = await Client.GetAsync($"/{bucketName}?delimiter=%2F%2F"); // "//" delimiter
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var errorXml = await response.Content.ReadAsStringAsync();
+        Assert.Contains("InvalidArgument", errorXml);
+        Assert.Contains("only support '/' as a delimiter", errorXml);
+    }
+
+    [Fact]
+    public async Task ListObjects_DirectoryBucket_RejectsPipeDelimiter()
+    {
+        var bucketName = $"dir-pipe-delimiter-{Guid.NewGuid()}";
+
+        // Create Directory bucket
+        var createRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}");
+        createRequest.Headers.Add("x-amz-bucket-type", "Directory");
+        await Client.SendAsync(createRequest);
+
+        // Try to list with pipe delimiter (should fail)
+        var response = await Client.GetAsync($"/{bucketName}?delimiter=%7C"); // "|" delimiter
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var errorXml = await response.Content.ReadAsStringAsync();
+        Assert.Contains("InvalidArgument", errorXml);
+        Assert.Contains("only support '/' as a delimiter", errorXml);
+    }
+
+    [Fact]
+    public async Task ListObjects_GeneralPurposeBucket_AllowsPrefixWithoutTrailingSlash()
+    {
+        var bucketName = $"gp-prefix-no-trailing-{Guid.NewGuid()}";
+
+        // Create General Purpose bucket (default)
+        await Client.PutAsync($"/{bucketName}", null);
+
+        // List with prefix not ending with delimiter (should be allowed for GP buckets)
+        var response = await Client.GetAsync($"/{bucketName}?prefix=folder&delimiter=%2F"); // "folder" with "/" delimiter
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
 }

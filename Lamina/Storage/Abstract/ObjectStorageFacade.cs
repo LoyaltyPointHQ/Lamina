@@ -127,7 +127,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
         return await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
     }
 
-    public async Task<ListObjectsResponse> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<ListObjectsResponse>> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)
     {
         request ??= new ListObjectsRequest();
         var effectiveMaxKeys = Math.Min(request.MaxKeys, 1000); // S3 limits to 1000
@@ -135,6 +135,13 @@ public class ObjectStorageFacade : IObjectStorageFacade
         // Get bucket type for storage optimization
         var bucket = await _bucketStorage.GetBucketAsync(bucketName, cancellationToken);
         var bucketType = bucket?.Type ?? BucketType.GeneralPurpose;
+
+        // Validate Directory bucket constraints
+        var validationError = ValidateDirectoryBucketListRequest(bucketType, request.Prefix, request.Delimiter);
+        if (validationError != null)
+        {
+            return StorageResult<ListObjectsResponse>.Error("InvalidArgument", validationError);
+        }
 
         // Only request extra if maxKeys is specified and less than 1000
         var shouldCheckTruncation = request.MaxKeys > 0 && request.MaxKeys < 1000;
@@ -213,8 +220,8 @@ public class ObjectStorageFacade : IObjectStorageFacade
             if (meta != null)
                 response.Contents.Add(meta);
         }
-        
-        return response;
+
+        return StorageResult<ListObjectsResponse>.Success(response);
     }
 
     public async Task<bool> ObjectExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
@@ -300,5 +307,24 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
         // Metadata matches defaults, no need to store
         return false;
+    }
+
+    private string? ValidateDirectoryBucketListRequest(BucketType bucketType, string? prefix, string? delimiter)
+    {
+        if (bucketType != BucketType.Directory)
+        {
+            return null; // No validation needed for general-purpose buckets
+        }
+
+        // For Directory buckets, validate delimiter constraints
+        // Only "/" delimiter is supported for Directory buckets
+        if (!string.IsNullOrEmpty(delimiter) && delimiter != "/")
+            return "Directory buckets only support '/' as a delimiter";
+
+        // When delimiter is specified, prefix must end with delimiter (if prefix is not empty)
+        if (!string.IsNullOrEmpty(delimiter) && !string.IsNullOrEmpty(prefix) && !prefix.EndsWith(delimiter))
+            return "For Directory buckets, prefixes must end with the delimiter";
+
+        return null; // Validation passed
     }
 }

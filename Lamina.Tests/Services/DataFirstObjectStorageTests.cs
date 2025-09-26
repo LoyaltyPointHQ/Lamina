@@ -160,11 +160,13 @@ public class DataFirstObjectStorageTests
 
         // Assert
         Assert.NotNull(response);
-        Assert.Equal(2, response.Contents.Count);
-        Assert.Contains(response.Contents, o => o.Key == "file-with-metadata.txt");
-        Assert.Contains(response.Contents, o => o.Key == "file-without-metadata.txt");
+        Assert.True(response.IsSuccess);
+        Assert.NotNull(response.Value);
+        Assert.Equal(2, response.Value.Contents.Count);
+        Assert.Contains(response.Value.Contents, o => o.Key == "file-with-metadata.txt");
+        Assert.Contains(response.Value.Contents, o => o.Key == "file-without-metadata.txt");
 
-        var orphanedFile = response.Contents.First(o => o.Key == "file-without-metadata.txt");
+        var orphanedFile = response.Value.Contents.First(o => o.Key == "file-without-metadata.txt");
         Assert.Equal(200L, orphanedFile.Size);
         Assert.Equal(expectedEtag, orphanedFile.ETag);
         Assert.Equal("text/plain", orphanedFile.ContentType);  // Now correctly detects .txt as text/plain

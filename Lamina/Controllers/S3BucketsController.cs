@@ -213,42 +213,6 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
             return new ObjectResult(error);
         }
 
-        // Get bucket information to check if it's a Directory bucket
-        var bucket = await _bucketStorage.GetBucketAsync(bucketName, cancellationToken);
-        var isDirectoryBucket = bucket?.Type == BucketType.Directory;
-
-        // Validate Directory bucket constraints
-        if (isDirectoryBucket)
-        {
-            // For Directory buckets, only "/" delimiter is supported
-            if (!string.IsNullOrEmpty(delimiter) && delimiter != "/")
-            {
-                var error = new S3Error
-                {
-                    Code = "InvalidArgument",
-                    Message = "Directory buckets only support '/' as a delimiter",
-                    Resource = $"/{bucketName}"
-                };
-                Response.StatusCode = 400;
-                Response.ContentType = "application/xml";
-                return new ObjectResult(error);
-            }
-
-            // Prefixes must end with delimiter if delimiter is specified
-            if (!string.IsNullOrEmpty(prefix) && !string.IsNullOrEmpty(delimiter) && !prefix.EndsWith(delimiter))
-            {
-                var error = new S3Error
-                {
-                    Code = "InvalidArgument",
-                    Message = "For Directory buckets, prefixes must end with the delimiter",
-                    Resource = $"/{bucketName}"
-                };
-                Response.StatusCode = 400;
-                Response.ContentType = "application/xml";
-                return new ObjectResult(error);
-            }
-        }
-
         // Determine API version: listType=2 means ListObjectsV2, otherwise ListObjects V1
         var isV2 = listType == 2;
 
@@ -264,7 +228,27 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
             FetchOwner = fetchOwner
         };
 
-        var objects = await _objectStorage.ListObjectsAsync(bucketName, listRequest, cancellationToken);
+        var result = await _objectStorage.ListObjectsAsync(bucketName, listRequest, cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            // Handle validation errors from the facade (e.g., Directory bucket constraints)
+            var error = new S3Error
+            {
+                Code = result.ErrorCode!,
+                Message = result.ErrorMessage!,
+                Resource = $"/{bucketName}"
+            };
+            Response.StatusCode = 400;
+            Response.ContentType = "application/xml";
+            return new ObjectResult(error);
+        }
+
+        var objects = result.Value!;
+
+        // Get bucket information to check if it's a Directory bucket for response ordering
+        var bucket = await _bucketStorage.GetBucketAsync(bucketName, cancellationToken);
+        var isDirectoryBucket = bucket?.Type == BucketType.Directory;
 
         // For Directory buckets, objects should not be in lexicographical order
         if (isDirectoryBucket)
@@ -308,7 +292,7 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
         else
         {
             // ListObjects V1 response
-            var result = new ListBucketResult
+            var listResult = new ListBucketResult
             {
                 Name = bucketName,
                 Prefix = prefix,
@@ -330,7 +314,7 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
                     Prefix = cp
                 }).ToList()
             };
-            return Ok(result);
+            return Ok(listResult);
         }
     }
 
