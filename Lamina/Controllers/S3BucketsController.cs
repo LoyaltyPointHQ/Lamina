@@ -4,6 +4,7 @@ using Lamina.Services;
 using System.Xml.Serialization;
 using Lamina.Storage.Abstract;
 using Lamina.Configuration;
+using Lamina.Helpers;
 using Microsoft.Extensions.Options;
 
 namespace Lamina.Controllers;
@@ -191,6 +192,7 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
         [FromQuery(Name = "max-uploads")] int? maxUploads,
         [FromQuery(Name = "continuation-token")] string? continuationToken,
         [FromQuery(Name = "start-after")] string? startAfter,
+        [FromQuery(Name = "encoding-type")] string? encodingType,
         [FromQuery(Name = "fetch-owner")] bool fetchOwner = false,
         CancellationToken cancellationToken = default)
     {
@@ -216,6 +218,20 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
         // Determine API version: listType=2 means ListObjectsV2, otherwise ListObjects V1
         var isV2 = listType == 2;
 
+        // Validate encoding-type parameter
+        if (!string.IsNullOrEmpty(encodingType) && !encodingType.Equals("url", StringComparison.OrdinalIgnoreCase))
+        {
+            var error = new S3Error
+            {
+                Code = "InvalidArgument",
+                Message = $"Invalid Encoding Method specified in Request. The encoding-type parameter value '{encodingType}' is invalid. Valid value is 'url'.",
+                Resource = $"/{bucketName}"
+            };
+            Response.StatusCode = 400;
+            Response.ContentType = "application/xml";
+            return new ObjectResult(error);
+        }
+
         // Get objects from service
         var listRequest = new ListObjectsRequest
         {
@@ -225,7 +241,8 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
             ContinuationToken = continuationToken ?? marker,
             ListType = listType ?? 1,
             StartAfter = startAfter,
-            FetchOwner = fetchOwner
+            FetchOwner = fetchOwner,
+            EncodingType = encodingType
         };
 
         var result = await _objectStorage.ListObjectsAsync(bucketName, listRequest, cancellationToken);
@@ -266,16 +283,17 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
             var resultV2 = new ListBucketResultV2
             {
                 Name = bucketName,
-                Prefix = prefix,
-                StartAfter = startAfter,
+                Prefix = S3UrlEncoder.ConditionalEncode(prefix, encodingType),
+                StartAfter = S3UrlEncoder.ConditionalEncode(startAfter, encodingType),
                 ContinuationToken = continuationToken,
                 NextContinuationToken = objects.IsTruncated ? objects.NextContinuationToken : null,
                 KeyCount = objects.Contents.Count,
                 MaxKeys = maxKeys ?? 1000,
+                EncodingType = encodingType,
                 IsTruncated = objects.IsTruncated,
                 ContentsList = objects.Contents.Select(o => new Contents
                 {
-                    Key = o.Key,
+                    Key = S3UrlEncoder.ConditionalEncode(o.Key, encodingType) ?? o.Key,
                     LastModified = o.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
                     ETag = $"\"{o.ETag}\"",
                     Size = o.Size,
@@ -284,7 +302,7 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
                 }).ToList(),
                 CommonPrefixesList = objects.CommonPrefixes.Select(cp => new CommonPrefixes
                 {
-                    Prefix = cp
+                    Prefix = S3UrlEncoder.ConditionalEncode(cp, encodingType) ?? cp
                 }).ToList()
             };
             return Ok(resultV2);
@@ -295,14 +313,15 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
             var listResult = new ListBucketResult
             {
                 Name = bucketName,
-                Prefix = prefix,
-                Marker = marker,
+                Prefix = S3UrlEncoder.ConditionalEncode(prefix, encodingType),
+                Marker = S3UrlEncoder.ConditionalEncode(marker, encodingType),
                 MaxKeys = maxKeys ?? 1000,
+                EncodingType = encodingType,
                 IsTruncated = objects.IsTruncated,
-                NextMarker = objects.IsTruncated ? objects.NextContinuationToken : null,
+                NextMarker = objects.IsTruncated ? S3UrlEncoder.ConditionalEncode(objects.NextContinuationToken, encodingType) : null,
                 ContentsList = objects.Contents.Select(o => new Contents
                 {
-                    Key = o.Key,
+                    Key = S3UrlEncoder.ConditionalEncode(o.Key, encodingType) ?? o.Key,
                     LastModified = o.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
                     ETag = $"\"{o.ETag}\"",
                     Size = o.Size,
@@ -311,7 +330,7 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
                 }).ToList(),
                 CommonPrefixesList = objects.CommonPrefixes.Select(cp => new CommonPrefixes
                 {
-                    Prefix = cp
+                    Prefix = S3UrlEncoder.ConditionalEncode(cp, encodingType) ?? cp
                 }).ToList()
             };
             return Ok(listResult);

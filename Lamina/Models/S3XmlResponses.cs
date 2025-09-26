@@ -51,6 +51,9 @@ public class ListBucketResult
     [XmlElement("MaxKeys")]
     public int MaxKeys { get; set; }
 
+    [XmlElement("EncodingType")]
+    public string? EncodingType { get; set; }
+
     [XmlElement("IsTruncated")]
     public bool IsTruncated { get; set; }
 
@@ -109,6 +112,9 @@ public class ListBucketResultV2
 
     [XmlElement("MaxKeys")]
     public int MaxKeys { get; set; }
+
+    [XmlElement("EncodingType")]
+    public string? EncodingType { get; set; }
 
     [XmlElement("IsTruncated")]
     public bool IsTruncated { get; set; }

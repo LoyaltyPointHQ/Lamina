@@ -23,6 +23,9 @@ public class ListObjectsRequest
     public int ListType { get; set; } = 1; // 1 for ListObjects, 2 for ListObjectsV2
     public string? StartAfter { get; set; }
     public bool FetchOwner { get; set; } = false; // Only for V2, defaults to false
+    
+    // Encoding type for object keys (only "url" is supported)
+    public string? EncodingType { get; set; }
 }
 
 public class ListObjectsResponse
