@@ -143,64 +143,24 @@ public class ObjectStorageFacade : IObjectStorageFacade
             return StorageResult<ListObjectsResponse>.Error("InvalidArgument", validationError);
         }
 
-        // Only request extra if maxKeys is specified and less than 1000
-        var shouldCheckTruncation = request.MaxKeys > 0 && request.MaxKeys < 1000;
-        var requestLimit = shouldCheckTruncation ? effectiveMaxKeys + 1 : effectiveMaxKeys;
-
         var dataResult = await _dataStorage.ListDataKeysAsync(
             bucketName,
             bucketType,
             request.Prefix,
             request.Delimiter,
             request.ContinuationToken, // This could be marker or continuation-token
-            shouldCheckTruncation ? requestLimit : null, // Don't limit if not checking truncation
+            effectiveMaxKeys, // Don't limit if not checking truncation
             cancellationToken);
-
-        // Ensure dataResult is not null
-        if (dataResult == null)
-        {
-            dataResult = new ListDataResult();
-        }
 
         var response = new ListObjectsResponse
         {
             Prefix = request.Prefix,
             Delimiter = request.Delimiter,
             MaxKeys = effectiveMaxKeys,
-            IsTruncated = false,
-            NextContinuationToken = null,
+            IsTruncated = dataResult.IsTruncated,
+            NextContinuationToken = dataResult.StartAfter,
             CommonPrefixes = dataResult.CommonPrefixes ?? new List<string>()
         };
-
-        // Calculate total items (keys + common prefixes) for truncation detection
-        var totalItems = dataResult.Keys.Count + (dataResult.CommonPrefixes?.Count ?? 0);
-
-        // Check if we need to truncate:
-        // If we requested N+1 items and got exactly N+1 items, then there are more items available
-        // If we requested N+1 items and got N or fewer items, then that's all there are
-        if (shouldCheckTruncation && totalItems == effectiveMaxKeys + 1)
-        {
-            response.IsTruncated = true;
-
-            // Combine keys and common prefixes, sort them, and take the limit
-            var allItems = new List<(string item, bool isPrefix)>();
-            allItems.AddRange(dataResult.Keys.Select(k => (k, false)));
-            allItems.AddRange((dataResult.CommonPrefixes ?? new List<string>()).Select(p => (p, true)));
-
-            // Sort lexicographically
-            allItems.Sort((x, y) => string.Compare(x.item, y.item, StringComparison.Ordinal));
-
-            // Take only up to maxKeys and determine NextMarker
-            var limitedItems = allItems.Take(effectiveMaxKeys).ToList();
-            if (limitedItems.Count > 0)
-            {
-                response.NextContinuationToken = limitedItems.Last().item;
-            }
-
-            // Update the response with limited results
-            response.CommonPrefixes = limitedItems.Where(item => item.isPrefix).Select(item => item.item).ToList();
-            dataResult.Keys = limitedItems.Where(item => !item.isPrefix).Select(item => item.item).ToList();
-        }
 
         // Process keys to get object metadata
         foreach (var key in dataResult.Keys)

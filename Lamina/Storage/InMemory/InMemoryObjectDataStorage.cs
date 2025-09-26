@@ -31,7 +31,13 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         return (combinedData.Length, etag);
     }
 
-    public async Task<(long size, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, CancellationToken cancellationToken = default)
+    public async Task<(long size, string etag)> StoreDataAsync(
+        string bucketName,
+        string key,
+        PipeReader dataReader,
+        IChunkSignatureValidator? chunkValidator,
+        CancellationToken cancellationToken = default
+    )
     {
         // If no chunk validator is provided, use the standard method
         if (chunkValidator == null)
@@ -123,6 +129,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         {
             return Task.FromResult(bucketData.TryRemove(key, out _));
         }
+
         return Task.FromResult(false);
     }
 
@@ -138,10 +145,19 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         {
             return Task.FromResult<(long size, DateTime lastModified)?>((data.Length, DateTime.UtcNow));
         }
+
         return Task.FromResult<(long size, DateTime lastModified)?>(null);
     }
 
-    public Task<ListDataResult> ListDataKeysAsync(string bucketName, BucketType bucketType, string? prefix = null, string? delimiter = null, string? startAfter = null, int? maxKeys = null, CancellationToken cancellationToken = default)
+    public Task<ListDataResult> ListDataKeysAsync(
+        string bucketName,
+        BucketType bucketType,
+        string? prefix = null,
+        string? delimiter = null,
+        string? startAfter = null,
+        int maxKeys = 1000,
+        CancellationToken cancellationToken = default
+    )
     {
         var result = new ListDataResult();
 
@@ -171,10 +187,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         // If no delimiter, return keys with pagination
         if (string.IsNullOrEmpty(delimiter))
         {
-            if (maxKeys.HasValue)
-            {
-                keys = keys.Take(maxKeys.Value);
-            }
+            keys = keys.Take(maxKeys);
             result.Keys.AddRange(keys);
             return Task.FromResult(result);
         }
@@ -184,11 +197,10 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         var commonPrefixSet = new HashSet<string>();
         var resultKeys = new List<string>();
         var totalItems = 0;
-        var effectiveMaxKeys = maxKeys ?? int.MaxValue;
 
         foreach (var key in keys)
         {
-            if (totalItems >= effectiveMaxKeys)
+            if (totalItems >= maxKeys)
             {
                 break;
             }
@@ -232,7 +244,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
             var etag = ETagHelper.ComputeETag(data);
             return Task.FromResult<string?>(etag);
         }
+
         return Task.FromResult<string?>(null);
     }
-
 }

@@ -565,7 +565,7 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         Assert.Equal(3, result.ContentsList.Count);
         Assert.True(result.IsTruncated);
         Assert.NotNull(result.NextMarker);
-        Assert.Equal("file03.txt", result.NextMarker);
+        Assert.Equal("file04.txt", result.NextMarker);
 
         // Check keys are in lexicographic order
         Assert.Equal("file01.txt", result.ContentsList[0].Key);
@@ -586,7 +586,7 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         }
 
         // Request objects starting after file02.txt
-        var response = await Client.GetAsync($"/{bucketName}?marker=file02.txt");
+        var response = await Client.GetAsync($"/{bucketName}?marker=file03.txt");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
@@ -628,7 +628,7 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         Assert.NotNull(result1);
         Assert.Equal(2, result1.ContentsList.Count);
         Assert.True(result1.IsTruncated);
-        Assert.Equal("file02.txt", result1.NextMarker);
+        Assert.Equal("file03.txt", result1.NextMarker);
 
         // Second request: continue from where we left off
         var response2 = await Client.GetAsync($"/{bucketName}?max-keys=2&marker={result1.NextMarker}");
@@ -639,7 +639,7 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         Assert.NotNull(result2);
         Assert.Equal(2, result2.ContentsList.Count);
         Assert.True(result2.IsTruncated);
-        Assert.Equal("file04.txt", result2.NextMarker);
+        Assert.Equal("file05.txt", result2.NextMarker);
         Assert.Equal("file03.txt", result2.ContentsList[0].Key);
         Assert.Equal("file04.txt", result2.ContentsList[1].Key);
 
@@ -730,7 +730,7 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         }
 
         // Test continuation-token parameter (same behavior as marker)
-        var response = await Client.GetAsync($"/{bucketName}?continuation-token=item02.txt");
+        var response = await Client.GetAsync($"/{bucketName}?continuation-token=item03.txt");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 

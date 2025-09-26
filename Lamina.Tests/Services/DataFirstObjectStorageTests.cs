@@ -125,7 +125,7 @@ public class DataFirstObjectStorageTests
         var expectedEtag = ETagHelper.ComputeETag(testData);
 
         // Setup the new delimiter-aware method
-        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, It.IsAny<BucketType>(), null, null, null, null, default))
+        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, It.IsAny<BucketType>(), null, null, null, 1000, default))
             .ReturnsAsync(new ListDataResult
             {
                 Keys = new List<string> { "file-with-metadata.txt", "file-without-metadata.txt" },

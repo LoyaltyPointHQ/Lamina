@@ -24,7 +24,8 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         IOptions<FilesystemStorageSettings> settingsOptions,
         NetworkFileSystemHelper networkHelper,
         ILogger<FilesystemObjectDataStorage> logger,
-        IChunkedDataParser chunkedDataParser)
+        IChunkedDataParser chunkedDataParser
+    )
     {
         var settings = settingsOptions.Value;
         _dataDirectory = settings.DataDirectory;
@@ -43,7 +44,8 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         // Validate that the key doesn't conflict with temporary files or metadata directories
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            throw new InvalidOperationException($"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
+            throw new InvalidOperationException(
+                $"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
         }
 
         var dataPath = GetDataPath(bucketName, key);
@@ -84,11 +86,18 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             {
                 _logger.LogWarning(ex, "Failed to clean up temporary file: {TempPath}", tempPath);
             }
+
             throw;
         }
     }
 
-    public async Task<(long size, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, CancellationToken cancellationToken = default)
+    public async Task<(long size, string etag)> StoreDataAsync(
+        string bucketName,
+        string key,
+        PipeReader dataReader,
+        IChunkSignatureValidator? chunkValidator,
+        CancellationToken cancellationToken = default
+    )
     {
         // If no chunk validator is provided, use the standard method
         if (chunkValidator == null)
@@ -99,7 +108,8 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         // Validate that the key doesn't conflict with temporary files or metadata directories
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            throw new InvalidOperationException($"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
+            throw new InvalidOperationException(
+                $"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
         }
 
         var dataPath = GetDataPath(bucketName, key);
@@ -154,6 +164,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             {
                 _logger.LogWarning(ex, "Failed to clean up temporary file: {TempPath}", tempPath);
             }
+
             throw;
         }
     }
@@ -163,7 +174,8 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         // Validate that the key doesn't conflict with temporary files or metadata directories
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            throw new InvalidOperationException($"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
+            throw new InvalidOperationException(
+                $"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
         }
 
         var dataPath = GetDataPath(bucketName, key);
@@ -211,6 +223,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             {
                 _logger.LogWarning(ex, "Failed to clean up temporary file: {TempPath}", tempPath);
             }
+
             throw;
         }
     }
@@ -220,7 +233,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         // Validate that the key doesn't conflict with temporary files or metadata directories
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            return false;  // Return false to indicate object not found
+            return false; // Return false to indicate object not found
         }
 
         var dataPath = GetDataPath(bucketName, key);
@@ -234,7 +247,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         var fileName = Path.GetFileName(dataPath);
         if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
         {
-            return false;  // Temporary files should be invisible
+            return false; // Temporary files should be invisible
         }
 
         await using var fileStream = File.OpenRead(dataPath);
@@ -259,7 +272,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         // Validate that the key doesn't conflict with temporary files or metadata directories
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            return false;  // Cannot delete forbidden paths
+            return false; // Cannot delete forbidden paths
         }
 
         var dataPath = GetDataPath(bucketName, key);
@@ -272,14 +285,15 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         var fileName = Path.GetFileName(dataPath);
         if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
         {
-            return false;  // Temporary files should be invisible
+            return false; // Temporary files should be invisible
         }
 
         await _networkHelper.ExecuteWithRetryAsync(() =>
-        {
-            File.Delete(dataPath);
-            return Task.FromResult(true);
-        }, "DeleteFile");
+            {
+                File.Delete(dataPath);
+                return Task.FromResult(true);
+            },
+            "DeleteFile");
 
         // Clean up empty directories, but preserve the bucket directory
         try
@@ -322,7 +336,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         var fileName = Path.GetFileName(dataPath);
         if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
         {
-            return Task.FromResult(false);  // Temporary files should be invisible
+            return Task.FromResult(false); // Temporary files should be invisible
         }
 
         return Task.FromResult(true);
@@ -346,7 +360,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         var fileName = Path.GetFileName(dataPath);
         if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
         {
-            return Task.FromResult<(long size, DateTime lastModified)?>(null);  // Temporary files should be invisible
+            return Task.FromResult<(long size, DateTime lastModified)?>(null); // Temporary files should be invisible
         }
 
         var fileInfo = new FileInfo(dataPath);
@@ -354,7 +368,15 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
     }
 
 
-    public Task<ListDataResult> ListDataKeysAsync(string bucketName, BucketType bucketType, string? prefix = null, string? delimiter = null, string? startAfter = null, int? maxKeys = null, CancellationToken cancellationToken = default)
+    public Task<ListDataResult> ListDataKeysAsync(
+        string bucketName,
+        BucketType bucketType,
+        string? prefix = null,
+        string? delimiter = null,
+        string? startAfter = null,
+        int maxKeys = 1000,
+        CancellationToken cancellationToken = default
+    )
     {
         var result = new ListDataResult();
 
@@ -370,265 +392,134 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             return Task.FromResult(result);
         }
 
-        // Choose implementation based on bucket type
-        if (bucketType == BucketType.Directory)
+        var path = Path.Combine(_dataDirectory, bucketPath, (prefix ?? "").Replace('/', Path.DirectorySeparatorChar));
+        if (prefix is not null)
+            path = Path.GetDirectoryName(path)!;
+
+        if (!path.StartsWith(Path.Combine(_dataDirectory, bucketPath)))
+            throw new InvalidOperationException("Invalid prefix to bucket");
+
+        var allRecursive = delimiter != "/";
+        var needsFilter = delimiter is not null && delimiter != "/" || prefix?.EndsWith('/') == false;
+        var orderedLexically = bucketType switch
         {
-            // Directory buckets: Use filesystem enumeration order (no sorting)
-            return Task.FromResult(ListDataKeysForDirectoryBucket(bucketPath, bucketName, prefix, delimiter, startAfter, maxKeys));
-        }
-        else
-        {
-            // General purpose buckets: Maintain lexicographical order
-            return Task.FromResult(ListDataKeysForGeneralPurposeBucket(bucketPath, bucketName, prefix, delimiter, startAfter, maxKeys));
-        }
+            BucketType.GeneralPurpose => true,
+            BucketType.Directory => false,
+            _ => throw new ArgumentOutOfRangeException(nameof(bucketType), bucketType, null)
+        };
+
+        result = DoDirectoryTraversal(
+            path,
+            bucketName,
+            prefix,
+            delimiter,
+            allRecursive,
+            needsFilter,
+            orderedLexically,
+            startAfter,
+            maxKeys);
+
+        return Task.FromResult(result);
     }
 
-    private ListDataResult ListDataKeysForDirectoryBucket(string bucketPath, string bucketName, string? prefix, string? delimiter, string? startAfter, int? maxKeys)
+    private ListDataResult DoDirectoryTraversal(
+        string path,
+        string bucketName,
+        string? prefix,
+        string? delimiter,
+        bool allRecursive,
+        bool needsFilter,
+        bool orderedLexically,
+        string? startAfter,
+        int maxKeys
+    )
     {
         var result = new ListDataResult();
+        if (!Directory.Exists(path))
+            return result;
 
-        if (string.IsNullOrEmpty(delimiter))
+        var commonPrefixSet = new HashSet<string>();
+
+        foreach (var entryName in GetFilesystemEnumerator(path, orderedLexically, allRecursive)
+                     .SkipWhile(x => startAfter is not null && EntryNameToKey(path, x) != startAfter))
         {
-            // No delimiter - enumerate all files in filesystem order
-            var keys = EnumerateKeysForDirectoryBucketNoDelimiter(bucketPath, bucketName, prefix, startAfter, maxKeys);
-            result.Keys.AddRange(keys);
-        }
-        else
-        {
-            // With delimiter - enumerate with delimiter handling in filesystem order
-            var (keys, commonPrefixes) = EnumerateKeysForDirectoryBucketWithDelimiter(bucketPath, bucketName, prefix, delimiter, startAfter, maxKeys);
-            result.Keys.AddRange(keys);
-            result.CommonPrefixes.AddRange(commonPrefixes);
-        }
-
-        return result;
-    }
-
-    private ListDataResult ListDataKeysForGeneralPurposeBucket(string bucketPath, string bucketName, string? prefix, string? delimiter, string? startAfter, int? maxKeys)
-    {
-        var result = new ListDataResult();
-
-        if (string.IsNullOrEmpty(delimiter))
-        {
-            // No delimiter - use sorted enumeration for lexicographical order
-            var keys = EnumerateKeysForGeneralPurposeBucketNoDelimiter(bucketPath, bucketName, prefix, startAfter, maxKeys);
-            result.Keys.AddRange(keys);
-        }
-        else
-        {
-            // With delimiter - use sorted enumeration with delimiter handling
-            var (keys, commonPrefixes) = EnumerateKeysForGeneralPurposeBucketWithDelimiter(bucketPath, bucketName, prefix, delimiter, startAfter, maxKeys);
-            result.Keys.AddRange(keys);
-            result.CommonPrefixes.AddRange(commonPrefixes);
-        }
-
-        return result;
-    }
-
-    private IEnumerable<string> EnumerateKeysForDirectoryBucketNoDelimiter(string bucketPath, string bucketName, string? prefix, string? startAfter, int? maxKeys)
-    {
-        var count = 0;
-        var (startPath, _) = GetScanDirectoryAndFilter(bucketPath, prefix);
-
-        // Use lazy enumeration for Directory buckets - no sorting needed
-        foreach (var key in EnumerateAllKeysLazily(startPath, bucketName, prefix))
-        {
-            // Apply startAfter filter
-            if (!string.IsNullOrEmpty(startAfter) && string.Compare(key, startAfter, StringComparison.Ordinal) <= 0)
-            {
+            prefix ??= "";
+            if (IsEntryNameForbidden(entryName))
                 continue;
-            }
 
-            yield return key;
-            count++;
+            var key = EntryNameToKey(bucketName, entryName);
 
-            // Early termination for Directory buckets
-            if (maxKeys.HasValue && count >= maxKeys.Value)
-            {
-                yield break;
-            }
-        }
-    }
-
-    private (List<string> keys, List<string> commonPrefixes) EnumerateKeysForDirectoryBucketWithDelimiter(string bucketPath, string bucketName, string? prefix, string delimiter, string? startAfter, int? maxKeys)
-    {
-        // Use optimized single-directory scan for forward slash delimiter
-        if (delimiter == "/")
-        {
-            return ListDataKeysWithDelimiterOptimized(bucketPath, prefix, delimiter, startAfter, maxKeys, sortResults: false);
-        }
-
-        // Fall back to full enumeration for other delimiters (rare case)
-        var keys = new List<string>();
-        var commonPrefixes = new List<string>();
-        var count = 0;
-        var prefixLength = prefix?.Length ?? 0;
-        var (startPath, _) = GetScanDirectoryAndFilter(bucketPath, prefix);
-        var seenPrefixes = new HashSet<string>();
-
-        // Use lazy enumeration for Directory buckets - filesystem order
-        foreach (var key in EnumerateAllKeysLazily(startPath, bucketName, prefix))
-        {
-            // Apply startAfter filter early
-            if (!string.IsNullOrEmpty(startAfter) && string.Compare(key, startAfter, StringComparison.Ordinal) <= 0)
-            {
+            if (needsFilter && !string.IsNullOrEmpty(prefix) && !key.StartsWith(prefix))
                 continue;
-            }
 
-            // Check for delimiter after prefix
-            var remainingKey = key.Substring(prefixLength);
-            var delimiterIndex = remainingKey.IndexOf(delimiter, StringComparison.Ordinal);
-
-            if (delimiterIndex >= 0)
+            if (result.Keys.Count  + result.CommonPrefixes.Count + commonPrefixSet.Count >= maxKeys)
             {
-                // Found delimiter - this is a common prefix
-                var commonPrefix = key.Substring(0, prefixLength + delimiterIndex + delimiter.Length);
-
-                if (seenPrefixes.Add(commonPrefix)) // Only add if not seen before
-                {
-                    commonPrefixes.Add(commonPrefix);
-                    count++;
-                }
-            }
-            else
-            {
-                // No delimiter - direct key
-                keys.Add(key);
-                count++;
-            }
-
-            // Early termination
-            if (maxKeys.HasValue && count >= maxKeys.Value)
-            {
+                result.IsTruncated = true;
+                result.StartAfter = key;
                 break;
             }
-        }
 
-        return (keys, commonPrefixes);
-    }
-
-    private IEnumerable<string> EnumerateKeysForGeneralPurposeBucketNoDelimiter(string bucketPath, string bucketName, string? prefix, string? startAfter, int? maxKeys)
-    {
-        var sortedKeys = new SortedSet<string>(StringComparer.Ordinal);
-        var (startPath, _) = GetScanDirectoryAndFilter(bucketPath, prefix);
-
-        // Collect ALL keys into sorted set first for correct lexicographical order
-        foreach (var key in EnumerateAllKeysLazily(startPath, bucketName, prefix))
-        {
-            // Apply startAfter filter during enumeration for efficiency
-            if (!string.IsNullOrEmpty(startAfter) && string.Compare(key, startAfter, StringComparison.Ordinal) <= 0)
+            if (Directory.Exists(entryName))
             {
-                continue;
+                if (!allRecursive && delimiter == "/")
+                    result.CommonPrefixes.Add($"{key}/");
             }
-
-            sortedKeys.Add(key);
-        }
-
-        // Apply maxKeys limit AFTER sorting to ensure correct order
-        if (maxKeys.HasValue)
-        {
-            return sortedKeys.Take(maxKeys.Value);
-        }
-
-        return sortedKeys;
-    }
-
-    private (List<string> keys, List<string> commonPrefixes) EnumerateKeysForGeneralPurposeBucketWithDelimiter(string bucketPath, string bucketName, string? prefix, string delimiter, string? startAfter, int? maxKeys)
-    {
-        // Use optimized single-directory scan for forward slash delimiter
-        if (delimiter == "/")
-        {
-            return ListDataKeysWithDelimiterOptimized(bucketPath, prefix, delimiter, startAfter, maxKeys, sortResults: true);
-        }
-
-        // Fall back to full enumeration for other delimiters (rare case)
-        var allItems = new SortedSet<(string item, bool isPrefix)>(
-            Comparer<(string item, bool isPrefix)>.Create((x, y) =>
-                string.Compare(x.item, y.item, StringComparison.Ordinal)));
-
-        var prefixLength = prefix?.Length ?? 0;
-        var (startPath, _) = GetScanDirectoryAndFilter(bucketPath, prefix);
-
-        // Collect ALL items into sorted set first for correct lexicographical order
-        foreach (var key in EnumerateAllKeysLazily(startPath, bucketName, prefix))
-        {
-            // Apply startAfter filter early
-            if (!string.IsNullOrEmpty(startAfter) && string.Compare(key, startAfter, StringComparison.Ordinal) <= 0)
+            else if (delimiter != null && delimiter != "/")
             {
-                continue;
-            }
-
-            // Check for delimiter after prefix
-            var remainingKey = key.Substring(prefixLength);
-            var delimiterIndex = remainingKey.IndexOf(delimiter, StringComparison.Ordinal);
-
-            string itemToAdd;
-            bool isPrefix;
-
-            if (delimiterIndex >= 0)
-            {
-                // Found delimiter - add as common prefix
-                itemToAdd = key.Substring(0, prefixLength + delimiterIndex + delimiter.Length);
-                isPrefix = true;
+                var localKey = key[prefix.Length..];
+                if (localKey.Contains(delimiter))
+                    commonPrefixSet.Add($"{prefix}{localKey[..(localKey.IndexOf(delimiter, StringComparison.Ordinal)+1)]}");
+                else
+                    result.Keys.Add(key);    
             }
             else
-            {
-                // No delimiter - direct key
-                itemToAdd = key;
-                isPrefix = false;
-            }
-
-            allItems.Add((itemToAdd, isPrefix));
+                result.Keys.Add(key);
         }
 
-        // Apply maxKeys limit AFTER sorting to ensure correct order
-        var limitedItems = maxKeys.HasValue ? allItems.Take(maxKeys.Value) : allItems;
-        
-        // Separate into keys and common prefixes
-        var keys = limitedItems.Where(item => !item.isPrefix).Select(item => item.item).ToList();
-        var commonPrefixes = limitedItems.Where(item => item.isPrefix).Select(item => item.item).ToList();
+        if (commonPrefixSet.Count > 0)
+        {
+            result.CommonPrefixes.AddRange(commonPrefixSet);
+            if (orderedLexically)
+                result.CommonPrefixes = result.CommonPrefixes.OrderBy(x => x, StringComparer.Ordinal).ToList();
+        }
 
-        return (keys, commonPrefixes);
+        return result;
     }
 
-    private IEnumerable<string> EnumerateAllKeysLazily(string startPath, string bucketName, string? prefix)
+    private static IEnumerable<string> GetFilesystemEnumerator(string path, bool orderedLexically, bool allRecursive)
     {
-        if (!Directory.Exists(startPath))
+        if (allRecursive)
         {
-            yield break;
+            if (orderedLexically)
+                return Directory.EnumerateFileSystemEntries(path, "*", SearchOption.AllDirectories).OrderBy(x => x, StringComparer.Ordinal);
+
+            return Directory.EnumerateFileSystemEntries(path, "*", SearchOption.AllDirectories);
         }
 
-        // Use Directory.EnumerateFiles for lazy enumeration - much more memory efficient
-        foreach (var file in Directory.EnumerateFiles(startPath, "*", SearchOption.AllDirectories))
+        if (orderedLexically)
+            return Directory.EnumerateFileSystemEntries(path).OrderBy(x => x, StringComparer.Ordinal);
+
+        return Directory.EnumerateFileSystemEntries(path);
+    }
+
+    private string EntryNameToKey(string bucketName, string entryName) => Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), entryName);
+
+    private bool IsEntryNameForbidden(string entryName)
+    {
+        var fileName = Path.GetFileName(entryName);
+        // Skip temporary files
+        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
         {
-            var fileName = Path.GetFileName(file);
-
-            // Skip temporary files
-            if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
-            {
-                continue;
-            }
-
-            // Skip inline metadata directories
-            var relativePath = Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), file);
-            if (_metadataMode == MetadataStorageMode.Inline &&
-                (relativePath.StartsWith(_inlineMetadataDirectoryName + Path.DirectorySeparatorChar) ||
-                 relativePath.Contains(Path.DirectorySeparatorChar + _inlineMetadataDirectoryName + Path.DirectorySeparatorChar)))
-            {
-                continue;
-            }
-
-            // Convert to S3 key format
-            var key = relativePath.Replace(Path.DirectorySeparatorChar, '/');
-
-            // Apply prefix filter
-            if (!string.IsNullOrEmpty(prefix) && !key.StartsWith(prefix))
-            {
-                continue;
-            }
-
-            yield return key;
+            return true;
         }
+
+        // Skip inline metadata directories
+        if (FilesystemStorageHelper.IsMetadataPath(entryName, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return true;
+        }
+
+        return false;
     }
 
 
@@ -650,7 +541,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         var fileName = Path.GetFileName(dataPath);
         if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
         {
-            return null;  // Temporary files should be invisible
+            return null; // Temporary files should be invisible
         }
 
         // Use ETagHelper which efficiently computes hash without loading entire file into memory
@@ -661,176 +552,4 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
     {
         return Path.Combine(_dataDirectory, bucketName, key);
     }
-
-    /// <summary>
-    /// Gets the scan directory and filter prefix for enumerating filesystem entries based on an S3 prefix.
-    /// This method correctly handles prefix matching by always scanning the parent directory that contains
-    /// all potential matches, avoiding the bug where files matching the prefix but outside a directory
-    /// with the same name would be missed.
-    ///
-    /// For prefix "a/b/c", returns ("bucket/a/b", "c") to scan directory "a/b/" for entries starting with "c".
-    /// This catches both files like "a/b/cow.txt" and directories like "a/b/c/" or "a/b/coffee/".
-    /// </summary>
-    /// <param name="bucketPath">The base bucket directory path</param>
-    /// <param name="prefix">The S3 prefix (e.g., "a/b/c")</param>
-    /// <param name="delimiter">The delimiter character (typically "/")</param>
-    /// <returns>Tuple of (scanDirectory, filterPrefix)</returns>
-    private (string scanDirectory, string filterPrefix) GetScanDirectoryAndFilter(string bucketPath, string? prefix, string delimiter = "/")
-    {
-        if (string.IsNullOrEmpty(prefix))
-        {
-            // No prefix - scan bucket root, no filter
-            return (bucketPath, string.Empty);
-        }
-
-        var lastDelimiterIndex = prefix.LastIndexOf(delimiter, StringComparison.Ordinal);
-
-        if (lastDelimiterIndex == -1)
-        {
-            // No delimiter in prefix - scan bucket root, filter by entire prefix
-            return (bucketPath, prefix);
-        }
-
-        // Split at last delimiter
-        var parentPrefix = prefix.Substring(0, lastDelimiterIndex);  // "a/b" (without trailing delimiter)
-        var filterPrefix = prefix.Substring(lastDelimiterIndex + delimiter.Length);    // "c"
-
-        // Convert to filesystem path
-        var scanDirectory = string.IsNullOrEmpty(parentPrefix)
-            ? bucketPath
-            : Path.Combine(bucketPath, parentPrefix.Replace('/', Path.DirectorySeparatorChar));
-
-        return (scanDirectory, filterPrefix);
-    }
-
-    /// <summary>
-    /// Optimized listing method that performs single-directory scan when delimiter is "/".
-    /// This provides massive performance improvements for hierarchical data structures.
-    /// </summary>
-    /// <param name="bucketPath">The bucket directory path</param>
-    /// <param name="prefix">The S3 prefix to filter by</param>
-    /// <param name="delimiter">The delimiter (must be "/")</param>
-    /// <param name="startAfter">The continuation token</param>
-    /// <param name="maxKeys">Maximum number of keys to return</param>
-    /// <param name="sortResults">Whether to sort results (true for general-purpose, false for directory buckets)</param>
-    /// <returns>Lists of keys and common prefixes</returns>
-    private (List<string> keys, List<string> commonPrefixes) ListDataKeysWithDelimiterOptimized(
-        string bucketPath, string? prefix, string delimiter,
-        string? startAfter, int? maxKeys, bool sortResults)
-    {
-        var (parentDirectoryPath, filterPrefix) = GetScanDirectoryAndFilter(bucketPath, prefix, delimiter);
-
-        var keys = new List<string>();
-        var commonPrefixSet = new HashSet<string>();
-        var totalItems = 0;
-        var effectiveMaxKeys = maxKeys ?? int.MaxValue;
-
-        // Check if parent directory exists
-        if (!Directory.Exists(parentDirectoryPath))
-        {
-            return (keys, []);
-        }
-
-        // Get all entries in the parent directory (single-level scan only)
-        var allEntries = new List<(string name, bool isDirectory, string fullS3Key)>();
-
-        try
-        {
-            // Enumerate files and directories in the parent directory
-            foreach (var entry in Directory.EnumerateFileSystemEntries(parentDirectoryPath))
-            {
-                var entryName = Path.GetFileName(entry);
-
-                // Skip temporary files
-                if (FilesystemStorageHelper.IsTemporaryFile(entryName, _tempFilePrefix))
-                {
-                    continue;
-                }
-
-                // Skip inline metadata directories
-                if (_metadataMode == MetadataStorageMode.Inline && entryName == _inlineMetadataDirectoryName)
-                {
-                    continue;
-                }
-
-                // Apply prefix filter at directory level
-                if (!string.IsNullOrEmpty(filterPrefix) && !entryName.StartsWith(filterPrefix, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var isDirectory = Directory.Exists(entry);
-
-                // Construct full S3 key
-                string fullS3Key;
-                if (string.IsNullOrEmpty(prefix))
-                {
-                    fullS3Key = entryName;
-                }
-                else
-                {
-                    var parentS3Prefix = prefix.Substring(0, Math.Max(0, prefix.Length - filterPrefix.Length));
-                    fullS3Key = parentS3Prefix + entryName;
-                }
-
-                allEntries.Add((entryName, isDirectory, fullS3Key));
-            }
-        }
-        catch (DirectoryNotFoundException)
-        {
-            // Directory doesn't exist - return empty results
-            return (keys, new List<string>());
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Permission denied - return empty results
-            return (keys, new List<string>());
-        }
-
-        // Sort entries if required (general-purpose buckets need lexicographical order)
-        if (sortResults)
-        {
-            allEntries.Sort((a, b) => string.Compare(a.fullS3Key, b.fullS3Key, StringComparison.Ordinal));
-        }
-
-        // Process entries and apply pagination
-        foreach (var (_, isDirectory, fullS3Key) in allEntries)
-        {
-            // Apply startAfter filter
-            if (!string.IsNullOrEmpty(startAfter) && string.Compare(fullS3Key, startAfter, StringComparison.Ordinal) <= 0)
-            {
-                continue;
-            }
-
-            if (totalItems >= effectiveMaxKeys)
-            {
-                break;
-            }
-
-            if (isDirectory)
-            {
-                // Directory becomes a common prefix
-                var commonPrefix = fullS3Key + delimiter;
-                if (commonPrefixSet.Add(commonPrefix))
-                {
-                    totalItems++;
-                }
-            }
-            else
-            {
-                // File becomes a direct key
-                keys.Add(fullS3Key);
-                totalItems++;
-            }
-        }
-
-        var commonPrefixes = commonPrefixSet.ToList();
-        if (sortResults)
-        {
-            commonPrefixes.Sort(StringComparer.Ordinal);
-        }
-
-        return (keys, commonPrefixes);
-    }
-
 }
