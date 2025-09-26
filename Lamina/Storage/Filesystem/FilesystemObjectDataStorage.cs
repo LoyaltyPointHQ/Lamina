@@ -393,7 +393,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         }
 
         var path = Path.Combine(_dataDirectory, bucketPath, (prefix ?? "").Replace('/', Path.DirectorySeparatorChar));
-        if (prefix is not null)
+        if (!string.IsNullOrEmpty(prefix))
             path = Path.GetDirectoryName(path)!;
 
         if (!path.StartsWith(Path.Combine(_dataDirectory, bucketPath)))
@@ -441,7 +441,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         var commonPrefixSet = new HashSet<string>();
 
         foreach (var entryName in GetFilesystemEnumerator(path, orderedLexically, allRecursive)
-                     .SkipWhile(x => startAfter is not null && EntryNameToKey(path, x) != startAfter))
+                     .SkipWhile(x => !string.IsNullOrEmpty(startAfter) && EntryNameToKey(path, x) != startAfter))
         {
             prefix ??= "";
             if (IsEntryNameForbidden(entryName))
