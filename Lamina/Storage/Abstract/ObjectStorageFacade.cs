@@ -80,7 +80,9 @@ public class ObjectStorageFacade : IObjectStorageFacade
                     LastModified = dataPath.Value.lastModified,
                     ETag = etag,
                     ContentType = contentType,
-                    Metadata = new Dictionary<string, string>()
+                    Metadata = new Dictionary<string, string>(),
+                    OwnerId = request?.OwnerId,
+                    OwnerDisplayName = request?.OwnerDisplayName
                 };
             }
         }

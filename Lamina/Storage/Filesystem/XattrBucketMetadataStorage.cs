@@ -16,6 +16,8 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
     private const string TypeAttributeName = "type";
     private const string StorageClassAttributeName = "storage-class";
     private const string TagPrefix = "tag";
+    private const string OwnerIdAttributeName = "owner-id";
+    private const string OwnerDisplayNameAttributeName = "owner-display-name";
 
     public XattrBucketMetadataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
@@ -70,6 +72,22 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
                 }
             }
 
+            // Store owner information
+            if (!string.IsNullOrEmpty(request.OwnerId))
+            {
+                if (!_xattrHelper.SetAttribute(bucketPath, OwnerIdAttributeName, request.OwnerId))
+                {
+                    _logger.LogWarning("Failed to store owner ID attribute for bucket {BucketName}", bucketName);
+                }
+            }
+            if (!string.IsNullOrEmpty(request.OwnerDisplayName))
+            {
+                if (!_xattrHelper.SetAttribute(bucketPath, OwnerDisplayNameAttributeName, request.OwnerDisplayName))
+                {
+                    _logger.LogWarning("Failed to store owner display name attribute for bucket {BucketName}", bucketName);
+                }
+            }
+
             // Get directory creation time
             var dirInfo = new DirectoryInfo(bucketPath);
 
@@ -79,7 +97,9 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
                 CreationDate = dirInfo.CreationTimeUtc,
                 Type = bucketType,
                 StorageClass = request.StorageClass,
-                Tags = new Dictionary<string, string>()
+                Tags = new Dictionary<string, string>(),
+                OwnerId = request.OwnerId,
+                OwnerDisplayName = request.OwnerDisplayName
             };
         }
         catch (Exception ex)
@@ -118,6 +138,10 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
             // Get storage class from xattr
             var storageClass = _xattrHelper.GetAttribute(bucketPath, StorageClassAttributeName);
 
+            // Get owner information from xattr
+            var ownerId = _xattrHelper.GetAttribute(bucketPath, OwnerIdAttributeName);
+            var ownerDisplayName = _xattrHelper.GetAttribute(bucketPath, OwnerDisplayNameAttributeName);
+
             // Get tags from xattr
             var tags = GetBucketTags(bucketPath);
 
@@ -127,7 +151,9 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
                 CreationDate = dirInfo.CreationTimeUtc,
                 Type = bucketType,
                 StorageClass = storageClass,
-                Tags = tags
+                Tags = tags,
+                OwnerId = ownerId,
+                OwnerDisplayName = ownerDisplayName
             };
         }
         catch (Exception ex)

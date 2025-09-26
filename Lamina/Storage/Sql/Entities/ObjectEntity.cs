@@ -36,6 +36,12 @@ public class ObjectEntity
     [Column(TypeName = "TEXT")]
     public string MetadataJson { get; set; } = "{}";
 
+    [MaxLength(256)]
+    public string? OwnerId { get; set; }
+
+    [MaxLength(256)]
+    public string? OwnerDisplayName { get; set; }
+
     [NotMapped]
     public Dictionary<string, string> Metadata
     {
@@ -55,7 +61,9 @@ public class ObjectEntity
             LastModified = s3Object.LastModified,
             ETag = s3Object.ETag,
             ContentType = s3Object.ContentType,
-            Metadata = s3Object.Metadata
+            Metadata = s3Object.Metadata,
+            OwnerId = s3Object.OwnerId,
+            OwnerDisplayName = s3Object.OwnerDisplayName
         };
     }
 
@@ -69,7 +77,9 @@ public class ObjectEntity
             LastModified = objectInfo.LastModified,
             ETag = objectInfo.ETag,
             ContentType = objectInfo.ContentType,
-            Metadata = objectInfo.Metadata
+            Metadata = objectInfo.Metadata,
+            OwnerId = objectInfo.OwnerId,
+            OwnerDisplayName = objectInfo.OwnerDisplayName
         };
     }
 
@@ -82,7 +92,9 @@ public class ObjectEntity
             LastModified = LastModified,
             ETag = ETag,
             ContentType = ContentType,
-            Metadata = Metadata
+            Metadata = Metadata,
+            OwnerId = OwnerId,
+            OwnerDisplayName = OwnerDisplayName
         };
     }
 }

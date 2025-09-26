@@ -3,6 +3,7 @@ using System;
 using Lamina.Storage.Sql.Context;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Lamina.Migrations.Sqlite
 {
     [DbContext(typeof(LaminaDbContext))]
-    partial class LaminaDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250926174908_AddOwnerFieldsToEntities")]
+    partial class AddOwnerFieldsToEntities
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.0");

@@ -35,7 +35,9 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
             ETag = etag,
             ContentType = request?.ContentType ?? "application/octet-stream",
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),
-            Data = Array.Empty<byte>() // SQL storage doesn't store data directly
+            Data = Array.Empty<byte>(), // SQL storage doesn't store data directly
+            OwnerId = request?.OwnerId,
+            OwnerDisplayName = request?.OwnerDisplayName
         };
 
         var entity = ObjectEntity.FromS3Object(s3Object);
@@ -51,6 +53,8 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
             existing.ETag = etag;
             existing.ContentType = s3Object.ContentType;
             existing.Metadata = s3Object.Metadata;
+            existing.OwnerId = s3Object.OwnerId;
+            existing.OwnerDisplayName = s3Object.OwnerDisplayName;
         }
         else
         {

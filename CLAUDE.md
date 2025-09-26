@@ -12,6 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Storage Backends
 - **In-Memory**: Default, uses ConcurrentDictionary
 - **Filesystem**: Disk storage with configurable metadata modes
+- **SQL**: Entity Framework Core-based storage supporting PostgreSQL and SQLite
 
 ### Key Features
 - Complete S3 API operations (buckets, objects, multipart uploads)
@@ -66,18 +67,27 @@ helm install lamina ./chart \
   - **SeparateDirectory**: `DataDir/` + `MetadataDir/` (default)
   - **Inline**: Metadata in `.lamina-meta/` subdirectories
   - **Xattr**: POSIX extended attributes (Linux/macOS only)
+- **SQL**: Entity Framework Core storage
+  - **SQLite**: Lightweight file-based database
+  - **PostgreSQL**: Full-featured relational database
+  - Metadata stored in database, data still on filesystem
+  - Supports migrations for schema updates
 
 ## Configuration
 
 ### Storage
 ```json
 {
-  "StorageType": "InMemory",  // or "Filesystem"
+  "StorageType": "InMemory",  // or "Filesystem" or "Sql"
   "FilesystemStorage": {
     "DataDirectory": "/tmp/laminas/data",
     "MetadataDirectory": "/tmp/laminas/metadata",
     "MetadataMode": "SeparateDirectory",  // or "Inline" or "Xattr"
     "NetworkMode": "None"  // or "CIFS" or "NFS"
+  },
+  "ConnectionStrings": {
+    "LaminaDb": "Data Source=lamina.db"  // SQLite example
+    // "LaminaDb": "Host=localhost;Database=lamina;Username=user;Password=pass"  // PostgreSQL example
   }
 }
 ```

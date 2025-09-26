@@ -32,7 +32,9 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
             LastModified = DateTime.UtcNow,
             ETag = etag,
             ContentType = request?.ContentType ?? "application/octet-stream",
-            Metadata = request?.Metadata ?? new Dictionary<string, string>()
+            Metadata = request?.Metadata ?? new Dictionary<string, string>(),
+            OwnerId = request?.OwnerId,
+            OwnerDisplayName = request?.OwnerDisplayName
         };
 
         bucketMetadata[key] = s3Object;
@@ -51,7 +53,9 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
                 ETag = s3Object.ETag,
                 Size = s3Object.Size,
                 ContentType = s3Object.ContentType,
-                Metadata = s3Object.Metadata
+                Metadata = s3Object.Metadata,
+                OwnerId = s3Object.OwnerId,
+                OwnerDisplayName = s3Object.OwnerDisplayName
             });
         }
         return Task.FromResult<S3ObjectInfo?>(null);

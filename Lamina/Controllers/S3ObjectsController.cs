@@ -77,13 +77,18 @@ public class S3ObjectsController : ControllerBase
 
         var contentType = Request.ContentType;
 
+        // Get authenticated user from HttpContext if available
+        var authenticatedUser = HttpContext.Items["AuthenticatedUser"] as S3User;
+        
         var putRequest = new PutObjectRequest
         {
             Key = key,
             ContentType = contentType,
             Metadata = Request.Headers
                 .Where(h => h.Key.StartsWith("x-amz-meta-", StringComparison.OrdinalIgnoreCase))
-                .ToDictionary(h => h.Key.Substring(11), h => h.Value.ToString())
+                .ToDictionary(h => h.Key.Substring(11), h => h.Value.ToString()),
+            OwnerId = authenticatedUser?.AccessKeyId ?? "anonymous",
+            OwnerDisplayName = authenticatedUser?.Name ?? "anonymous"
         };
 
         // Use PipeReader from the request body

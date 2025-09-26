@@ -28,7 +28,9 @@ public class InMemoryBucketMetadataStorage : IBucketMetadataStorage
             CreationDate = DateTime.UtcNow,
             Type = request.Type ?? BucketType.GeneralPurpose,
             StorageClass = request.StorageClass,
-            Tags = new Dictionary<string, string>()
+            Tags = new Dictionary<string, string>(),
+            OwnerId = request.OwnerId,
+            OwnerDisplayName = request.OwnerDisplayName
         };
 
         _bucketMetadata[bucketName] = bucket;

@@ -18,6 +18,8 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
     private const string ETagAttributeName = "etag";
     private const string ContentTypeAttributeName = "content-type";
     private const string MetadataPrefix = "metadata";
+    private const string OwnerIdAttributeName = "owner-id";
+    private const string OwnerDisplayNameAttributeName = "owner-display-name";
 
     public XattrObjectMetadataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
@@ -70,6 +72,16 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
                 _logger.LogWarning("Failed to store Content-Type attribute for {Key} in bucket {BucketName}", key, bucketName);
             }
 
+            // Store owner information
+            if (!string.IsNullOrEmpty(request?.OwnerId))
+            {
+                _xattrHelper.SetAttribute(dataPath, OwnerIdAttributeName, request.OwnerId);
+            }
+            if (!string.IsNullOrEmpty(request?.OwnerDisplayName))
+            {
+                _xattrHelper.SetAttribute(dataPath, OwnerDisplayNameAttributeName, request.OwnerDisplayName);
+            }
+
             // Store user metadata
             if (request?.Metadata != null)
             {
@@ -87,7 +99,9 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
                 LastModified = fileInfo.LastWriteTimeUtc,
                 ETag = etag,
                 ContentType = contentType,
-                Metadata = request?.Metadata ?? new Dictionary<string, string>()
+                Metadata = request?.Metadata ?? new Dictionary<string, string>(),
+                OwnerId = request?.OwnerId,
+                OwnerDisplayName = request?.OwnerDisplayName
             };
         }
         catch (Exception ex)
@@ -118,6 +132,10 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
             // Get Content-Type from xattr
             var contentType = _xattrHelper.GetAttribute(dataPath, ContentTypeAttributeName) ?? "application/octet-stream";
 
+            // Get owner information from xattr
+            var ownerId = _xattrHelper.GetAttribute(dataPath, OwnerIdAttributeName);
+            var ownerDisplayName = _xattrHelper.GetAttribute(dataPath, OwnerDisplayNameAttributeName);
+
             // Get user metadata
             var userMetadata = GetUserMetadata(dataPath);
 
@@ -131,7 +149,9 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
                 ETag = etag,
                 Size = fileInfo.Length,
                 ContentType = contentType,
-                Metadata = userMetadata
+                Metadata = userMetadata,
+                OwnerId = ownerId,
+                OwnerDisplayName = ownerDisplayName
             });
         }
         catch (Exception ex)

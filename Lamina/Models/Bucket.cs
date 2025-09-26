@@ -13,12 +13,16 @@ public class Bucket
     public BucketType Type { get; set; } = BucketType.Directory;
     public string? StorageClass { get; set; }
     public Dictionary<string, string> Tags { get; set; } = new();
+    public string? OwnerId { get; set; }
+    public string? OwnerDisplayName { get; set; }
 }
 
 public class CreateBucketRequest
 {
     public BucketType? Type { get; set; }
     public string? StorageClass { get; set; }
+    public string? OwnerId { get; set; }
+    public string? OwnerDisplayName { get; set; }
 }
 
 public class UpdateBucketRequest

@@ -65,7 +65,9 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             BucketName = bucketName,
             ETag = etag,
             ContentType = request?.ContentType ?? "application/octet-stream",
-            Metadata = request?.Metadata ?? new Dictionary<string, string>()
+            Metadata = request?.Metadata ?? new Dictionary<string, string>(),
+            OwnerId = request?.OwnerId,
+            OwnerDisplayName = request?.OwnerDisplayName
         };
 
         var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
@@ -84,7 +86,9 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             LastModified = fileInfo.LastWriteTimeUtc,
             ETag = etag,
             ContentType = metadata.ContentType,
-            Metadata = metadata.Metadata
+            Metadata = metadata.Metadata,
+            OwnerId = metadata.OwnerId,
+            OwnerDisplayName = metadata.OwnerDisplayName
         };
     }
 
@@ -129,7 +133,9 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             ETag = metadata.ETag,
             Size = fileInfo.Length,
             ContentType = metadata.ContentType,
-            Metadata = metadata.Metadata
+            Metadata = metadata.Metadata,
+            OwnerId = metadata.OwnerId,
+            OwnerDisplayName = metadata.OwnerDisplayName
         };
     }
 
@@ -360,5 +366,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         public required string ETag { get; set; }
         public string ContentType { get; set; } = "application/octet-stream";
         public Dictionary<string, string> Metadata { get; set; } = new();
+        public string? OwnerId { get; set; }
+        public string? OwnerDisplayName { get; set; }
     }
 }

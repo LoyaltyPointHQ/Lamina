@@ -57,6 +57,8 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
         public BucketType Type { get; set; } = BucketType.GeneralPurpose;
         public string? StorageClass { get; set; }
         public Dictionary<string, string>? Tags { get; set; }
+        public string? OwnerId { get; set; }
+        public string? OwnerDisplayName { get; set; }
     }
 
     public async Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest request, CancellationToken cancellationToken = default)
@@ -75,7 +77,9 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
             CreationDate = dirInfo.CreationTimeUtc,
             Type = request.Type ?? BucketType.GeneralPurpose,
             StorageClass = request.StorageClass,
-            Tags = new Dictionary<string, string>()
+            Tags = new Dictionary<string, string>(),
+            OwnerId = request.OwnerId,
+            OwnerDisplayName = request.OwnerDisplayName
         };
 
         await SaveBucketMetadataAsync(bucket, cancellationToken);
@@ -111,6 +115,8 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
                 bucket.Type = metadata.Type;
                 bucket.StorageClass = metadata.StorageClass;
                 bucket.Tags = metadata.Tags ?? new Dictionary<string, string>();
+                bucket.OwnerId = metadata.OwnerId;
+                bucket.OwnerDisplayName = metadata.OwnerDisplayName;
             }
         }
 
@@ -175,7 +181,9 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
             {
                 Type = bucket.Type,
                 StorageClass = bucket.StorageClass,
-                Tags = bucket.Tags
+                Tags = bucket.Tags,
+                OwnerId = bucket.OwnerId,
+                OwnerDisplayName = bucket.OwnerDisplayName
             };
 
             var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });

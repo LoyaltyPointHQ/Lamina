@@ -57,6 +57,11 @@ public class S3BucketsController : ControllerBase
 
         // Parse bucket configuration from request body or headers
         var createRequest = ParseCreateBucketRequest(cancellationToken);
+        
+        // Get authenticated user from HttpContext if available
+        var authenticatedUser = HttpContext.Items["AuthenticatedUser"] as S3User;
+        createRequest.OwnerId = authenticatedUser?.AccessKeyId ?? "anonymous";
+        createRequest.OwnerDisplayName = authenticatedUser?.Name ?? "anonymous";
 
         var bucket = await _bucketStorage.CreateBucketAsync(bucketName, createRequest, cancellationToken);
         if (bucket == null)
@@ -298,7 +303,7 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
                     ETag = $"\"{o.ETag}\"",
                     Size = o.Size,
                     StorageClass = "STANDARD",
-                    Owner = fetchOwner ? new Owner() : null  // Only include owner if requested in V2
+                    Owner = fetchOwner && o.OwnerId != null ? new Owner(o.OwnerId, o.OwnerDisplayName ?? o.OwnerId) : null  // Only include owner if requested in V2
                 }).ToList(),
                 CommonPrefixesList = objects.CommonPrefixes.Select(cp => new CommonPrefixes
                 {
@@ -326,7 +331,7 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
                     ETag = $"\"{o.ETag}\"",
                     Size = o.Size,
                     StorageClass = "STANDARD",
-                    Owner = new Owner()  // Always include owner in V1
+                    Owner = new Owner(o.OwnerId ?? "anonymous", o.OwnerDisplayName ?? "anonymous")  // Always include owner in V1
                 }).ToList(),
                 CommonPrefixesList = objects.CommonPrefixes.Select(cp => new CommonPrefixes
                 {

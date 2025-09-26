@@ -24,6 +24,12 @@ public class BucketEntity
     [Column(TypeName = "TEXT")]
     public string TagsJson { get; set; } = "{}";
 
+    [MaxLength(256)]
+    public string? OwnerId { get; set; }
+
+    [MaxLength(256)]
+    public string? OwnerDisplayName { get; set; }
+
     [NotMapped]
     public Dictionary<string, string> Tags
     {
@@ -48,7 +54,9 @@ public class BucketEntity
             CreationDate = bucket.CreationDate,
             BucketType = bucket.Type,
             StorageClass = bucket.StorageClass,
-            Tags = bucket.Tags
+            Tags = bucket.Tags,
+            OwnerId = bucket.OwnerId,
+            OwnerDisplayName = bucket.OwnerDisplayName
         };
     }
 
@@ -60,7 +68,9 @@ public class BucketEntity
             CreationDate = CreationDate,
             Type = BucketType,
             StorageClass = StorageClass,
-            Tags = Tags
+            Tags = Tags,
+            OwnerId = OwnerId,
+            OwnerDisplayName = OwnerDisplayName
         };
     }
 }

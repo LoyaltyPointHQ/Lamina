@@ -26,7 +26,9 @@ public class SqlBucketMetadataStorage : IBucketMetadataStorage
             CreationDate = DateTime.UtcNow,
             Type = request.Type ?? BucketType.Directory,
             StorageClass = request.StorageClass,
-            Tags = new Dictionary<string, string>()
+            Tags = new Dictionary<string, string>(),
+            OwnerId = request.OwnerId,
+            OwnerDisplayName = request.OwnerDisplayName
         };
 
         var entity = BucketEntity.FromBucket(bucket);

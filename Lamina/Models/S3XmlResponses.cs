@@ -17,10 +17,18 @@ public class ListAllMyBucketsResult
 public class Owner
 {
     [XmlElement("ID")]
-    public string ID { get; set; } = "02d6176db174dc93cb1b899f7c6078f08654445fe8cf1b6ce98d8855f66bdbf4";
+    public string ID { get; set; } = "anonymous";
 
     [XmlElement("DisplayName")]
-    public string DisplayName { get; set; } = "minio";
+    public string DisplayName { get; set; } = "anonymous";
+    
+    public Owner() { }
+    
+    public Owner(string id, string displayName)
+    {
+        ID = id ?? "anonymous";
+        DisplayName = displayName ?? "anonymous";
+    }
 }
 
 [XmlRoot("Bucket")]
