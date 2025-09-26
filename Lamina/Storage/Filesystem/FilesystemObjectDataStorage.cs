@@ -378,18 +378,38 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         CancellationToken cancellationToken = default
     )
     {
-        var result = new ListDataResult();
+        var validationResult = ValidateAndPreparePath(bucketName, prefix);
+        if (!validationResult.IsValid)
+        {
+            return Task.FromResult(new ListDataResult());
+        }
 
+        var config = CreateTraversalConfiguration(bucketType, prefix, delimiter);
+        
+        var result = DoDirectoryTraversal(
+            validationResult.Path,
+            bucketName,
+            prefix,
+            delimiter,
+            config,
+            startAfter,
+            maxKeys);
+
+        return Task.FromResult(result);
+    }
+
+    private (bool IsValid, string Path) ValidateAndPreparePath(string bucketName, string? prefix)
+    {
         // Validate bucket name
         if (FilesystemStorageHelper.IsKeyForbidden(bucketName, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            return Task.FromResult(result);
+            return (false, string.Empty);
         }
 
         var bucketPath = Path.Combine(_dataDirectory, bucketName);
         if (!Directory.Exists(bucketPath))
         {
-            return Task.FromResult(result);
+            return (false, string.Empty);
         }
 
         var path = Path.Combine(_dataDirectory, bucketPath, (prefix ?? "").Replace('/', Path.DirectorySeparatorChar));
@@ -399,27 +419,29 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         if (!path.StartsWith(Path.Combine(_dataDirectory, bucketPath)))
             throw new InvalidOperationException("Invalid prefix to bucket");
 
-        var allRecursive = delimiter != "/";
-        var needsFilter = delimiter is not null && delimiter != "/" || prefix?.EndsWith('/') == false;
-        var orderedLexically = bucketType switch
+        return (true, path);
+    }
+
+    private TraversalConfiguration CreateTraversalConfiguration(BucketType bucketType, string? prefix, string? delimiter)
+    {
+        return new TraversalConfiguration
         {
-            BucketType.GeneralPurpose => true,
-            BucketType.Directory => false,
-            _ => throw new ArgumentOutOfRangeException(nameof(bucketType), bucketType, null)
+            AllRecursive = delimiter != "/",
+            NeedsFilter = delimiter is not null && delimiter != "/" || prefix?.EndsWith('/') == false,
+            OrderedLexically = bucketType switch
+            {
+                BucketType.GeneralPurpose => true,
+                BucketType.Directory => false,
+                _ => throw new ArgumentOutOfRangeException(nameof(bucketType), bucketType, null)
+            }
         };
+    }
 
-        result = DoDirectoryTraversal(
-            path,
-            bucketName,
-            prefix,
-            delimiter,
-            allRecursive,
-            needsFilter,
-            orderedLexically,
-            startAfter,
-            maxKeys);
-
-        return Task.FromResult(result);
+    private class TraversalConfiguration
+    {
+        public bool AllRecursive { get; set; }
+        public bool NeedsFilter { get; set; }
+        public bool OrderedLexically { get; set; }
     }
 
     private ListDataResult DoDirectoryTraversal(
@@ -427,9 +449,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         string bucketName,
         string? prefix,
         string? delimiter,
-        bool allRecursive,
-        bool needsFilter,
-        bool orderedLexically,
+        TraversalConfiguration config,
         string? startAfter,
         int maxKeys
     )
@@ -439,51 +459,128 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             return result;
 
         var commonPrefixSet = new HashSet<string>();
+        var traversalState = new TraversalState(result, commonPrefixSet, maxKeys);
 
-        foreach (var entryName in GetFilesystemEnumerator(path, orderedLexically, allRecursive)
+        foreach (var entryName in GetFilesystemEnumerator(path, config.OrderedLexically, config.AllRecursive)
                      .SkipWhile(x => !string.IsNullOrEmpty(startAfter) && EntryNameToKey(path, x) != startAfter))
         {
             prefix ??= "";
-            if (IsEntryNameForbidden(entryName))
+            
+            if (ShouldSkipEntry(entryName, bucketName, prefix, config.NeedsFilter, out var key))
                 continue;
 
-            var key = EntryNameToKey(bucketName, entryName);
-
-            if (needsFilter && !string.IsNullOrEmpty(prefix) && !key.StartsWith(prefix))
-                continue;
-
-            if (result.Keys.Count  + result.CommonPrefixes.Count + commonPrefixSet.Count >= maxKeys)
+            if (HasReachedLimit(traversalState))
             {
                 result.IsTruncated = true;
                 result.StartAfter = key;
                 break;
             }
 
-            if (Directory.Exists(entryName))
-            {
-                if (!allRecursive && delimiter == "/")
-                    result.CommonPrefixes.Add($"{key}/");
-            }
-            else if (delimiter != null && delimiter != "/")
-            {
-                var localKey = key[prefix.Length..];
-                if (localKey.Contains(delimiter))
-                    commonPrefixSet.Add($"{prefix}{localKey[..(localKey.IndexOf(delimiter, StringComparison.Ordinal)+1)]}");
-                else
-                    result.Keys.Add(key);    
-            }
-            else
-                result.Keys.Add(key);
+            ProcessFileSystemEntry(entryName, key, prefix, delimiter, config.AllRecursive, traversalState);
         }
 
-        if (commonPrefixSet.Count > 0)
-        {
-            result.CommonPrefixes.AddRange(commonPrefixSet);
-            if (orderedLexically)
-                result.CommonPrefixes = result.CommonPrefixes.OrderBy(x => x, StringComparer.Ordinal).ToList();
-        }
-
+        FinalizeCommonPrefixes(traversalState, config.OrderedLexically);
         return result;
+    }
+
+    private class TraversalState
+    {
+        public ListDataResult Result { get; }
+        public HashSet<string> CommonPrefixSet { get; }
+        public int MaxKeys { get; }
+
+        public TraversalState(ListDataResult result, HashSet<string> commonPrefixSet, int maxKeys)
+        {
+            Result = result;
+            CommonPrefixSet = commonPrefixSet;
+            MaxKeys = maxKeys;
+        }
+    }
+
+    private bool ShouldSkipEntry(string entryName, string bucketName, string prefix, bool needsFilter, out string key)
+    {
+        key = string.Empty;
+        
+        if (IsEntryNameForbidden(entryName))
+            return true;
+
+        key = EntryNameToKey(bucketName, entryName);
+
+        if (needsFilter && !string.IsNullOrEmpty(prefix) && !key.StartsWith(prefix))
+            return true;
+
+        return false;
+    }
+
+    private bool HasReachedLimit(TraversalState state)
+    {
+        return state.Result.Keys.Count + state.Result.CommonPrefixes.Count + state.CommonPrefixSet.Count >= state.MaxKeys;
+    }
+
+    private void ProcessFileSystemEntry(
+        string entryName, 
+        string key, 
+        string prefix, 
+        string? delimiter, 
+        bool allRecursive,
+        TraversalState state)
+    {
+        if (Directory.Exists(entryName))
+        {
+            ProcessDirectory(key, delimiter, allRecursive, state);
+        }
+        else
+        {
+            ProcessFile(key, prefix, delimiter, state);
+        }
+    }
+
+    private void ProcessDirectory(string key, string? delimiter, bool allRecursive, TraversalState state)
+    {
+        if (!allRecursive && delimiter == "/")
+        {
+            state.Result.CommonPrefixes.Add($"{key}/");
+        }
+    }
+
+    private void ProcessFile(string key, string prefix, string? delimiter, TraversalState state)
+    {
+        if (delimiter != null && delimiter != "/")
+        {
+            HandleDelimiterGrouping(key, prefix, delimiter, state);
+        }
+        else
+        {
+            state.Result.Keys.Add(key);
+        }
+    }
+
+    private void HandleDelimiterGrouping(string key, string prefix, string delimiter, TraversalState state)
+    {
+        var localKey = key[prefix.Length..];
+        if (localKey.Contains(delimiter))
+        {
+            var commonPrefix = $"{prefix}{localKey[..(localKey.IndexOf(delimiter, StringComparison.Ordinal) + 1)]}";
+            state.CommonPrefixSet.Add(commonPrefix);
+        }
+        else
+        {
+            state.Result.Keys.Add(key);
+        }
+    }
+
+    private void FinalizeCommonPrefixes(TraversalState state, bool orderedLexically)
+    {
+        if (state.CommonPrefixSet.Count > 0)
+        {
+            state.Result.CommonPrefixes.AddRange(state.CommonPrefixSet);
+            if (orderedLexically)
+            {
+                state.Result.CommonPrefixes = state.Result.CommonPrefixes
+                    .OrderBy(x => x, StringComparer.Ordinal)
+                    .ToList();
+            }
+        }
     }
 
     private static IEnumerable<string> GetFilesystemEnumerator(string path, bool orderedLexically, bool allRecursive)
