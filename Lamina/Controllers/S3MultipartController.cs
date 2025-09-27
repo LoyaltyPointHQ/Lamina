@@ -29,6 +29,85 @@ public class S3MultipartController : S3ControllerBase
         _logger = logger;
     }
 
+    private static XmlDeserializationResult TryDeserializeCompleteRequest(string xmlContent)
+    {
+        // Try without namespace first (for compatibility with most clients)
+        if (TryDeserializeWithoutNamespace(xmlContent, out var partsNoNs))
+        {
+            return XmlDeserializationResult.Success(partsNoNs);
+        }
+
+        // Try with S3 namespace
+        if (TryDeserializeWithNamespace(xmlContent, out var partsWithNs))
+        {
+            return XmlDeserializationResult.Success(partsWithNs);
+        }
+
+        return XmlDeserializationResult.Error("The XML you provided was not well-formed or did not validate against our published schema.");
+    }
+
+    private static bool TryDeserializeWithoutNamespace(string xmlContent, out List<CompletedPart> parts)
+    {
+        parts = new List<CompletedPart>();
+        try
+        {
+            var serializer = new XmlSerializer(typeof(CompleteMultipartUploadXmlNoNamespace));
+            using var stringReader = new StringReader(xmlContent);
+            var completeRequest = serializer.Deserialize(stringReader) as CompleteMultipartUploadXmlNoNamespace;
+
+            if (completeRequest?.Parts != null)
+            {
+                parts = completeRequest.Parts.Select(p => new CompletedPart
+                {
+                    PartNumber = p.PartNumber,
+                    ETag = p.ETag,
+                    ChecksumCRC32 = p.ChecksumCRC32,
+                    ChecksumCRC32C = p.ChecksumCRC32C,
+                    ChecksumCRC64NVME = p.ChecksumCRC64NVME,
+                    ChecksumSHA1 = p.ChecksumSHA1,
+                    ChecksumSHA256 = p.ChecksumSHA256
+                }).ToList();
+                return parts.Count > 0;
+            }
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryDeserializeWithNamespace(string xmlContent, out List<CompletedPart> parts)
+    {
+        parts = new List<CompletedPart>();
+        try
+        {
+            var serializer = new XmlSerializer(typeof(CompleteMultipartUploadXml));
+            using var stringReader = new StringReader(xmlContent);
+            var completeRequest = serializer.Deserialize(stringReader) as CompleteMultipartUploadXml;
+
+            if (completeRequest?.Parts != null)
+            {
+                parts = completeRequest.Parts.Select(p => new CompletedPart
+                {
+                    PartNumber = p.PartNumber,
+                    ETag = p.ETag,
+                    ChecksumCRC32 = p.ChecksumCRC32,
+                    ChecksumCRC32C = p.ChecksumCRC32C,
+                    ChecksumCRC64NVME = p.ChecksumCRC64NVME,
+                    ChecksumSHA1 = p.ChecksumSHA1,
+                    ChecksumSHA256 = p.ChecksumSHA256
+                }).ToList();
+                return parts.Count > 0;
+            }
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     [HttpGet("")]
     [RequireQueryParameter("uploads")]
     public async Task<IActionResult> ListMultipartUploads(
@@ -172,58 +251,16 @@ public class S3MultipartController : S3ControllerBase
         try
         {
             // Read the XML request body using PipeReader
-            List<CompletedPart> parts = new();
-
             var xmlContent = await PipeReaderHelper.ReadAllTextAsync(Request.BodyReader, false, cancellationToken);
 
-            // Try to deserialize - first without namespace (most common), then with namespace
-            try
+            // Deserialize XML without exception-driven control flow
+            var deserializationResult = TryDeserializeCompleteRequest(xmlContent);
+            if (!deserializationResult.IsSuccess)
             {
-                // Try without namespace first (for compatibility with most clients)
-                var serializerNoNamespace = new XmlSerializer(typeof(CompleteMultipartUploadXmlNoNamespace));
-                using var stringReader = new StringReader(xmlContent);
-                var completeRequestNoNs = serializerNoNamespace.Deserialize(stringReader) as CompleteMultipartUploadXmlNoNamespace;
-
-                if (completeRequestNoNs != null && completeRequestNoNs.Parts != null)
-                {
-                    parts = completeRequestNoNs.Parts.Select(p => new CompletedPart
-                    {
-                        PartNumber = p.PartNumber,
-                        ETag = p.ETag,
-                        ChecksumCRC32 = p.ChecksumCRC32,
-                        ChecksumCRC32C = p.ChecksumCRC32C,
-                        ChecksumCRC64NVME = p.ChecksumCRC64NVME,
-                        ChecksumSHA1 = p.ChecksumSHA1,
-                        ChecksumSHA256 = p.ChecksumSHA256
-                    }).ToList();
-                }
-            }
-            catch
-            {
-                // If that fails, try with S3 namespace
-                var serializerWithNamespace = new XmlSerializer(typeof(CompleteMultipartUploadXml));
-                using var stringReader = new StringReader(xmlContent);
-                var completeRequestWithNs = serializerWithNamespace.Deserialize(stringReader) as CompleteMultipartUploadXml;
-
-                if (completeRequestWithNs != null && completeRequestWithNs.Parts != null)
-                {
-                    parts = completeRequestWithNs.Parts.Select(p => new CompletedPart
-                    {
-                        PartNumber = p.PartNumber,
-                        ETag = p.ETag,
-                        ChecksumCRC32 = p.ChecksumCRC32,
-                        ChecksumCRC32C = p.ChecksumCRC32C,
-                        ChecksumCRC64NVME = p.ChecksumCRC64NVME,
-                        ChecksumSHA1 = p.ChecksumSHA1,
-                        ChecksumSHA256 = p.ChecksumSHA256
-                    }).ToList();
-                }
+                return S3Error("MalformedXML", deserializationResult.ErrorMessage!, $"{bucketName}/{key}", 400);
             }
 
-            if (parts.Count == 0)
-            {
-                return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", $"{bucketName}/{key}", 400);
-            }
+            var parts = deserializationResult.Parts!;
 
             // Phase 2 Validation: Part number ordering (parts must be consecutive starting from 1)
             // Check if the provided parts are already in ascending order
@@ -257,7 +294,20 @@ public class S3MultipartController : S3ControllerBase
                 Parts = parts
             };
 
-            var completeResponse = await _multipartStorage.CompleteMultipartUploadAsync(bucketName, key, completeRequest, cancellationToken);
+            var storageResult = await _multipartStorage.CompleteMultipartUploadAsync(bucketName, key, completeRequest, cancellationToken);
+
+            if (!storageResult.IsSuccess)
+            {
+                return storageResult.ErrorCode switch
+                {
+                    "NoSuchUpload" => S3Error("NoSuchUpload", storageResult.ErrorMessage!, $"{bucketName}/{key}", 404),
+                    "InvalidPart" => S3Error("InvalidPart", storageResult.ErrorMessage!, $"{bucketName}/{key}", 400),
+                    "EntityTooSmall" => S3Error("EntityTooSmall", storageResult.ErrorMessage!, $"{bucketName}/{key}", 400),
+                    _ => S3Error("InternalError", storageResult.ErrorMessage!, $"{bucketName}/{key}", 500)
+                };
+            }
+
+            var completeResponse = storageResult.Value!;
 
             var result = new CompleteMultipartUploadResult
             {
@@ -292,22 +342,10 @@ public class S3MultipartController : S3ControllerBase
             Response.ContentType = "application/xml";
             return Ok(result);
         }
-        catch (InvalidOperationException ex)
+        catch (Exception ex)
         {
-            // Parse custom error codes from the exception message
-            if (ex.Message.StartsWith("InvalidPart:"))
-            {
-                return S3Error("InvalidPart", ex.Message.Substring("InvalidPart:".Length), $"{bucketName}/{key}", 400);
-            }
-            else if (ex.Message.StartsWith("EntityTooSmall:"))
-            {
-                return S3Error("EntityTooSmall", ex.Message.Substring("EntityTooSmall:".Length), $"{bucketName}/{key}", 400);
-            }
-            else
-            {
-                // Default to NoSuchUpload for other InvalidOperationExceptions
-                return S3Error("NoSuchUpload", ex.Message, $"{bucketName}/{key}", 404);
-            }
+            _logger.LogError(ex, "Unexpected error completing multipart upload {UploadId} for key {Key} in bucket {BucketName}", uploadId, key, bucketName);
+            return S3Error("InternalError", "We encountered an internal error. Please try again.", $"{bucketName}/{key}", 500);
         }
     }
 

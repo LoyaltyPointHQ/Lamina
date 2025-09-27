@@ -91,12 +91,12 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         return result;
     }
 
-    public async Task<CompleteMultipartUploadResponse> CompleteMultipartUploadAsync(string bucketName, string key, CompleteMultipartUploadRequest request, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<CompleteMultipartUploadResponse>> CompleteMultipartUploadAsync(string bucketName, string key, CompleteMultipartUploadRequest request, CancellationToken cancellationToken = default)
     {
         var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, request.UploadId, cancellationToken);
         if (upload == null)
         {
-            throw new InvalidOperationException($"Upload '{request.UploadId}' not found");
+            return StorageResult<CompleteMultipartUploadResponse>.Error("NoSuchUpload", $"Upload '{request.UploadId}' not found");
         }
 
         // Phase 3 & 4 Validation: Part size and ETag validation
@@ -110,13 +110,13 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             // Check if part exists in storage
             if (!storedPartsDict.TryGetValue(requestedPart.PartNumber, out var storedPart))
             {
-                throw new InvalidOperationException($"InvalidPart:Part number {requestedPart.PartNumber} does not exist");
+                return StorageResult<CompleteMultipartUploadResponse>.Error("InvalidPart", $"Part number {requestedPart.PartNumber} does not exist");
             }
 
             // ETag validation
             if (!string.Equals(requestedPart.ETag.Trim('"'), storedPart.ETag.Trim('"'), StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException($"InvalidPart:Part number {requestedPart.PartNumber} ETag does not match. Expected: {storedPart.ETag}, Got: {requestedPart.ETag}");
+                return StorageResult<CompleteMultipartUploadResponse>.Error("InvalidPart", $"Part number {requestedPart.PartNumber} ETag does not match. Expected: {storedPart.ETag}, Got: {requestedPart.ETag}");
             }
 
             // Note: Part size validation (5MB minimum) should be enforced during upload, not here.
@@ -152,12 +152,12 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         await _dataStorage.DeleteAllPartsAsync(bucketName, key, request.UploadId, cancellationToken);
         await _metadataStorage.DeleteUploadMetadataAsync(bucketName, key, request.UploadId, cancellationToken);
 
-        return new CompleteMultipartUploadResponse
+        return StorageResult<CompleteMultipartUploadResponse>.Success(new CompleteMultipartUploadResponse
         {
             BucketName = bucketName,
             Key = key,
             ETag = multipartETag  // Use the proper multipart ETag
-        };
+        });
     }
 
     public async Task<bool> AbortMultipartUploadAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)

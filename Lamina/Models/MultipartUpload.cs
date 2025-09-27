@@ -75,3 +75,16 @@ public class CompleteMultipartUploadResponse
     public string? ChecksumSHA1 { get; set; }
     public string? ChecksumSHA256 { get; set; }
 }
+
+public class XmlDeserializationResult
+{
+    public List<CompletedPart>? Parts { get; set; }
+    public bool IsSuccess { get; set; }
+    public string? ErrorMessage { get; set; }
+
+    public static XmlDeserializationResult Success(List<CompletedPart> parts) =>
+        new() { Parts = parts, IsSuccess = true };
+
+    public static XmlDeserializationResult Error(string message) =>
+        new() { IsSuccess = false, ErrorMessage = message };
+}
