@@ -2,91 +2,199 @@ using Microsoft.AspNetCore.Mvc;
 using Lamina.Models;
 using Lamina.Services;
 using Lamina.Streaming.Validation;
-using System.Xml.Serialization;
-using System.IO;
 using System.IO.Pipelines;
 using Lamina.Storage.Abstract;
-using Lamina.Storage.Filesystem.Configuration;
-using Microsoft.Extensions.Options;
 using Lamina.Helpers;
-using System.Text;
+using Lamina.Controllers.Base;
+using Lamina.Controllers.Attributes;
 
 namespace Lamina.Controllers;
 
-[ApiController]
 [Route("{bucketName}")]
-[Produces("application/xml")]
-public class S3ObjectsController : ControllerBase
+public class S3ObjectsController : S3ControllerBase
 {
     private readonly IObjectStorageFacade _objectStorage;
-    private readonly IMultipartUploadStorageFacade _multipartStorage;
     private readonly IBucketStorageFacade _bucketStorage;
+    private readonly IAuthenticationService _authService;
     private readonly ILogger<S3ObjectsController> _logger;
 
     public S3ObjectsController(
         IObjectStorageFacade objectStorage,
-        IMultipartUploadStorageFacade multipartStorage,
         IBucketStorageFacade bucketStorage,
-        ILogger<S3ObjectsController> logger)
+        IAuthenticationService authService,
+        ILogger<S3ObjectsController> logger
+    )
     {
         _objectStorage = objectStorage;
-        _multipartStorage = multipartStorage;
         _bucketStorage = bucketStorage;
+        _authService = authService;
         _logger = logger;
     }
 
+    [HttpGet("")]
+    [RequireNoQueryParameters("location", "uploads")]
+    public async Task<IActionResult> ListObjects(
+        string bucketName,
+        [FromQuery(Name = "list-type")] int? listType,
+        [FromQuery] string? prefix,
+        [FromQuery] string? delimiter,
+        [FromQuery(Name = "max-keys")] int? maxKeys,
+        [FromQuery] string? marker,
+        [FromQuery(Name = "continuation-token")]
+        string? continuationToken,
+        [FromQuery(Name = "start-after")] string? startAfter,
+        [FromQuery(Name = "encoding-type")] string? encodingType,
+        [FromQuery(Name = "fetch-owner")] bool fetchOwner = false,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var exists = await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken);
+        if (!exists)
+        {
+            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
+        }
+
+        // Determine API version: listType=2 means ListObjectsV2, otherwise ListObjects V1
+        var isV2 = listType == 2;
+
+        // Validate encoding-type parameter
+        if (!string.IsNullOrEmpty(encodingType) && !encodingType.Equals("url", StringComparison.OrdinalIgnoreCase))
+        {
+            return S3Error("InvalidArgument",
+                $"Invalid Encoding Method specified in Request. The encoding-type parameter value '{encodingType}' is invalid. Valid value is 'url'.",
+                $"/{bucketName}",
+                400);
+        }
+
+        // Get objects from service
+        var listRequest = new ListObjectsRequest
+        {
+            Prefix = prefix,
+            Delimiter = delimiter,
+            MaxKeys = maxKeys ?? 1000,
+            ContinuationToken = continuationToken ?? marker,
+            ListType = listType ?? 1,
+            StartAfter = startAfter,
+            FetchOwner = fetchOwner,
+            EncodingType = encodingType
+        };
+
+        var result = await _objectStorage.ListObjectsAsync(bucketName, listRequest, cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            // Handle validation errors from the facade (e.g., Directory bucket constraints)
+            return S3Error(result.ErrorCode!, result.ErrorMessage!, $"/{bucketName}", 400);
+        }
+
+        var objects = result.Value!;
+
+        // Get bucket information to check if it's a Directory bucket for response ordering
+        var bucket = await _bucketStorage.GetBucketAsync(bucketName, cancellationToken);
+        var isDirectoryBucket = bucket?.Type == BucketType.Directory;
+
+        // For Directory buckets, objects should not be in lexicographical order
+        if (isDirectoryBucket)
+        {
+            // Randomize the order to simulate non-lexicographical ordering
+            var random = new Random();
+            objects.Contents = objects.Contents.OrderBy(x => random.Next()).ToList();
+        }
+
+        Response.ContentType = "application/xml";
+
+        if (isV2)
+        {
+            // ListObjectsV2 response
+            var resultV2 = new ListBucketResultV2
+            {
+                Name = bucketName,
+                Prefix = S3UrlEncoder.ConditionalEncode(prefix, encodingType),
+                StartAfter = S3UrlEncoder.ConditionalEncode(startAfter, encodingType),
+                ContinuationToken = continuationToken,
+                NextContinuationToken = objects.IsTruncated ? objects.NextContinuationToken : null,
+                KeyCount = objects.Contents.Count,
+                MaxKeys = maxKeys ?? 1000,
+                EncodingType = encodingType,
+                IsTruncated = objects.IsTruncated,
+                ContentsList = objects.Contents.Select(o => new Contents
+                {
+                    Key = S3UrlEncoder.ConditionalEncode(o.Key, encodingType) ?? o.Key,
+                    LastModified = o.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
+                    ETag = $"\"{o.ETag}\"",
+                    Size = o.Size,
+                    StorageClass = "STANDARD",
+                    Owner = fetchOwner && o.OwnerId != null ? new Owner(o.OwnerId, o.OwnerDisplayName ?? o.OwnerId) : null // Only include owner if requested in V2
+                }).ToList(),
+                CommonPrefixesList = objects.CommonPrefixes.Select(cp => new CommonPrefixes
+                {
+                    Prefix = S3UrlEncoder.ConditionalEncode(cp, encodingType) ?? cp
+                }).ToList()
+            };
+            return Ok(resultV2);
+        }
+        else
+        {
+            // ListObjects V1 response
+            var listResult = new ListBucketResult
+            {
+                Name = bucketName,
+                Prefix = S3UrlEncoder.ConditionalEncode(prefix, encodingType),
+                Marker = S3UrlEncoder.ConditionalEncode(marker, encodingType),
+                MaxKeys = maxKeys ?? 1000,
+                EncodingType = encodingType,
+                IsTruncated = objects.IsTruncated,
+                NextMarker = objects.IsTruncated ? S3UrlEncoder.ConditionalEncode(objects.NextContinuationToken, encodingType) : null,
+                ContentsList = objects.Contents.Select(o => new Contents
+                {
+                    Key = S3UrlEncoder.ConditionalEncode(o.Key, encodingType) ?? o.Key,
+                    LastModified = o.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
+                    ETag = $"\"{o.ETag}\"",
+                    Size = o.Size,
+                    StorageClass = "STANDARD",
+                    Owner = new Owner(o.OwnerId ?? "anonymous", o.OwnerDisplayName ?? "anonymous") // Always include owner in V1
+                }).ToList(),
+                CommonPrefixesList = objects.CommonPrefixes.Select(cp => new CommonPrefixes
+                {
+                    Prefix = S3UrlEncoder.ConditionalEncode(cp, encodingType) ?? cp
+                }).ToList()
+            };
+            return Ok(listResult);
+        }
+    }
+
     [HttpPut("{*key}")]
+    [RequireNoQueryParameters("partNumber", "uploadId")]
     [DisableRequestSizeLimit]
     public async Task<IActionResult> PutObject(
         string bucketName,
         string key,
-        [FromQuery] int? partNumber,
-        [FromQuery] string? uploadId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         // Validate the object key
         if (!_objectStorage.IsValidObjectKey(key))
         {
-            return new ObjectResult(new S3Error
-            {
-                Code = "InvalidObjectName",
-                Message = $"Object key forbidden",
-                Resource = $"/{bucketName}/{key}",
-            })
-            { StatusCode = 400 };
-        }
-        // If uploadId and partNumber are present, this is a part upload
-        if (!string.IsNullOrEmpty(uploadId) && partNumber.HasValue)
-        {
-            _logger.LogInformation("Uploading part {PartNumber} for upload {UploadId} in bucket {BucketName}, key {Key}", partNumber.Value, uploadId, bucketName, key);
-            return await UploadPartInternal(bucketName, key, partNumber.Value, uploadId, cancellationToken);
+            return S3Error("InvalidObjectName", "Object key forbidden", $"/{bucketName}/{key}", 400);
         }
 
         if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
-            var error = new S3Error
-            {
-                Code = "NoSuchBucket",
-                Message = "The specified bucket does not exist",
-                Resource = bucketName
-            };
-            Response.StatusCode = 404;
-            Response.ContentType = "application/xml";
-            return new ObjectResult(error);
+            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
         }
 
         var contentType = Request.ContentType;
 
         // Get authenticated user from HttpContext if available
         var authenticatedUser = HttpContext.Items["AuthenticatedUser"] as S3User;
-        
+
         var putRequest = new PutObjectRequest
         {
             Key = key,
             ContentType = contentType,
             Metadata = Request.Headers
                 .Where(h => h.Key.StartsWith("x-amz-meta-", StringComparison.OrdinalIgnoreCase))
-                .ToDictionary(h => h.Key.Substring(11), h => h.Value.ToString()),
+                .ToDictionary(h => h.Key[11..], h => h.Value.ToString()),
             OwnerId = authenticatedUser?.AccessKeyId ?? "anonymous",
             OwnerDisplayName = authenticatedUser?.Name ?? "anonymous"
         };
@@ -98,7 +206,7 @@ public class S3ObjectsController : ControllerBase
 
         // Check if there's a chunk validator from the authentication middleware
         var chunkValidator = HttpContext.Items["ChunkValidator"] as IChunkSignatureValidator;
-        
+
         var s3Object = chunkValidator != null
             ? await _objectStorage.PutObjectAsync(bucketName, key, reader, chunkValidator, putRequest, cancellationToken)
             : await _objectStorage.PutObjectAsync(bucketName, key, reader, putRequest, cancellationToken);
@@ -108,13 +216,7 @@ public class S3ObjectsController : ControllerBase
             if (chunkValidator != null)
             {
                 _logger.LogWarning("Chunk signature validation failed for object {Key} in bucket {BucketName}", key, bucketName);
-                return StatusCode(403, new S3Error
-                {
-                    Code = "SignatureDoesNotMatch",
-                    Message = "The request signature we calculated does not match the signature you provided.",
-                    Resource = $"/{bucketName}/{key}",
-                    RequestId = HttpContext.TraceIdentifier
-                });
+                return S3Error("SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", $"/{bucketName}/{key}", 403);
             }
 
             _logger.LogError("Failed to put object {Key} in bucket {BucketName}", key, bucketName);
@@ -128,34 +230,20 @@ public class S3ObjectsController : ControllerBase
     }
 
     [HttpGet("{*key}")]
+    [RequireNoQueryParameters("uploadId")]
     public async Task<IActionResult> GetObject(
         string bucketName,
         string key,
-        [FromQuery] string? uploadId,
-        [FromQuery(Name = "part-number-marker")] int? partNumberMarker,
-        [FromQuery(Name = "max-parts")] int? maxParts,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
-        // List parts for a multipart upload
-        if (!string.IsNullOrEmpty(uploadId))
-        {
-            return await ListPartsInternal(bucketName, key, uploadId, partNumberMarker, maxParts, cancellationToken);
-        }
         _logger.LogInformation("Getting object {Key} from bucket {BucketName}", key, bucketName);
 
         var metadata = await _objectStorage.GetObjectInfoAsync(bucketName, key, cancellationToken);
         if (metadata == null)
         {
             _logger.LogWarning("Object not found: {Key} in bucket {BucketName}", key, bucketName);
-            var error = new S3Error
-            {
-                Code = "NoSuchKey",
-                Message = "The specified key does not exist.",
-                Resource = $"{bucketName}/{key}"
-            };
-            Response.StatusCode = 404;
-            Response.ContentType = "application/xml";
-            return new ObjectResult(error);
+            return S3Error("NoSuchKey", "The specified key does not exist.", $"{bucketName}/{key}", 404);
         }
 
         Response.Headers.Append("ETag", $"\"{metadata.ETag}\"");
@@ -189,18 +277,13 @@ public class S3ObjectsController : ControllerBase
     }
 
     [HttpDelete("{*key}")]
+    [RequireNoQueryParameters("uploadId")]
     public async Task<IActionResult> DeleteObject(
         string bucketName,
         string key,
-        [FromQuery] string? uploadId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
-        // Abort multipart upload
-        if (!string.IsNullOrEmpty(uploadId))
-        {
-            _logger.LogInformation("Aborting multipart upload {UploadId} for key {Key} in bucket {BucketName}", uploadId, key, bucketName);
-            return await AbortMultipartUploadInternal(bucketName, key, uploadId, cancellationToken);
-        }
         if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             // S3 returns 204 even if bucket doesn't exist for delete operations
@@ -236,384 +319,4 @@ public class S3ObjectsController : ControllerBase
 
         return Ok();
     }
-
-    [HttpPost("{*key}")]
-    public async Task<IActionResult> PostObject(
-        string bucketName,
-        string key,
-        [FromQuery(Name = "uploads")] string? uploads,
-        [FromQuery(Name = "uploadId")] string? uploadId,
-        CancellationToken cancellationToken = default)
-    {
-        // Validate the object key
-        if (!_objectStorage.IsValidObjectKey(key))
-        {
-            return new ObjectResult(new S3Error
-            {
-                Code = "InvalidObjectName",
-                Message = $"Object key is forbidden",
-                Resource = $"/{bucketName}/{key}",
-            })
-            { StatusCode = 400 };
-        }
-        // Initiate multipart upload - check if 'uploads' query parameter is present
-        if (Request.Query.ContainsKey("uploads"))
-        {
-            return await InitiateMultipartUploadInternal(bucketName, key, cancellationToken);
-        }
-
-        // Complete multipart upload
-        if (!string.IsNullOrEmpty(uploadId))
-        {
-            return await CompleteMultipartUploadInternal(bucketName, key, uploadId, cancellationToken);
-        }
-
-        return NotFound();
-    }
-
-    private async Task<IActionResult> InitiateMultipartUploadInternal(
-        string bucketName,
-        string key,
-        CancellationToken cancellationToken)
-    {
-
-        var request = new InitiateMultipartUploadRequest
-        {
-            Key = key,
-            ContentType = Request.ContentType,
-            Metadata = Request.Headers
-                .Where(h => h.Key.StartsWith("x-amz-meta-", StringComparison.OrdinalIgnoreCase))
-                .ToDictionary(h => h.Key.Substring(11), h => h.Value.ToString())
-        };
-
-        try
-        {
-            if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
-            {
-                throw new InvalidOperationException($"Bucket '{bucketName}' does not exist");
-            }
-
-            var upload = await _multipartStorage.InitiateMultipartUploadAsync(bucketName, key, request, cancellationToken);
-
-            var result = new InitiateMultipartUploadResult
-            {
-                Bucket = bucketName,
-                Key = key,
-                UploadId = upload.UploadId
-            };
-
-            Response.ContentType = "application/xml";
-            return Ok(result);
-        }
-        catch (InvalidOperationException)
-        {
-            var error = new S3Error
-            {
-                Code = "NoSuchBucket",
-                Message = "The specified bucket does not exist",
-                Resource = bucketName
-            };
-            Response.StatusCode = 404;
-            Response.ContentType = "application/xml";
-            return new ObjectResult(error);
-        }
-    }
-
-    private async Task<IActionResult> UploadPartInternal(
-        string bucketName,
-        string key,
-        int partNumber,
-        string uploadId,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            // Use PipeReader from the request body
-            var reader = Request.BodyReader;
-
-            // Check if there's a chunk validator from the authentication middleware (for streaming uploads)
-            var chunkValidator = HttpContext.Items["ChunkValidator"] as IChunkSignatureValidator;
-
-            var part = chunkValidator != null
-                ? await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, chunkValidator, cancellationToken)
-                : await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, cancellationToken);
-
-            if (part == null)
-            {
-                // If we had a chunk validator and the operation failed, it's likely due to invalid signature
-                if (chunkValidator != null)
-                {
-                    _logger.LogWarning("Chunk signature validation failed for part {PartNumber} of upload {UploadId}", partNumber, uploadId);
-                    return StatusCode(403, new S3Error
-                    {
-                        Code = "SignatureDoesNotMatch",
-                        Message = "The request signature we calculated does not match the signature you provided.",
-                        Resource = $"/{bucketName}/{key}",
-                        RequestId = HttpContext.TraceIdentifier
-                    });
-                }
-
-                // Otherwise, generic error
-                return StatusCode(500);
-            }
-
-            Response.Headers.Append("ETag", $"\"{part.ETag}\"");
-            return Ok();
-        }
-        catch (InvalidOperationException ex)
-        {
-            var error = new S3Error
-            {
-                Code = "NoSuchUpload",
-                Message = ex.Message,
-                Resource = $"{bucketName}/{key}"
-            };
-            Response.StatusCode = 404;
-            Response.ContentType = "application/xml";
-            return new ObjectResult(error);
-        }
-    }
-
-    private async Task<IActionResult> CompleteMultipartUploadInternal(
-        string bucketName,
-        string key,
-        string uploadId,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            // Read the XML request body using PipeReader
-            List<CompletedPart> parts = new();
-
-            var xmlContent = await PipeReaderHelper.ReadAllTextAsync(Request.BodyReader, false, cancellationToken);
-
-            // Try to deserialize - first without namespace (most common), then with namespace
-            try
-            {
-                // Try without namespace first (for compatibility with most clients)
-                var serializerNoNamespace = new XmlSerializer(typeof(CompleteMultipartUploadXmlNoNamespace));
-                using var stringReader = new StringReader(xmlContent);
-                var completeRequestNoNs = serializerNoNamespace.Deserialize(stringReader) as CompleteMultipartUploadXmlNoNamespace;
-
-                if (completeRequestNoNs != null && completeRequestNoNs.Parts != null)
-                {
-                    parts = completeRequestNoNs.Parts.Select(p => new CompletedPart
-                    {
-                        PartNumber = p.PartNumber,
-                        ETag = p.ETag,
-                        ChecksumCRC32 = p.ChecksumCRC32,
-                        ChecksumCRC32C = p.ChecksumCRC32C,
-                        ChecksumCRC64NVME = p.ChecksumCRC64NVME,
-                        ChecksumSHA1 = p.ChecksumSHA1,
-                        ChecksumSHA256 = p.ChecksumSHA256
-                    }).ToList();
-                }
-            }
-            catch
-            {
-                // If that fails, try with S3 namespace
-                var serializerWithNamespace = new XmlSerializer(typeof(CompleteMultipartUploadXml));
-                using var stringReader = new StringReader(xmlContent);
-                var completeRequestWithNs = serializerWithNamespace.Deserialize(stringReader) as CompleteMultipartUploadXml;
-
-                if (completeRequestWithNs != null && completeRequestWithNs.Parts != null)
-                {
-                    parts = completeRequestWithNs.Parts.Select(p => new CompletedPart
-                    {
-                        PartNumber = p.PartNumber,
-                        ETag = p.ETag,
-                        ChecksumCRC32 = p.ChecksumCRC32,
-                        ChecksumCRC32C = p.ChecksumCRC32C,
-                        ChecksumCRC64NVME = p.ChecksumCRC64NVME,
-                        ChecksumSHA1 = p.ChecksumSHA1,
-                        ChecksumSHA256 = p.ChecksumSHA256
-                    }).ToList();
-                }
-            }
-
-            if (parts.Count == 0)
-            {
-                return BadRequest(new S3Error
-                {
-                    Code = "MalformedXML",
-                    Message = "The XML you provided was not well-formed or did not validate against our published schema.",
-                    Resource = $"{bucketName}/{key}",
-                    RequestId = HttpContext.TraceIdentifier
-                });
-            }
-
-            // Phase 2 Validation: Part number ordering (parts must be consecutive starting from 1)
-            // Check if the provided parts are already in ascending order
-            bool isInOrder = true;
-            for (int i = 0; i < parts.Count - 1; i++)
-            {
-                if (parts[i].PartNumber >= parts[i + 1].PartNumber)
-                {
-                    isInOrder = false;
-                    break;
-                }
-            }
-
-            if (!isInOrder)
-            {
-                var error = new S3Error
-                {
-                    Code = "InvalidPartOrder",
-                    Message = "The list of parts was not in ascending order. The parts list must be specified in order by part number.",
-                    Resource = $"{bucketName}/{key}",
-                    RequestId = HttpContext.TraceIdentifier
-                };
-                Response.StatusCode = 400;
-                Response.ContentType = "application/xml";
-                return new ObjectResult(error);
-            }
-
-            // Additional validation: Part numbers must be between 1 and 10000
-            foreach (var part in parts)
-            {
-                if (part.PartNumber < 1 || part.PartNumber > 10000)
-                {
-                    var error = new S3Error
-                    {
-                        Code = "InvalidPartOrder",
-                        Message = "Part numbers must be between 1 and 10000.",
-                        Resource = $"{bucketName}/{key}",
-                        RequestId = HttpContext.TraceIdentifier
-                    };
-                    Response.StatusCode = 400;
-                    Response.ContentType = "application/xml";
-                    return new ObjectResult(error);
-                }
-            }
-
-            var completeRequest = new CompleteMultipartUploadRequest
-            {
-                UploadId = uploadId,
-                Parts = parts
-            };
-
-            var completeResponse = await _multipartStorage.CompleteMultipartUploadAsync(bucketName, key, completeRequest, cancellationToken);
-
-            var result = new CompleteMultipartUploadResult
-            {
-                Location = $"http://{Request.Host}/{bucketName}/{key}",
-                Bucket = bucketName,
-                Key = key,
-                ETag = $"\"{completeResponse.ETag}\""
-            };
-
-            // Add S3-compliant response headers
-            Response.Headers.Append("x-amz-version-id", "null");
-
-            // Add checksum headers if any were provided in the request parts
-            var firstPartWithChecksum = parts.FirstOrDefault(p =>
-                !string.IsNullOrEmpty(p.ChecksumCRC32) ||
-                !string.IsNullOrEmpty(p.ChecksumCRC32C) ||
-                !string.IsNullOrEmpty(p.ChecksumSHA1) ||
-                !string.IsNullOrEmpty(p.ChecksumSHA256));
-
-            if (firstPartWithChecksum != null)
-            {
-                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumCRC32))
-                    Response.Headers.Append("x-amz-checksum-crc32", firstPartWithChecksum.ChecksumCRC32);
-                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumCRC32C))
-                    Response.Headers.Append("x-amz-checksum-crc32c", firstPartWithChecksum.ChecksumCRC32C);
-                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumSHA1))
-                    Response.Headers.Append("x-amz-checksum-sha1", firstPartWithChecksum.ChecksumSHA1);
-                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumSHA256))
-                    Response.Headers.Append("x-amz-checksum-sha256", firstPartWithChecksum.ChecksumSHA256);
-            }
-
-            Response.ContentType = "application/xml";
-            return Ok(result);
-        }
-        catch (InvalidOperationException ex)
-        {
-            S3Error error;
-
-            // Parse custom error codes from the exception message
-            if (ex.Message.StartsWith("InvalidPart:"))
-            {
-                error = new S3Error
-                {
-                    Code = "InvalidPart",
-                    Message = ex.Message.Substring("InvalidPart:".Length),
-                    Resource = $"{bucketName}/{key}",
-                    RequestId = HttpContext.TraceIdentifier
-                };
-                Response.StatusCode = 400;
-            }
-            else if (ex.Message.StartsWith("EntityTooSmall:"))
-            {
-                error = new S3Error
-                {
-                    Code = "EntityTooSmall",
-                    Message = ex.Message.Substring("EntityTooSmall:".Length),
-                    Resource = $"{bucketName}/{key}",
-                    RequestId = HttpContext.TraceIdentifier
-                };
-                Response.StatusCode = 400;
-            }
-            else
-            {
-                // Default to NoSuchUpload for other InvalidOperationExceptions
-                error = new S3Error
-                {
-                    Code = "NoSuchUpload",
-                    Message = ex.Message,
-                    Resource = $"{bucketName}/{key}",
-                    RequestId = HttpContext.TraceIdentifier
-                };
-                Response.StatusCode = 404;
-            }
-
-            Response.ContentType = "application/xml";
-            return new ObjectResult(error);
-        }
-    }
-
-    private async Task<IActionResult> AbortMultipartUploadInternal(
-        string bucketName,
-        string key,
-        string uploadId,
-        CancellationToken cancellationToken)
-    {
-        await _multipartStorage.AbortMultipartUploadAsync(bucketName, key, uploadId, cancellationToken);
-        return NoContent();
-    }
-
-    private async Task<IActionResult> ListPartsInternal(
-        string bucketName,
-        string key,
-        string uploadId,
-        int? partNumberMarker,
-        int? maxParts,
-        CancellationToken cancellationToken)
-    {
-        var parts = await _multipartStorage.ListPartsAsync(bucketName, key, uploadId, cancellationToken);
-
-        var result = new ListPartsResult
-        {
-            Bucket = bucketName,
-            Key = key,
-            UploadId = uploadId,
-            StorageClass = "STANDARD",
-            PartNumberMarker = partNumberMarker ?? 0,
-            MaxParts = maxParts ?? 1000,
-            IsTruncated = false,
-            Owner = new Owner(),
-            Initiator = new Owner(),
-            Parts = parts.Select(p => new Part
-            {
-                PartNumber = p.PartNumber,
-                LastModified = p.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
-                ETag = $"\"{p.ETag}\"",
-                Size = p.Size
-            }).ToList()
-        };
-
-        Response.ContentType = "application/xml";
-        return Ok(result);
-    }
-
 }
