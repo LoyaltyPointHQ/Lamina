@@ -6,6 +6,9 @@ using Lamina.Configuration;
 using Microsoft.Extensions.Options;
 using Lamina.Controllers.Base;
 using Lamina.Controllers.Attributes;
+using Lamina.Authorization;
+using System.Security.Claims;
+using System.Text.Json;
 
 namespace Lamina.Controllers;
 
@@ -30,6 +33,7 @@ public class S3BucketsController : S3ControllerBase
     }
 
     [HttpPut("{bucketName}")]
+    [S3Authorize(S3Operations.Write, S3ResourceType.Bucket)]
     public async Task<IActionResult> CreateBucket(string bucketName, CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Creating bucket: {BucketName}", bucketName);
@@ -46,8 +50,8 @@ public class S3BucketsController : S3ControllerBase
         // Parse bucket configuration from request body or headers
         var createRequest = ParseCreateBucketRequest();
 
-        // Get authenticated user from HttpContext if available
-        var authenticatedUser = HttpContext.Items["AuthenticatedUser"] as S3User;
+        // Get authenticated user from claims
+        var authenticatedUser = GetS3UserFromClaims();
         createRequest.OwnerId = authenticatedUser?.AccessKeyId ?? "anonymous";
         createRequest.OwnerDisplayName = authenticatedUser?.Name ?? "anonymous";
 
@@ -105,6 +109,7 @@ public class S3BucketsController : S3ControllerBase
 
     [HttpGet("")]
     [Route("/")]
+    [S3Authorize(S3Operations.List, S3ResourceType.Bucket)]
     public async Task<IActionResult> ListBuckets(CancellationToken cancellationToken = default)
     {
         var buckets = await _bucketStorage.ListBucketsAsync(cancellationToken);
@@ -114,7 +119,8 @@ public class S3BucketsController : S3ControllerBase
 
         if (_authService.IsAuthenticationEnabled())
         {
-            if (HttpContext.Items["AuthenticatedUser"] is S3User user)
+            var user = GetS3UserFromClaims();
+            if (user != null)
             {
                 filteredBuckets = buckets.Buckets.Where(bucket =>
                     _authService.UserHasAccessToBucket(user, bucket.Name, "list") ||
@@ -142,6 +148,7 @@ public class S3BucketsController : S3ControllerBase
 
     [HttpGet("{bucketName}")]
     [RequireQueryParameter("location")]
+    [S3Authorize(S3Operations.Read, S3ResourceType.Bucket)]
     public async Task<IActionResult> GetBucketLocation(string bucketName, CancellationToken cancellationToken = default)
     {
         // Check if bucket exists first
@@ -165,6 +172,7 @@ public class S3BucketsController : S3ControllerBase
     }
 
     [HttpDelete("{bucketName}")]
+    [S3Authorize(S3Operations.Delete, S3ResourceType.Bucket)]
     public async Task<IActionResult> DeleteBucket(string bucketName, CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Deleting bucket: {BucketName}", bucketName);
@@ -181,6 +189,7 @@ public class S3BucketsController : S3ControllerBase
     }
 
     [HttpHead("{bucketName}")]
+    [S3Authorize(S3Operations.Read, S3ResourceType.Bucket)]
     public async Task<IActionResult> HeadBucket(string bucketName, CancellationToken cancellationToken = default)
     {
         var bucket = await _bucketStorage.GetBucketAsync(bucketName, cancellationToken);
@@ -197,5 +206,32 @@ public class S3BucketsController : S3ControllerBase
         }
 
         return Ok();
+    }
+
+    /// <summary>
+    /// Gets the S3 user from the current user's claims.
+    /// </summary>
+    private S3User? GetS3UserFromClaims()
+    {
+        if (!User.Identity?.IsAuthenticated == true)
+        {
+            return null;
+        }
+
+        var userClaim = User.FindFirst("s3_user");
+        if (userClaim == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<S3User>(userClaim.Value);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to deserialize S3 user from claims");
+            return null;
+        }
     }
 }

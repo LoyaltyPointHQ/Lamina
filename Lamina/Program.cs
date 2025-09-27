@@ -1,5 +1,5 @@
 using Lamina.Configuration;
-using Lamina.Middleware;
+using Lamina.Extensions;
 using Lamina.Models;
 using Lamina.Services;
 using Lamina.Streaming;
@@ -64,6 +64,9 @@ builder.Services.Configure<BucketDefaultsSettings>(
 // Register authentication service
 builder.Services.AddSingleton<IAuthenticationService, AuthenticationService>();
 builder.Services.AddSingleton<IStreamingAuthenticationService, StreamingAuthenticationService>();
+
+// Add S3 authentication and authorization
+builder.Services.AddS3Security();
 
 // Register chunked data parser for streaming support
 builder.Services.AddSingleton<IChunkedDataParser, ChunkedDataParser>();
@@ -282,8 +285,9 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-// Add authentication middleware before controllers
-app.UseS3Authentication();
+// Add standard authentication and authorization middleware
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
 

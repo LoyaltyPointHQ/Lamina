@@ -7,6 +7,9 @@ using Lamina.Storage.Abstract;
 using Lamina.Helpers;
 using Lamina.Controllers.Base;
 using Lamina.Controllers.Attributes;
+using Lamina.Authorization;
+using System.Security.Claims;
+using System.Text.Json;
 
 namespace Lamina.Controllers;
 
@@ -33,6 +36,7 @@ public class S3ObjectsController : S3ControllerBase
 
     [HttpGet("")]
     [RequireNoQueryParameters("location", "uploads")]
+    [S3Authorize(S3Operations.List, S3ResourceType.Object)]
     public async Task<IActionResult> ListObjects(
         string bucketName,
         [FromQuery(Name = "list-type")] int? listType,
@@ -166,6 +170,7 @@ public class S3ObjectsController : S3ControllerBase
     [HttpPut("{*key}")]
     [RequireNoQueryParameters("partNumber", "uploadId")]
     [DisableRequestSizeLimit]
+    [S3Authorize(S3Operations.Write, S3ResourceType.Object)]
     public async Task<IActionResult> PutObject(
         string bucketName,
         string key,
@@ -185,8 +190,8 @@ public class S3ObjectsController : S3ControllerBase
 
         var contentType = Request.ContentType;
 
-        // Get authenticated user from HttpContext if available
-        var authenticatedUser = HttpContext.Items["AuthenticatedUser"] as S3User;
+        // Get authenticated user from claims
+        var authenticatedUser = GetS3UserFromClaims();
 
         var putRequest = new PutObjectRequest
         {
@@ -231,6 +236,7 @@ public class S3ObjectsController : S3ControllerBase
 
     [HttpGet("{*key}")]
     [RequireNoQueryParameters("uploadId")]
+    [S3Authorize(S3Operations.Read, S3ResourceType.Object)]
     public async Task<IActionResult> GetObject(
         string bucketName,
         string key,
@@ -278,6 +284,7 @@ public class S3ObjectsController : S3ControllerBase
 
     [HttpDelete("{*key}")]
     [RequireNoQueryParameters("uploadId")]
+    [S3Authorize(S3Operations.Delete, S3ResourceType.Object)]
     public async Task<IActionResult> DeleteObject(
         string bucketName,
         string key,
@@ -296,6 +303,7 @@ public class S3ObjectsController : S3ControllerBase
     }
 
     [HttpHead("{*key}")]
+    [S3Authorize(S3Operations.Read, S3ResourceType.Object)]
     public async Task<IActionResult> HeadObject(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         var objectInfo = await _objectStorage.GetObjectInfoAsync(bucketName, key, cancellationToken);
@@ -318,5 +326,32 @@ public class S3ObjectsController : S3ControllerBase
         }
 
         return Ok();
+    }
+
+    /// <summary>
+    /// Gets the S3 user from the current user's claims.
+    /// </summary>
+    private S3User? GetS3UserFromClaims()
+    {
+        if (!User.Identity?.IsAuthenticated == true)
+        {
+            return null;
+        }
+
+        var userClaim = User.FindFirst("s3_user");
+        if (userClaim == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<S3User>(userClaim.Value);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to deserialize S3 user from claims");
+            return null;
+        }
     }
 }

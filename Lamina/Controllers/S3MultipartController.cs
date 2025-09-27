@@ -8,6 +8,7 @@ using Lamina.Storage.Abstract;
 using Lamina.Helpers;
 using Lamina.Controllers.Base;
 using Lamina.Controllers.Attributes;
+using Lamina.Authorization;
 
 namespace Lamina.Controllers;
 
@@ -110,6 +111,7 @@ public class S3MultipartController : S3ControllerBase
 
     [HttpGet("")]
     [RequireQueryParameter("uploads")]
+    [S3Authorize(S3Operations.List, S3ResourceType.Object)]
     public async Task<IActionResult> ListMultipartUploads(
         string bucketName,
         [FromQuery(Name = "key-marker")] string? keyMarker,
@@ -144,6 +146,7 @@ public class S3MultipartController : S3ControllerBase
 
     [HttpPost("{*key}")]
     [RequireQueryParameter("uploads")]
+    [S3Authorize(S3Operations.Write, S3ResourceType.Object)]
     public async Task<IActionResult> InitiateMultipartUpload(
         string bucketName,
         string key,
@@ -194,6 +197,7 @@ public class S3MultipartController : S3ControllerBase
     [HttpPut("{*key}")]
     [RequireQueryParameter("partNumber", "uploadId")]
     [DisableRequestSizeLimit]
+    [S3Authorize(S3Operations.Write, S3ResourceType.Object)]
     public async Task<IActionResult> UploadPart(
         string bucketName,
         string key,
@@ -241,6 +245,7 @@ public class S3MultipartController : S3ControllerBase
     [HttpPost("{*key}")]
     [RequireQueryParameter("uploadId")]
     [RequireNoQueryParameters("uploads")]
+    [S3Authorize(S3Operations.Write, S3ResourceType.Object)]
     public async Task<IActionResult> CompleteMultipartUpload(
         string bucketName,
         string key,
@@ -351,6 +356,7 @@ public class S3MultipartController : S3ControllerBase
 
     [HttpDelete("{*key}")]
     [RequireQueryParameter("uploadId")]
+    [S3Authorize(S3Operations.Delete, S3ResourceType.Object)]
     public async Task<IActionResult> AbortMultipartUpload(
         string bucketName,
         string key,
@@ -365,6 +371,7 @@ public class S3MultipartController : S3ControllerBase
 
     [HttpGet("{*key}")]
     [RequireQueryParameter("uploadId")]
+    [S3Authorize(S3Operations.Read, S3ResourceType.Object)]
     public async Task<IActionResult> ListParts(
         string bucketName,
         string key,
