@@ -132,6 +132,8 @@ if (metadataStorageType.Equals("Sql", StringComparison.OrdinalIgnoreCase))
             options.UseNpgsql(sqlSettings.ConnectionString, npgsqlOptions =>
             {
                 npgsqlOptions.CommandTimeout(sqlSettings.CommandTimeout);
+                npgsqlOptions.MigrationsAssembly("Lamina");
+                npgsqlOptions.MigrationsHistoryTable("__EFMigrationsHistory", "public");
             });
         }
         else // SQLite
@@ -139,6 +141,7 @@ if (metadataStorageType.Equals("Sql", StringComparison.OrdinalIgnoreCase))
             options.UseSqlite(sqlSettings.ConnectionString, sqliteOptions =>
             {
                 sqliteOptions.CommandTimeout(sqlSettings.CommandTimeout);
+                sqliteOptions.MigrationsAssembly("Lamina");
             });
         }
 

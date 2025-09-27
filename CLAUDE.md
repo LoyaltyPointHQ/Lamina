@@ -32,6 +32,73 @@ dotnet run --project Lamina/Lamina.csproj
 dotnet test
 ```
 
+### Database Migrations
+
+#### Prerequisites
+```bash
+# Install Entity Framework CLI tool (if not already installed)
+dotnet tool install --global dotnet-ef
+```
+
+#### Creating New Migrations
+```bash
+# For SQLite (default)
+dotnet ef migrations add <MigrationName> \
+  --context LaminaDbContext \
+  --output-dir Migrations/Sqlite \
+  --project Lamina/Lamina.csproj \
+  -- --SqlStorage:Provider=SQLite
+
+# For PostgreSQL  
+dotnet ef migrations add <MigrationName> \
+  --context LaminaDbContext \
+  --output-dir Migrations/PostgreSql \
+  --project Lamina/Lamina.csproj \
+  -- --SqlStorage:Provider=PostgreSQL
+
+# Note: After creating PostgreSQL migrations, update the timestamp by 1 second
+# to avoid conflicts with SQLite migrations (e.g., 20250925003327 -> 20250925003328)
+```
+
+#### Applying Migrations
+Migrations are automatically applied on startup when `SqlStorage.MigrateOnStartup` is set to `true` (default).
+
+To manually apply migrations:
+```bash
+# For SQLite
+dotnet ef database update \
+  --context LaminaDbContext \
+  --project Lamina/Lamina.csproj \
+  -- --SqlStorage:Provider=SQLite \
+     --SqlStorage:ConnectionString="Data Source=/path/to/lamina.db"
+
+# For PostgreSQL
+dotnet ef database update \
+  --context LaminaDbContext \
+  --project Lamina/Lamina.csproj \
+  -- --SqlStorage:Provider=PostgreSQL \
+     --SqlStorage:ConnectionString="Host=localhost;Database=lamina;Username=user;Password=pass"
+```
+
+#### Migration Structure
+- `Migrations/Sqlite/` - SQLite-specific migrations
+- `Migrations/PostgreSql/` - PostgreSQL-specific migrations
+- Both sets of migrations are maintained in parallel
+- The application automatically uses the correct migrations based on the configured provider
+
+#### Environment Variables for Migrations
+The `LaminaDbContextFactory` supports environment variables for easier CI/CD:
+```bash
+# Set database provider
+export LAMINA_DB_PROVIDER=PostgreSQL  # or SQLite
+
+# Set connection string
+export LAMINA_DB_CONNECTION_STRING="Host=localhost;Database=lamina;Username=user;Password=pass"
+
+# Then run migrations without command line arguments
+dotnet ef migrations add <MigrationName> --context LaminaDbContext --output-dir Migrations/PostgreSql
+```
+
 ### Docker
 ```bash
 docker build -f Lamina/Dockerfile -t lamina .
@@ -79,15 +146,21 @@ helm install lamina ./chart \
 ```json
 {
   "StorageType": "InMemory",  // or "Filesystem" or "Sql"
+  "MetadataStorageType": "InMemory",  // or "Filesystem" or "Sql" (defaults to StorageType)
   "FilesystemStorage": {
     "DataDirectory": "/tmp/laminas/data",
     "MetadataDirectory": "/tmp/laminas/metadata",
     "MetadataMode": "SeparateDirectory",  // or "Inline" or "Xattr"
     "NetworkMode": "None"  // or "CIFS" or "NFS"
   },
-  "ConnectionStrings": {
-    "LaminaDb": "Data Source=lamina.db"  // SQLite example
-    // "LaminaDb": "Host=localhost;Database=lamina;Username=user;Password=pass"  // PostgreSQL example
+  "SqlStorage": {
+    "Provider": "SQLite",  // or "PostgreSQL"
+    "ConnectionString": "Data Source=/tmp/lamina/metadata.db",  // SQLite example
+    // "ConnectionString": "Host=localhost;Database=lamina;Username=user;Password=pass",  // PostgreSQL example
+    "MigrateOnStartup": true,
+    "CommandTimeout": 30,
+    "EnableSensitiveDataLogging": false,
+    "EnableDetailedErrors": false
   }
 }
 ```

@@ -10,17 +10,24 @@ public class LaminaDbContextFactory : IDesignTimeDbContextFactory<LaminaDbContex
     {
         var optionsBuilder = new DbContextOptionsBuilder<LaminaDbContext>();
 
-        // Default to SQLite for migrations
+        // Get provider from args or environment variable
         var provider = GetProviderFromArgs(args);
-        var connectionString = GetConnectionStringFromArgs(args);
+        var connectionString = GetConnectionStringFromArgs(args, provider);
 
         if (provider == DatabaseProvider.PostgreSQL)
         {
-            optionsBuilder.UseNpgsql(connectionString);
+            optionsBuilder.UseNpgsql(connectionString, npgsqlOptions =>
+            {
+                npgsqlOptions.MigrationsAssembly("Lamina");
+                npgsqlOptions.MigrationsHistoryTable("__EFMigrationsHistory", "public");
+            });
         }
         else
         {
-            optionsBuilder.UseSqlite(connectionString);
+            optionsBuilder.UseSqlite(connectionString, sqliteOptions =>
+            {
+                sqliteOptions.MigrationsAssembly("Lamina");
+            });
         }
 
         return new LaminaDbContext(optionsBuilder.Options);
@@ -28,6 +35,7 @@ public class LaminaDbContextFactory : IDesignTimeDbContextFactory<LaminaDbContex
 
     private static DatabaseProvider GetProviderFromArgs(string[] args)
     {
+        // Check command line arguments first
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i].StartsWith("--SqlStorage:Provider=", StringComparison.OrdinalIgnoreCase))
@@ -40,12 +48,20 @@ public class LaminaDbContextFactory : IDesignTimeDbContextFactory<LaminaDbContex
             }
         }
 
+        // Check environment variable
+        var envProvider = Environment.GetEnvironmentVariable("LAMINA_DB_PROVIDER");
+        if (!string.IsNullOrEmpty(envProvider) && Enum.TryParse<DatabaseProvider>(envProvider, true, out var envProviderEnum))
+        {
+            return envProviderEnum;
+        }
+
         // Default to SQLite
         return DatabaseProvider.SQLite;
     }
 
-    private static string GetConnectionStringFromArgs(string[] args)
+    private static string GetConnectionStringFromArgs(string[] args, DatabaseProvider provider)
     {
+        // Check command line arguments first
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i].StartsWith("--SqlStorage:ConnectionString=", StringComparison.OrdinalIgnoreCase))
@@ -54,7 +70,16 @@ public class LaminaDbContextFactory : IDesignTimeDbContextFactory<LaminaDbContex
             }
         }
 
-        // Default connection strings
-        return "Data Source=/tmp/lamina.db";
+        // Check environment variable
+        var envConnectionString = Environment.GetEnvironmentVariable("LAMINA_DB_CONNECTION_STRING");
+        if (!string.IsNullOrEmpty(envConnectionString))
+        {
+            return envConnectionString;
+        }
+
+        // Default connection strings based on provider
+        return provider == DatabaseProvider.PostgreSQL
+            ? "Host=localhost;Database=lamina;Username=lamina;Password=lamina"
+            : "Data Source=/tmp/lamina.db";
     }
 }
