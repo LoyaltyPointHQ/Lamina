@@ -369,3 +369,10 @@ public class CompletedPartXmlNoNamespace
     [XmlElement("ChecksumSHA256")]
     public string? ChecksumSHA256 { get; set; }
 }
+
+[XmlRoot("LocationConstraint", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class LocationConstraintResult
+{
+    [XmlText]
+    public string? Region { get; set; }
+}

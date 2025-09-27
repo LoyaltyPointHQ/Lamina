@@ -188,6 +188,7 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
         string bucketName,
         [FromQuery(Name = "list-type")] int? listType,
         [FromQuery] string? uploads,
+        [FromQuery] string? location,
         [FromQuery] string? prefix,
         [FromQuery] string? delimiter,
         [FromQuery(Name = "max-keys")] int? maxKeys,
@@ -201,6 +202,12 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
         [FromQuery(Name = "fetch-owner")] bool fetchOwner = false,
         CancellationToken cancellationToken = default)
     {
+        // Get bucket location
+        if (Request.Query.ContainsKey("location"))
+        {
+            return await GetBucketLocationInternal(bucketName, cancellationToken);
+        }
+
         // List multipart uploads
         if (Request.Query.ContainsKey("uploads"))
         {
@@ -410,6 +417,36 @@ if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketD
                 Owner = new Owner(),
                 Initiator = new Owner()
             }).ToList()
+        };
+
+        Response.ContentType = "application/xml";
+        return Ok(result);
+    }
+
+    private async Task<IActionResult> GetBucketLocationInternal(string bucketName, CancellationToken cancellationToken)
+    {
+        // Check if bucket exists first
+        var exists = await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken);
+        if (!exists)
+        {
+            var error = new S3Error
+            {
+                Code = "NoSuchBucket",
+                Message = "The specified bucket does not exist",
+                Resource = bucketName
+            };
+            Response.StatusCode = 404;
+            Response.ContentType = "application/xml";
+            return new ObjectResult(error);
+        }
+
+        // According to S3 API specification:
+        // - For us-east-1 (default region), GetBucketLocation returns null/empty
+        // - Lamina operates as a single-region system (documented in README)
+        // - This implementation returns empty LocationConstraint to simulate us-east-1 behavior
+        var result = new LocationConstraintResult
+        {
+            Region = null // Empty for us-east-1 compatibility
         };
 
         Response.ContentType = "application/xml";
