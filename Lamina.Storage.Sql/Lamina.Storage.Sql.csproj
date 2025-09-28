@@ -8,6 +8,12 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+            <_Parameter1>Lamina.Storage.Sql.Tests</_Parameter1>
+        </AssemblyAttribute>
+    </ItemGroup>
+
+    <ItemGroup>
       <ProjectReference Include="..\Lamina.Core\Lamina.Core.csproj" />
       <ProjectReference Include="..\Lamina.Storage.Core\Lamina.Storage.Core.csproj" />
     </ItemGroup>
