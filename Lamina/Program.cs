@@ -298,7 +298,7 @@ app.UseAuthorization();
 app.MapControllers();
 
 // Map health check endpoint (bypasses authentication)
-app.MapHealthChecks("/health");
+app.MapHealthChecks("/health").AllowAnonymous();
 
 app.Run();
 
