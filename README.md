@@ -46,20 +46,20 @@ The API will be available at `http://localhost:5214` (or `https://localhost:7179
 
 ### Using Helm (Kubernetes/OpenShift)
 
-Deploy to Kubernetes or OpenShift using the included Helm chart with automatic platform detection:
+Deploy to Kubernetes or OpenShift using the Helm chart hosted as an OCI image in GHCR with automatic platform detection:
 
 ```bash
 # Basic installation with in-memory storage
-helm install lamina ./chart
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina
 
 # Install with persistent filesystem storage
-helm install lamina ./chart \
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina \
   --set config.StorageType=Filesystem \
   --set persistentVolume.enabled=true \
   --set persistentVolume.size=20Gi
 
 # Install with authentication enabled
-helm install lamina ./chart \
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina \
   --set config.Authentication.Enabled=true \
   --set config.Authentication.Users[0].AccessKeyId=admin \
   --set config.Authentication.Users[0].SecretAccessKey=secret123

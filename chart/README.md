@@ -31,23 +31,23 @@ This Helm chart deploys the Lamina application on Kubernetes or OpenShift cluste
 
 ```bash
 # Install with default values
-helm install lamina ./chart
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina
 
 # Install with custom release name
-helm install my-s3-api ./chart
+helm install my-s3-api oci://ghcr.io/loyaltypointhq/lamina/lamina
 
 # Install in specific namespace
-helm install lamina ./chart -n lamina --create-namespace
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina -n lamina --create-namespace
 ```
 
 ### Installation with Custom Values
 
 ```bash
 # Install with custom values file
-helm install lamina ./chart -f my-values.yaml
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina -f my-values.yaml
 
 # Install with specific parameters
-helm install lamina ./chart \
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina \
   --set config.StorageType=Filesystem \
   --set persistentVolume.enabled=true \
   --set config.Authentication.Enabled=true
@@ -153,7 +153,7 @@ secrets:
 
 Install with secrets:
 ```bash
-helm install lamina ./chart \
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina \
   --set secrets.create=true \
   --set config.Authentication.Enabled=true \
   --set config.Authentication.Users[0].AccessKeyId=admin \
@@ -262,7 +262,7 @@ imageStream:
 ### Deploy to OpenShift with Persistent Storage
 
 ```bash
-helm install lamina ./chart \
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina \
   --set config.StorageType=Filesystem \
   --set persistentVolume.enabled=true \
   --set persistentVolume.size=20Gi \
@@ -273,7 +273,7 @@ helm install lamina ./chart \
 ### Deploy to Kubernetes with Ingress
 
 ```bash
-helm install lamina ./chart \
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina \
   --set ingress.enabled=true \
   --set ingress.hosts[0].host=s3.mydomain.com \
   --set ingress.className=nginx
@@ -282,7 +282,7 @@ helm install lamina ./chart \
 ### Deploy with Authentication and Custom Limits
 
 ```bash
-helm install lamina ./chart \
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina \
   --set config.Authentication.Enabled=true \
   --set 'config.Authentication.Users[0].AccessKeyId=admin' \
   --set 'config.Authentication.Users[0].SecretAccessKey=secret123' \
@@ -422,7 +422,7 @@ kind load docker-image lamina:dev
 minikube image load lamina:dev
 
 # Install with local image
-helm install lamina ./chart \
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina \
   --set image.repository=lamina \
   --set image.tag=dev \
   --set image.pullPolicy=Never
@@ -432,10 +432,10 @@ helm install lamina ./chart \
 
 ```bash
 # Generate manifests without installing
-helm install lamina ./chart --dry-run --debug
+helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina --dry-run --debug
 
 # Template specific values
-helm template lamina ./chart -f values-prod.yaml
+helm template lamina oci://ghcr.io/loyaltypointhq/lamina/lamina -f values-prod.yaml
 ```
 
 ## License
