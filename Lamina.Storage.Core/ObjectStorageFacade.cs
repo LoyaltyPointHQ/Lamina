@@ -223,7 +223,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
     private string GetContentTypeFromKey(string key)
     {
         // Try to determine content type from file extension
-        if (_contentTypeDetector.TryGetContentType(key, out var contentType))
+        if (_contentTypeDetector.TryGetContentType(key, out var contentType) && contentType != null)
         {
             return contentType;
         }
