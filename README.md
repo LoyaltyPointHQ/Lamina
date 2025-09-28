@@ -235,6 +235,8 @@ For PostgreSQL metadata storage (recommended for multi-instance deployments):
 
 ### Distributed Locking
 
+**Redis is only required for multi-instance deployments with file-based metadata storage.** Single-instance deployments or those using SQL metadata storage do not need Redis.
+
 For multi-instance deployments, enable Redis-based distributed locking to ensure safe concurrent access to shared storage:
 
 ```json
@@ -330,8 +332,9 @@ volumes:
 
 #### When to Use Redis Locking
 
-- **Single Instance**: Use default `InMemory` lock manager
-- **Multi-Instance**: Use `Redis` lock manager for:
+- **Single Instance**: Use default `InMemory` lock manager (no Redis needed)
+- **SQL Metadata Storage**: No Redis needed regardless of instance count (database handles locking)
+- **Multi-Instance with File-Based Metadata**: Use `Redis` lock manager for:
   - Load balancing across multiple Lamina instances
   - High availability deployments
   - Shared storage (NFS, CIFS, cloud volumes)
