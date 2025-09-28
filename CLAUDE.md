@@ -29,10 +29,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Build and run
 dotnet build
-dotnet run --project Lamina/Lamina.csproj
+dotnet run --project Lamina.WebApi/Lamina.WebApi.csproj
 
-# Test
+# Test all projects
 dotnet test
+
+# Test specific projects
+dotnet test Lamina.Storage.Core.Tests
+dotnet test Lamina.Storage.Filesystem.Tests
+dotnet test Lamina.Storage.Sql.Tests
+dotnet test Lamina.WebApi.Tests
 ```
 
 ### Database Migrations
@@ -51,14 +57,14 @@ dotnet tool install --global dotnet-ef
 dotnet ef migrations add <MigrationName> \
   --context LaminaDbContext \
   --output-dir Migrations/Sqlite \
-  --project Lamina/Lamina.csproj \
+  --project Lamina.WebApi/Lamina.WebApi.csproj \
   -- --SqlStorage:Provider=SQLite
 
-# For PostgreSQL  
+# For PostgreSQL
 dotnet ef migrations add <MigrationName> \
   --context LaminaDbContext \
   --output-dir Migrations/PostgreSql \
-  --project Lamina/Lamina.csproj \
+  --project Lamina.WebApi/Lamina.WebApi.csproj \
   -- --SqlStorage:Provider=PostgreSQL
 
 # Note: After creating PostgreSQL migrations, update the timestamp by 1 second
@@ -75,14 +81,14 @@ To manually apply migrations:
 # For SQLite
 dotnet ef database update \
   --context LaminaDbContext \
-  --project Lamina/Lamina.csproj \
+  --project Lamina.WebApi/Lamina.WebApi.csproj \
   -- --SqlStorage:Provider=SQLite \
      --SqlStorage:ConnectionString="Data Source=/path/to/lamina.db"
 
 # For PostgreSQL
 dotnet ef database update \
   --context LaminaDbContext \
-  --project Lamina/Lamina.csproj \
+  --project Lamina.WebApi/Lamina.WebApi.csproj \
   -- --SqlStorage:Provider=PostgreSQL \
      --SqlStorage:ConnectionString="Host=localhost;Database=lamina;Username=user;Password=pass"
 ```
@@ -112,7 +118,7 @@ dotnet ef migrations add <MigrationName> --context LaminaDbContext --output-dir 
 ### Docker
 
 ```bash
-docker build -f Lamina/Dockerfile -t lamina .
+docker build -f Lamina.WebApi/Dockerfile -t lamina .
 docker run -p 8080:8080 lamina
 ```
 
@@ -130,6 +136,24 @@ helm install lamina ./chart \
 ```
 
 ## Project Structure
+
+### Multi-Project Architecture
+
+The solution is organized into multiple projects for better separation of concerns:
+
+#### Main Projects
+- **Lamina.Core**: Core models, interfaces, and shared types
+- **Lamina.Storage.Core**: Storage abstractions, facades, and helpers
+- **Lamina.Storage.Filesystem**: Filesystem-based storage implementation
+- **Lamina.Storage.InMemory**: In-memory storage implementation
+- **Lamina.Storage.Sql**: SQL database storage implementation (SQLite/PostgreSQL)
+- **Lamina.WebApi**: ASP.NET Core Web API application (main entry point)
+
+#### Test Projects
+- **Lamina.Storage.Core.Tests**: Tests for storage abstractions and facades
+- **Lamina.Storage.Filesystem.Tests**: Tests for filesystem storage implementation
+- **Lamina.Storage.Sql.Tests**: Tests for SQL storage implementation
+- **Lamina.WebApi.Tests**: Tests for controllers, services, authentication, and integration
 
 ### Core Components
 

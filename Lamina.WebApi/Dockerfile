@@ -6,15 +6,28 @@ EXPOSE 8081
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
-COPY ["Lamina/Lamina.csproj", "Lamina/"]
-RUN dotnet restore "Lamina/Lamina.csproj"
+
+# Copy project files for dependency resolution
+COPY ["Lamina.WebApi/Lamina.WebApi.csproj", "Lamina.WebApi/"]
+COPY ["Lamina.Core/Lamina.Core.csproj", "Lamina.Core/"]
+COPY ["Lamina.Storage.Core/Lamina.Storage.Core.csproj", "Lamina.Storage.Core/"]
+COPY ["Lamina.Storage.Filesystem/Lamina.Storage.Filesystem.csproj", "Lamina.Storage.Filesystem/"]
+COPY ["Lamina.Storage.InMemory/Lamina.Storage.InMemory.csproj", "Lamina.Storage.InMemory/"]
+COPY ["Lamina.Storage.Sql/Lamina.Storage.Sql.csproj", "Lamina.Storage.Sql/"]
+
+# Restore dependencies
+RUN dotnet restore "Lamina.WebApi/Lamina.WebApi.csproj"
+
+# Copy all source code
 COPY . .
-WORKDIR "/src/Lamina"
-RUN dotnet build "./Lamina.csproj" -c $BUILD_CONFIGURATION -o /app/build
+
+# Build the application
+WORKDIR "/src/Lamina.WebApi"
+RUN dotnet build "./Lamina.WebApi.csproj" -c $BUILD_CONFIGURATION -o /app/build
 
 FROM build AS publish
 ARG BUILD_CONFIGURATION=Release
-RUN dotnet publish "./Lamina.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
+RUN dotnet publish "./Lamina.WebApi.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
 
 FROM base AS final
 WORKDIR /app
@@ -39,4 +52,4 @@ ENV DOTNET_CLI_HOME=/app
 # OpenShift will override this with an arbitrary UID from the project range
 USER 1001
 
-ENTRYPOINT ["dotnet", "Lamina.dll"]
+ENTRYPOINT ["dotnet", "Lamina.WebApi.dll"]
