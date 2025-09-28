@@ -2,14 +2,13 @@ using System.Net;
 using System.Text;
 using System.Xml.Serialization;
 using Lamina.Core.Models;
-using Lamina.WebApi;
 using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace Lamina.WebApi.Tests.Controllers;
 
 public class DirectoryBucketIntegrationTests : IntegrationTestBase
 {
-    public DirectoryBucketIntegrationTests(WebApplicationFactory<Program> factory) : base(factory)
+    public DirectoryBucketIntegrationTests(WebApplicationFactory<global::Program> factory) : base(factory)
     {
     }
 

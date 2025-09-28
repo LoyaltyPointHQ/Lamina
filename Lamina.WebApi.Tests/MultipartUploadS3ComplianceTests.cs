@@ -2,14 +2,13 @@ using System.Net;
 using System.Text;
 using System.Xml.Serialization;
 using Lamina.Core.Models;
-using Lamina.WebApi;
 using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace Lamina.WebApi.Tests.Controllers;
 
 public class MultipartUploadS3ComplianceTests : IntegrationTestBase
 {
-    public MultipartUploadS3ComplianceTests(WebApplicationFactory<Program> factory) : base(factory)
+    public MultipartUploadS3ComplianceTests(WebApplicationFactory<global::Program> factory) : base(factory)
     {
     }
 

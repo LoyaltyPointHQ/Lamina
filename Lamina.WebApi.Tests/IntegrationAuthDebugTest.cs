@@ -4,7 +4,6 @@ using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
-using Lamina.WebApi;
 using Lamina.WebApi.Services;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
@@ -15,13 +14,13 @@ using Xunit.Abstractions;
 
 namespace Lamina.WebApi.Tests.Controllers
 {
-    public class IntegrationAuthDebugTest : IClassFixture<WebApplicationFactory<Program>>
+    public class IntegrationAuthDebugTest : IClassFixture<WebApplicationFactory<global::Program>>
     {
         private readonly ITestOutputHelper _output;
-        private readonly WebApplicationFactory<Program> _factory;
+        private readonly WebApplicationFactory<global::Program> _factory;
         private readonly HttpClient _client;
 
-        public IntegrationAuthDebugTest(ITestOutputHelper output, WebApplicationFactory<Program> factory)
+        public IntegrationAuthDebugTest(ITestOutputHelper output, WebApplicationFactory<global::Program> factory)
         {
             _output = output;
             _factory = factory.WithWebHostBuilder(builder =>

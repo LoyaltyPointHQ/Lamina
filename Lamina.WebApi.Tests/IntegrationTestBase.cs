@@ -1,16 +1,15 @@
-using Lamina.WebApi;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 
 namespace Lamina.WebApi.Tests.Controllers;
 
-public abstract class IntegrationTestBase : IClassFixture<WebApplicationFactory<Program>>
+public abstract class IntegrationTestBase : IClassFixture<WebApplicationFactory<global::Program>>
 {
-    protected readonly WebApplicationFactory<Program> Factory;
+    protected readonly WebApplicationFactory<global::Program> Factory;
     protected readonly HttpClient Client;
 
-    protected IntegrationTestBase(WebApplicationFactory<Program> factory)
+    protected IntegrationTestBase(WebApplicationFactory<global::Program> factory)
     {
         Factory = factory.WithWebHostBuilder(builder =>
         {

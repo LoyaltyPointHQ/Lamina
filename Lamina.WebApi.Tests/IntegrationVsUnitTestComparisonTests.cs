@@ -11,21 +11,20 @@ using Xunit;
 using Xunit.Abstractions;
 using System.Security.Cryptography;
 using Lamina.Core.Models;
-using Lamina.WebApi;
 using Lamina.WebApi.Services;
 
 namespace Lamina.WebApi.Tests.Services
 {
-    public class IntegrationVsUnitTestComparisonTests : IClassFixture<WebApplicationFactory<Program>>
+    public class IntegrationVsUnitTestComparisonTests : IClassFixture<WebApplicationFactory<global::Program>>
     {
         private readonly ITestOutputHelper _output;
-        private readonly WebApplicationFactory<Program> _factory;
+        private readonly WebApplicationFactory<global::Program> _factory;
         private readonly HttpClient _client;
         private readonly Mock<ILogger<AuthenticationService>> _loggerMock;
         private readonly AuthenticationService _authService;
         private readonly S3User _testUser;
 
-        public IntegrationVsUnitTestComparisonTests(WebApplicationFactory<Program> factory, ITestOutputHelper output)
+        public IntegrationVsUnitTestComparisonTests(WebApplicationFactory<global::Program> factory, ITestOutputHelper output)
         {
             _output = output;
             _factory = factory.WithWebHostBuilder(builder =>

@@ -1,7 +1,6 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
-using Lamina.WebApi;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -10,12 +9,12 @@ using Xunit;
 
 namespace Lamina.WebApi.Tests.Controllers
 {
-    public class StreamingTrailerIntegrationTests : IClassFixture<WebApplicationFactory<Program>>
+    public class StreamingTrailerIntegrationTests : IClassFixture<WebApplicationFactory<global::Program>>
     {
-        private readonly WebApplicationFactory<Program> _factory;
+        private readonly WebApplicationFactory<global::Program> _factory;
         private readonly HttpClient _client;
 
-        public StreamingTrailerIntegrationTests(WebApplicationFactory<Program> factory)
+        public StreamingTrailerIntegrationTests(WebApplicationFactory<global::Program> factory)
         {
             var config = new Dictionary<string, string?>
             {

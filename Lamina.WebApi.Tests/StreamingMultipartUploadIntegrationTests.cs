@@ -5,7 +5,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Serialization;
 using Lamina.Core.Models;
-using Lamina.WebApi;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -13,12 +12,12 @@ using Xunit;
 
 namespace Lamina.WebApi.Tests.Controllers;
 
-public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplicationFactory<Program>>
+public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplicationFactory<global::Program>>
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private readonly WebApplicationFactory<global::Program> _factory;
     private readonly HttpClient _client;
 
-    public StreamingMultipartUploadIntegrationTests(WebApplicationFactory<Program> factory)
+    public StreamingMultipartUploadIntegrationTests(WebApplicationFactory<global::Program> factory)
     {
         _factory = factory.WithWebHostBuilder(builder =>
         {
@@ -28,7 +27,7 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
                 // Use the same approach as StreamingAuthenticationIntegrationTests - load test settings first
                 config.Sources.Clear();
                 var testProjectPath = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..");
-                var testSettingsPath = Path.Combine(testProjectPath, "Lamina.Tests", "appsettings.Test.json");
+                var testSettingsPath = Path.Combine(testProjectPath, "Lamina.WebApi.Tests", "appsettings.Test.json");
                 config.AddJsonFile(testSettingsPath, optional: false, reloadOnChange: false);
 
                 // Then overlay authentication settings

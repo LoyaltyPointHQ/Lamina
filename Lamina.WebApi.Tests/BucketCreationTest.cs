@@ -4,7 +4,6 @@ using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
-using Lamina.WebApi;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -13,13 +12,13 @@ using Xunit.Abstractions;
 
 namespace Lamina.WebApi.Tests.Controllers
 {
-    public class BucketCreationTest : IClassFixture<WebApplicationFactory<Program>>
+    public class BucketCreationTest : IClassFixture<WebApplicationFactory<global::Program>>
     {
         private readonly ITestOutputHelper _output;
-        private readonly WebApplicationFactory<Program> _factory;
+        private readonly WebApplicationFactory<global::Program> _factory;
         private readonly HttpClient _client;
 
-        public BucketCreationTest(ITestOutputHelper output, WebApplicationFactory<Program> factory)
+        public BucketCreationTest(ITestOutputHelper output, WebApplicationFactory<global::Program> factory)
         {
             _output = output;
             _factory = factory.WithWebHostBuilder(builder =>

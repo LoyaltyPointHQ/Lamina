@@ -29,7 +29,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Build and run
 dotnet build
-dotnet run --project Lamina.WebApi/Lamina.WebApi.csproj
+dotnet run --project Lamina/Lamina.csproj
 
 # Test all projects
 dotnet test
@@ -57,14 +57,14 @@ dotnet tool install --global dotnet-ef
 dotnet ef migrations add <MigrationName> \
   --context LaminaDbContext \
   --output-dir Migrations/Sqlite \
-  --project Lamina.WebApi/Lamina.WebApi.csproj \
+  --project Lamina/Lamina.csproj \
   -- --SqlStorage:Provider=SQLite
 
 # For PostgreSQL
 dotnet ef migrations add <MigrationName> \
   --context LaminaDbContext \
   --output-dir Migrations/PostgreSql \
-  --project Lamina.WebApi/Lamina.WebApi.csproj \
+  --project Lamina/Lamina.csproj \
   -- --SqlStorage:Provider=PostgreSQL
 
 # Note: After creating PostgreSQL migrations, update the timestamp by 1 second
@@ -81,14 +81,14 @@ To manually apply migrations:
 # For SQLite
 dotnet ef database update \
   --context LaminaDbContext \
-  --project Lamina.WebApi/Lamina.WebApi.csproj \
+  --project Lamina/Lamina.csproj \
   -- --SqlStorage:Provider=SQLite \
      --SqlStorage:ConnectionString="Data Source=/path/to/lamina.db"
 
 # For PostgreSQL
 dotnet ef database update \
   --context LaminaDbContext \
-  --project Lamina.WebApi/Lamina.WebApi.csproj \
+  --project Lamina/Lamina.csproj \
   -- --SqlStorage:Provider=PostgreSQL \
      --SqlStorage:ConnectionString="Host=localhost;Database=lamina;Username=user;Password=pass"
 ```
@@ -142,12 +142,13 @@ helm install lamina ./chart \
 The solution is organized into multiple projects for better separation of concerns:
 
 #### Main Projects
+- **Lamina**: Simple startup project and main entry point
 - **Lamina.Core**: Core models, interfaces, and shared types
 - **Lamina.Storage.Core**: Storage abstractions, facades, and helpers
 - **Lamina.Storage.Filesystem**: Filesystem-based storage implementation
 - **Lamina.Storage.InMemory**: In-memory storage implementation
 - **Lamina.Storage.Sql**: SQL database storage implementation (SQLite/PostgreSQL)
-- **Lamina.WebApi**: ASP.NET Core Web API application (main entry point)
+- **Lamina.WebApi**: ASP.NET Core Web API implementation and controllers
 
 #### Test Projects
 - **Lamina.Storage.Core.Tests**: Tests for storage abstractions and facades

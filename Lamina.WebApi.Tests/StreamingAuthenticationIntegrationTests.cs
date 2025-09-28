@@ -2,7 +2,6 @@ using System.Net;
 using System.Text;
 using System.Globalization;
 using System.Security.Cryptography;
-using Lamina.WebApi;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -11,12 +10,12 @@ using Xunit;
 
 namespace Lamina.WebApi.Tests.Controllers;
 
-public class StreamingAuthenticationIntegrationTests : IClassFixture<WebApplicationFactory<Program>>
+public class StreamingAuthenticationIntegrationTests : IClassFixture<WebApplicationFactory<global::Program>>
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private readonly WebApplicationFactory<global::Program> _factory;
     private readonly HttpClient _client;
 
-    public StreamingAuthenticationIntegrationTests(WebApplicationFactory<Program> factory)
+    public StreamingAuthenticationIntegrationTests(WebApplicationFactory<global::Program> factory)
     {
         _factory = factory.WithWebHostBuilder(builder =>
         {
@@ -26,7 +25,7 @@ public class StreamingAuthenticationIntegrationTests : IClassFixture<WebApplicat
                 // Use the same approach as IntegrationTestBase - load test settings first
                 config.Sources.Clear();
                 var testProjectPath = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..");
-                var testSettingsPath = Path.Combine(testProjectPath, "Lamina.Tests", "appsettings.Test.json");
+                var testSettingsPath = Path.Combine(testProjectPath, "Lamina.WebApi.Tests", "appsettings.Test.json");
                 config.AddJsonFile(testSettingsPath, optional: false, reloadOnChange: false);
                 
                 // Then overlay authentication settings
