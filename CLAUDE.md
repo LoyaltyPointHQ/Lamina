@@ -376,6 +376,19 @@ Three background services handle maintenance:
 - **Metadata Cleanup**: Removes orphaned metadata
 - **Temp File Cleanup**: Removes interrupted upload temp files
 
+## Release Notes
+
+When making commits that introduce features or changes that should appear in release notes, include them in commit messages with the format:
+
+```
+[Feature] Brief description of the feature
+[Enhancement] Brief description of the improvement
+[Fix] Brief description of the bug fix (only for user-facing fixes)
+[Breaking] Brief description of breaking change
+```
+
+This helps identify release-worthy changes when creating GitHub releases.
+
 ## Auto-Update Instructions
 
 Update CLAUDE.md after significant changes:
