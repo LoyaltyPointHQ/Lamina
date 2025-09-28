@@ -87,6 +87,7 @@ public class S3ObjectsController : S3ControllerBase
         if (!result.IsSuccess)
         {
             // Handle validation errors from the facade (e.g., Directory bucket constraints)
+            _logger.LogWarning("ListObjects call failed for bucket {BucketName} ({ErrorCode}): {ErrorMessage}", bucketName, result.ErrorCode!, result.ErrorMessage!);
             return S3Error(result.ErrorCode!, result.ErrorMessage!, $"/{bucketName}", 400);
         }
 
