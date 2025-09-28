@@ -1,9 +1,9 @@
 using System.IO.Pipelines;
 using System.Text;
-using Lamina.Models;
-using Lamina.Storage.Abstract;
-using Lamina.Streaming.Chunked;
-using Lamina.Streaming.Validation;
+using Lamina.Core.Models;
+using Lamina.Core.Streaming;
+using Lamina.Storage.Core;
+using Lamina.Storage.Core.Abstract;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 

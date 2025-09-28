@@ -1,16 +1,18 @@
+using Lamina.Core.Models;
+using Lamina.Core.Streaming;
+using Lamina.WebApi.Authentication;
+using Lamina.WebApi.Authorization;
+using Lamina.WebApi.Extensions;
+using Lamina.WebApi.Services;
+using Lamina.WebApi.Streaming;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Lamina.Extensions;
-using Lamina.Authentication;
-using Lamina.Authorization;
-using Lamina.Models;
 using Microsoft.AspNetCore.Http;
-using Lamina.Streaming.Validation;
 
 namespace Lamina.Tests.Extensions
 {
-    public class MockAuthenticationService : Lamina.Services.IAuthenticationService
+    public class MockAuthenticationService : IAuthenticationService
     {
         public Task<(bool isValid, S3User? user, string? error)> ValidateRequestAsync(HttpRequest request, string bucketName, string? objectKey = null, string? operation = null)
         {
@@ -24,9 +26,9 @@ namespace Lamina.Tests.Extensions
         public bool UserHasAccessToBucket(S3User user, string bucketName, string? operation = null) => true;
     }
 
-    public class MockStreamingAuthenticationService : Lamina.Streaming.IStreamingAuthenticationService
+    public class MockStreamingAuthenticationService : IStreamingAuthenticationService
     {
-        public Lamina.Streaming.Validation.IChunkSignatureValidator? CreateChunkValidator(HttpRequest request, S3User user)
+        public IChunkSignatureValidator? CreateChunkValidator(HttpRequest request, S3User user)
         {
             return null;
         }
@@ -55,7 +57,7 @@ namespace Lamina.Tests.Extensions
             // Arrange
             var services = new ServiceCollection();
             services.AddLogging();
-            services.AddScoped<Lamina.Services.IAuthenticationService, MockAuthenticationService>();
+            services.AddScoped<IAuthenticationService, MockAuthenticationService>();
 
             // Act
             services.AddS3Authorization();
@@ -78,8 +80,8 @@ namespace Lamina.Tests.Extensions
             // Arrange
             var services = new ServiceCollection();
             services.AddLogging();
-            services.AddScoped<Lamina.Services.IAuthenticationService, MockAuthenticationService>();
-            services.AddScoped<Lamina.Streaming.IStreamingAuthenticationService, MockStreamingAuthenticationService>();
+            services.AddScoped<IAuthenticationService, MockAuthenticationService>();
+            services.AddScoped<IStreamingAuthenticationService, MockStreamingAuthenticationService>();
 
             // Act
             services.AddS3Security();
@@ -106,8 +108,8 @@ namespace Lamina.Tests.Extensions
             // Arrange
             var services = new ServiceCollection();
             services.AddLogging();
-            services.AddScoped<Lamina.Services.IAuthenticationService, MockAuthenticationService>();
-            services.AddScoped<Lamina.Streaming.IStreamingAuthenticationService, MockStreamingAuthenticationService>();
+            services.AddScoped<IAuthenticationService, MockAuthenticationService>();
+            services.AddScoped<IStreamingAuthenticationService, MockStreamingAuthenticationService>();
             var customHealthPath = "/custom-health";
 
             // Act

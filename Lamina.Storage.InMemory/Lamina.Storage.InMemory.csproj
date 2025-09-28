@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net9.0</TargetFramework>
+        <LangVersion>latest</LangVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Lamina.Core\Lamina.Core.csproj" />
+      <ProjectReference Include="..\Lamina.Storage.Core\Lamina.Storage.Core.csproj" />
+    </ItemGroup>
+
+</Project>

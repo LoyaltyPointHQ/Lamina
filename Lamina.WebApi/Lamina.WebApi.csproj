@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <TargetFramework>net9.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+            <_Parameter1>Lamina.Tests</_Parameter1>
+        </AssemblyAttribute>
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Lamina.Core\Lamina.Core.csproj" />
+      <ProjectReference Include="..\Lamina.Storage.Core\Lamina.Storage.Core.csproj" />
+      <ProjectReference Include="..\Lamina.Storage.Filesystem\Lamina.Storage.Filesystem.csproj" />
+      <ProjectReference Include="..\Lamina.Storage.InMemory\Lamina.Storage.InMemory.csproj" />
+      <ProjectReference Include="..\Lamina.Storage.Sql\Lamina.Storage.Sql.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Content Include="..\.dockerignore">
+        <Link>.dockerignore</Link>
+      </Content>
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.9" />
+    </ItemGroup>
+
+</Project>

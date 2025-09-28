@@ -1,7 +1,7 @@
-using Lamina.Configuration;
-using Lamina.Models;
-using Lamina.Services;
-using Lamina.Storage.Abstract;
+using Lamina.Core.Models;
+using Lamina.Storage.Core.Abstract;
+using Lamina.WebApi.Configuration;
+using Lamina.WebApi.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;

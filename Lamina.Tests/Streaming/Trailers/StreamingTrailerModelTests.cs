@@ -1,5 +1,5 @@
+using Lamina.Core.Models;
 using Xunit;
-using Lamina.Models;
 
 namespace Lamina.Tests.Streaming.Trailers
 {

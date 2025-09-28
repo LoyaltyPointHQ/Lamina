@@ -1,13 +1,13 @@
 using System.Security.Claims;
+using Lamina.Core.Models;
+using Lamina.WebApi.Authorization;
+using Lamina.WebApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
 using Xunit;
-using Lamina.Authorization;
-using Lamina.Models;
-using Lamina.Services;
 
 namespace Lamina.Tests.Authorization
 {

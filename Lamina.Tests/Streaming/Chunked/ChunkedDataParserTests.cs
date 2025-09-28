@@ -1,10 +1,10 @@
 using System.IO.Pipelines;
 using System.Text;
+using Lamina.Core.Streaming;
+using Lamina.WebApi.Streaming.Chunked;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
-using Lamina.Streaming.Chunked;
-using Lamina.Streaming.Validation;
 
 namespace Lamina.Tests.Streaming.Chunked
 {

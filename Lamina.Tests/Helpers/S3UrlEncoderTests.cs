@@ -1,4 +1,4 @@
-using Lamina.Helpers;
+using Lamina.Storage.Core.Helpers;
 using Xunit;
 
 namespace Lamina.Tests.Helpers;

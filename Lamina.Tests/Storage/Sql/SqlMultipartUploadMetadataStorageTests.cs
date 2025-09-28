@@ -1,5 +1,5 @@
+using Lamina.Core.Models;
 using Microsoft.EntityFrameworkCore;
-using Lamina.Models;
 using Lamina.Storage.Sql;
 using Lamina.Storage.Sql.Context;
 

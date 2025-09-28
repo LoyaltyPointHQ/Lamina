@@ -1,11 +1,11 @@
-using Lamina.Models;
-using Lamina.Storage.Abstract;
 using Lamina.Storage.Filesystem;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.InMemory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Runtime.InteropServices;
+using Lamina.Core.Models;
+using Lamina.Storage.Core.Abstract;
 
 namespace Lamina.Tests.Storage;
 

@@ -3,12 +3,12 @@ using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
+using Lamina.Core.Models;
+using Lamina.WebApi.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
-using Lamina.Models;
-using Lamina.Services;
 using Xunit;
 
 namespace Lamina.Tests.Services

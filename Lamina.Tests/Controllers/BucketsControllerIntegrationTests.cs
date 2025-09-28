@@ -1,8 +1,9 @@
 using System.Net;
 using System.Text;
 using System.Xml.Serialization;
+using Lamina.Core.Models;
+using Lamina.WebApi;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Lamina.Models;
 
 namespace Lamina.Tests.Controllers;
 

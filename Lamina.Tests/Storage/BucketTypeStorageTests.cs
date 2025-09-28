@@ -1,4 +1,4 @@
-using Lamina.Models;
+using Lamina.Core.Models;
 using Lamina.Storage.InMemory;
 using Microsoft.Extensions.Logging.Abstractions;
 

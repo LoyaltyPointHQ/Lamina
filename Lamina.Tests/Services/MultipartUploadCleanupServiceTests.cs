@@ -2,14 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Lamina.Core.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Moq;
-using Lamina.Models;
-using Lamina.Services;
-using Lamina.Storage.Abstract;
+using Lamina.Storage.Core.Abstract;
+using Lamina.WebApi.Services;
 using Xunit;
 
 namespace Lamina.Tests.Services;

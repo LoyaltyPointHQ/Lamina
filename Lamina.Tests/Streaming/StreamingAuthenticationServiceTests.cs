@@ -3,11 +3,12 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
 using Xunit;
-using Lamina.Models;
-using Lamina.Services;
-using Lamina.Streaming;
 using System.Security.Cryptography;
 using System.Text;
+using Lamina.Core.Models;
+using Lamina.WebApi.Services;
+using Lamina.WebApi.Streaming;
+using Lamina.WebApi.Streaming.Validation;
 
 namespace Lamina.Tests.Streaming
 {
@@ -254,7 +255,7 @@ namespace Lamina.Tests.Streaming
 
             // Use SignatureCalculator directly to get expected signature
             var signingKey = GetSigningKey("testsecret", "20240101", "us-east-1", "s3");
-            var expectedChunkSignature = Lamina.Streaming.Validation.SignatureCalculator.CalculateChunkSignature(
+            var expectedChunkSignature = SignatureCalculator.CalculateChunkSignature(
                 signingKey,
                 dateTime,
                 "us-east-1",
@@ -320,7 +321,7 @@ namespace Lamina.Tests.Streaming
 
             // Calculate expected signature for the last chunk using SignatureCalculator
             var signingKey = GetSigningKey("testsecret", "20240101", "us-east-1", "s3");
-            var expectedChunkSignature = Lamina.Streaming.Validation.SignatureCalculator.CalculateChunkSignature(
+            var expectedChunkSignature = SignatureCalculator.CalculateChunkSignature(
                 signingKey,
                 dateTime,
                 "us-east-1",
@@ -389,7 +390,7 @@ namespace Lamina.Tests.Streaming
 
             // Calculate what we expect the signature to be using SignatureCalculator
             var signingKey = GetSigningKey("testsecret", "20240101", "us-east-1", "s3");
-            var expectedSignature = Lamina.Streaming.Validation.SignatureCalculator.CalculateChunkSignature(
+            var expectedSignature = SignatureCalculator.CalculateChunkSignature(
                 signingKey,
                 dateTime,
                 "us-east-1",
@@ -406,7 +407,7 @@ namespace Lamina.Tests.Streaming
 
             // Now test second chunk - the previousSignature should be our calculated signature
             var chunkData2 = new byte[] { 0x57, 0x6f, 0x72, 0x6c, 0x64 }; // "World"
-            var expectedSignature2 = Lamina.Streaming.Validation.SignatureCalculator.CalculateChunkSignature(
+            var expectedSignature2 = SignatureCalculator.CalculateChunkSignature(
                 signingKey,
                 dateTime,
                 "us-east-1",

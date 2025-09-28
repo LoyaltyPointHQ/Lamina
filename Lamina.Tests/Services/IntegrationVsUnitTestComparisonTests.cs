@@ -9,9 +9,10 @@ using System.Net.Http;
 using System.Text;
 using Xunit;
 using Xunit.Abstractions;
-using Lamina.Models;
-using Lamina.Services;
 using System.Security.Cryptography;
+using Lamina.Core.Models;
+using Lamina.WebApi;
+using Lamina.WebApi.Services;
 
 namespace Lamina.Tests.Services
 {

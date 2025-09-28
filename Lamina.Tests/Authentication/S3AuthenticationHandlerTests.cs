@@ -1,17 +1,15 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
+using Lamina.Core.Models;
+using Lamina.Core.Streaming;
+using Lamina.WebApi.Authentication;
+using Lamina.WebApi.Streaming;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
-using Xunit;
-using Lamina.Authentication;
-using Lamina.Models;
-using Lamina.Services;
-using Lamina.Streaming;
-using Lamina.Streaming.Validation;
-using IAuthenticationService = Lamina.Services.IAuthenticationService;
+using IAuthenticationService = Lamina.WebApi.Services.IAuthenticationService;
 
 namespace Lamina.Tests.Authentication
 {

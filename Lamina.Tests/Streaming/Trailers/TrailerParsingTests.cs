@@ -1,11 +1,11 @@
 using System.IO.Pipelines;
 using System.Text;
+using Lamina.Core.Models;
+using Lamina.Core.Streaming;
+using Lamina.WebApi.Streaming.Chunked;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
-using Lamina.Models;
-using Lamina.Streaming.Chunked;
-using Lamina.Streaming.Validation;
 
 namespace Lamina.Tests.Streaming.Trailers
 {

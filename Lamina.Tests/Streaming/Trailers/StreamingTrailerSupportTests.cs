@@ -3,11 +3,12 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
-using Lamina.Models;
-using Lamina.Services;
-using Lamina.Streaming;
-using Lamina.Streaming.Validation;
 using System.Security.Cryptography;
+using Lamina.Core.Models;
+using Lamina.Core.Streaming;
+using Lamina.WebApi.Services;
+using Lamina.WebApi.Streaming;
+using Lamina.WebApi.Streaming.Validation;
 
 namespace Lamina.Tests.Streaming.Trailers
 {

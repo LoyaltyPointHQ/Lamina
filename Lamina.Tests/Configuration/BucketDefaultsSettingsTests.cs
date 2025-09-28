@@ -1,5 +1,4 @@
-using Lamina.Configuration;
-using Lamina.Models;
+using Lamina.Storage.Core.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 

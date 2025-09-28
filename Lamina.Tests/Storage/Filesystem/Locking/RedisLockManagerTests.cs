@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
 using Xunit;
-using Lamina.Configuration;
+using Lamina.Storage.Core.Configuration;
 using Lamina.Storage.Filesystem.Locking;
 using RedLockNet.SERedis;
 using RedLockNet.SERedis.Configuration;

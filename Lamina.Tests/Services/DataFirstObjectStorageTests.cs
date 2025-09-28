@@ -1,12 +1,13 @@
 using System.IO.Pipelines;
 using System.Text;
+using Lamina.Core.Models;
 using Microsoft.Extensions.Logging;
 using Moq;
-using Lamina.Models;
-using Lamina.Storage.Abstract;
+using Lamina.Storage.Core;
+using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.InMemory;
-using Lamina.Streaming.Chunked;
-using Lamina.Helpers;
+using Lamina.WebApi.Services;
 
 namespace Lamina.Tests.Services;
 
@@ -16,6 +17,7 @@ public class DataFirstObjectStorageTests
     private readonly Mock<IObjectMetadataStorage> _metadataStorageMock;
     private readonly Mock<IBucketStorageFacade> _bucketStorageMock;
     private readonly Mock<ILogger<ObjectStorageFacade>> _loggerMock;
+    private readonly IContentTypeDetector _contentTypeDetector;
     private readonly ObjectStorageFacade _facade;
 
     public DataFirstObjectStorageTests()
@@ -24,6 +26,7 @@ public class DataFirstObjectStorageTests
         _metadataStorageMock = new Mock<IObjectMetadataStorage>();
         _bucketStorageMock = new Mock<IBucketStorageFacade>();
         _loggerMock = new Mock<ILogger<ObjectStorageFacade>>();
+        _contentTypeDetector = new FileExtensionContentTypeDetector();
 
         // Setup default bucket to return GeneralPurpose type
         _bucketStorageMock.Setup(x => x.GetBucketAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -34,7 +37,7 @@ public class DataFirstObjectStorageTests
                 CreationDate = DateTime.UtcNow
             });
 
-        _facade = new ObjectStorageFacade(_dataStorageMock.Object, _metadataStorageMock.Object, _bucketStorageMock.Object, _loggerMock.Object);
+        _facade = new ObjectStorageFacade(_dataStorageMock.Object, _metadataStorageMock.Object, _bucketStorageMock.Object, _loggerMock.Object, _contentTypeDetector);
     }
 
     [Fact]
