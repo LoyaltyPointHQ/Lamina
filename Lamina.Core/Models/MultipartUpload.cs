@@ -27,25 +27,6 @@ public class InitiateMultipartUploadRequest
     public Dictionary<string, string>? Metadata { get; set; }
 }
 
-public class InitiateMultipartUploadResponse
-{
-    public string UploadId { get; set; } = string.Empty;
-    public string BucketName { get; set; } = string.Empty;
-    public string Key { get; set; } = string.Empty;
-}
-
-public class UploadPartRequest
-{
-    public int PartNumber { get; set; }
-    public string UploadId { get; set; } = string.Empty;
-}
-
-public class UploadPartResponse
-{
-    public string ETag { get; set; } = string.Empty;
-    public int PartNumber { get; set; }
-}
-
 public class CompleteMultipartUploadRequest
 {
     public string UploadId { get; set; } = string.Empty;
@@ -74,17 +55,4 @@ public class CompleteMultipartUploadResponse
     public string? ChecksumCRC64NVME { get; set; }
     public string? ChecksumSHA1 { get; set; }
     public string? ChecksumSHA256 { get; set; }
-}
-
-public class XmlDeserializationResult
-{
-    public List<CompletedPart>? Parts { get; set; }
-    public bool IsSuccess { get; set; }
-    public string? ErrorMessage { get; set; }
-
-    public static XmlDeserializationResult Success(List<CompletedPart> parts) =>
-        new() { Parts = parts, IsSuccess = true };
-
-    public static XmlDeserializationResult Error(string message) =>
-        new() { IsSuccess = false, ErrorMessage = message };
 }

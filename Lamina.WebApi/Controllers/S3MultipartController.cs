@@ -28,21 +28,21 @@ public class S3MultipartController : S3ControllerBase
         _logger = logger;
     }
 
-    private static XmlDeserializationResult TryDeserializeCompleteRequest(string xmlContent)
+    private static XmlDeserializationResult<List<CompletedPart>> TryDeserializeCompleteRequest(string xmlContent)
     {
         // Try without namespace first (for compatibility with most clients)
         if (TryDeserializeWithoutNamespace(xmlContent, out var partsNoNs))
         {
-            return XmlDeserializationResult.Success(partsNoNs);
+            return XmlDeserializationResult<List<CompletedPart>>.Success(partsNoNs);
         }
 
         // Try with S3 namespace
         if (TryDeserializeWithNamespace(xmlContent, out var partsWithNs))
         {
-            return XmlDeserializationResult.Success(partsWithNs);
+            return XmlDeserializationResult<List<CompletedPart>>.Success(partsWithNs);
         }
 
-        return XmlDeserializationResult.Error("The XML you provided was not well-formed or did not validate against our published schema.");
+        return XmlDeserializationResult<List<CompletedPart>>.Error("The XML you provided was not well-formed or did not validate against our published schema.");
     }
 
     private static bool TryDeserializeWithoutNamespace(string xmlContent, out List<CompletedPart> parts)
@@ -263,7 +263,7 @@ public class S3MultipartController : S3ControllerBase
                 return S3Error("MalformedXML", deserializationResult.ErrorMessage!, $"{bucketName}/{key}", 400);
             }
 
-            var parts = deserializationResult.Parts!;
+            var parts = deserializationResult.Value!;
 
             // Phase 2 Validation: Part number ordering (parts must be consecutive starting from 1)
             // Check if the provided parts are already in ascending order

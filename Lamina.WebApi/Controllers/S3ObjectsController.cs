@@ -329,6 +329,70 @@ public class S3ObjectsController : S3ControllerBase
         return Ok();
     }
 
+    private static XmlDeserializationResult<DeleteMultipleObjectsRequest> TryDeserializeDeleteRequest(string xmlContent)
+    {
+        // Try without namespace first (for compatibility with most clients)
+        if (TryDeserializeDeleteWithoutNamespace(xmlContent, out var deleteRequestNoNs))
+        {
+            return XmlDeserializationResult<DeleteMultipleObjectsRequest>.Success(deleteRequestNoNs);
+        }
+
+        // Try with S3 namespace
+        if (TryDeserializeDeleteWithNamespace(xmlContent, out var deleteRequestWithNs))
+        {
+            return XmlDeserializationResult<DeleteMultipleObjectsRequest>.Success(deleteRequestWithNs);
+        }
+
+        return XmlDeserializationResult<DeleteMultipleObjectsRequest>.Error("The XML you provided was not well-formed or did not validate against our published schema.");
+    }
+
+    private static bool TryDeserializeDeleteWithoutNamespace(string xmlContent, out DeleteMultipleObjectsRequest deleteRequest)
+    {
+        deleteRequest = null!;
+        try
+        {
+            var serializer = new XmlSerializer(typeof(DeleteMultipleObjectsRequestNoNamespace));
+            using var stringReader = new StringReader(xmlContent);
+            var deleteRequestNoNamespace = serializer.Deserialize(stringReader) as DeleteMultipleObjectsRequestNoNamespace;
+
+            if (deleteRequestNoNamespace?.Objects != null)
+            {
+                deleteRequest = new DeleteMultipleObjectsRequest
+                {
+                    Objects = deleteRequestNoNamespace.Objects,
+                    Quiet = deleteRequestNoNamespace.Quiet
+                };
+                return true;
+            }
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryDeserializeDeleteWithNamespace(string xmlContent, out DeleteMultipleObjectsRequest deleteRequest)
+    {
+        deleteRequest = null!;
+        try
+        {
+            var serializer = new XmlSerializer(typeof(DeleteMultipleObjectsRequest));
+            using var stringReader = new StringReader(xmlContent);
+            var result = serializer.Deserialize(stringReader) as DeleteMultipleObjectsRequest;
+            if (result?.Objects != null)
+            {
+                deleteRequest = result;
+                return true;
+            }
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     [HttpPost("")]
     [RequireQueryParameter("delete")]
     [S3Authorize(S3Operations.Delete, S3ResourceType.Object)]
@@ -342,36 +406,27 @@ public class S3ObjectsController : S3ControllerBase
             return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
         }
 
-        // Parse the XML request body
-        DeleteMultipleObjectsRequest? deleteRequest;
+        // Read the request body once and parse the XML
+        string xmlContent;
         try
         {
-            // Try both namespace versions for compatibility
-            try
-            {
-                var serializer = new XmlSerializer(typeof(DeleteMultipleObjectsRequest));
-                deleteRequest = (DeleteMultipleObjectsRequest?)serializer.Deserialize(Request.Body);
-            }
-            catch
-            {
-                // Reset the request body position
-                Request.Body.Position = 0;
-                var serializer = new XmlSerializer(typeof(DeleteMultipleObjectsRequestNoNamespace));
-                var deleteRequestNoNamespace = (DeleteMultipleObjectsRequestNoNamespace?)serializer.Deserialize(Request.Body);
-                deleteRequest = new DeleteMultipleObjectsRequest
-                {
-                    Objects = deleteRequestNoNamespace?.Objects ?? new List<ObjectIdentifier>(),
-                    Quiet = deleteRequestNoNamespace?.Quiet ?? false
-                };
-            }
+            xmlContent = await PipeReaderHelper.ReadAllTextAsync(Request.BodyReader, false, cancellationToken);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to parse delete multiple objects request XML for bucket {BucketName}", bucketName);
+            _logger.LogWarning(ex, "Failed to read request body for delete multiple objects in bucket {BucketName}", bucketName);
             return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", bucketName, 400);
         }
 
-        if (deleteRequest == null || deleteRequest.Objects.Count == 0)
+        var deserializationResult = TryDeserializeDeleteRequest(xmlContent);
+        if (!deserializationResult.IsSuccess)
+        {
+            _logger.LogWarning("Failed to parse delete multiple objects request XML for bucket {BucketName}: {ErrorMessage}", bucketName, deserializationResult.ErrorMessage);
+            return S3Error("MalformedXML", deserializationResult.ErrorMessage!, bucketName, 400);
+        }
+
+        var deleteRequest = deserializationResult.Value!;
+        if (deleteRequest.Objects.Count == 0)
         {
             return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", bucketName, 400);
         }
