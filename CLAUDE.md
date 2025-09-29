@@ -376,7 +376,16 @@ Three background services handle maintenance:
 - **Metadata Cleanup**: Removes orphaned metadata
 - **Temp File Cleanup**: Removes interrupted upload temp files
 
-## Release Notes
+## Release Process
+
+When user says "release vX.X.X", perform these steps:
+
+1. Check recent commits with `git log --oneline -10` to identify [Feature], [Enhancement], [Fix], and [Breaking] commits for release notes
+2. Create annotated git tag: `git tag -a vX.X.X -m "Release vX.X.X\n\n[organize commits by type with Features/Enhancements/Bug Fixes/Breaking Changes sections]"`
+3. Push tag: `git push origin vX.X.X`
+4. Create GitHub release: `gh release create vX.X.X --title "Release vX.X.X" --notes "[organize by sections: ## Features, ## Enhancements, ## Bug Fixes, ## Breaking Changes as applicable]"`
+
+### Release Notes Convention
 
 When making commits that introduce features or changes that should appear in release notes, include them in commit messages with the format:
 
