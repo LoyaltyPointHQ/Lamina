@@ -17,6 +17,7 @@ namespace Lamina.WebApi.Authentication
         private readonly S3AuthService _authService;
         private readonly IStreamingAuthenticationService _streamingAuthService;
         private readonly AuthenticationSettings _authSettings;
+        private readonly IHttpContextAccessor _httpContextAccessor;
 
         public S3AuthenticationHandler(
             IOptionsMonitor<S3AuthenticationOptions> options,
@@ -24,11 +25,14 @@ namespace Lamina.WebApi.Authentication
             UrlEncoder encoder,
             S3AuthService authService,
             IStreamingAuthenticationService streamingAuthService,
-            IOptions<AuthenticationSettings> authSettings)
+            IOptions<AuthenticationSettings> authSettings,
+            IHttpContextAccessor httpContextAccessor
+        )
             : base(options, logger, encoder)
         {
             _authService = authService;
             _streamingAuthService = streamingAuthService;
+            _httpContextAccessor = httpContextAccessor;
             _authSettings = authSettings.Value;
         }
 
@@ -171,7 +175,7 @@ namespace Lamina.WebApi.Authentication
         private string CreateS3ErrorResponse(string code, string message)
         {
             var requestId = Guid.NewGuid().ToString();
-            var hostId = Environment.MachineName;
+            var hostId = _httpContextAccessor.HttpContext?.TraceIdentifier ?? "AmazonS3";
 
             return $@"<?xml version=""1.0"" encoding=""UTF-8""?>
 <Error>

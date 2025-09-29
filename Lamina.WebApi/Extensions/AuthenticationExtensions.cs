@@ -21,6 +21,9 @@ namespace Lamina.WebApi.Extensions
             this IServiceCollection services,
             Action<S3AuthenticationOptions>? configureOptions = null)
         {
+            // Add required dependencies for S3AuthenticationHandler
+            services.AddHttpContextAccessor();
+
             // Add authentication with S3 scheme
             services.AddAuthentication(S3AuthenticationDefaults.AuthenticationScheme)
                 .AddScheme<S3AuthenticationOptions, S3AuthenticationHandler>(

@@ -13,11 +13,29 @@ public abstract class S3ControllerBase : ControllerBase
         {
             Code = code,
             Message = message,
-            Resource = resource
+            Resource = resource,
+            RequestId = GetRequestId(),
+            HostId = GetExtendedRequestId()
         };
         Response.StatusCode = statusCode;
         Response.ContentType = "application/xml";
         return new ObjectResult(error);
+    }
+
+    /// <summary>
+    /// Gets the request ID from the middleware context
+    /// </summary>
+    protected string GetRequestId()
+    {
+        return HttpContext.Items["S3RequestId"] as string ?? Guid.NewGuid().ToString();
+    }
+
+    /// <summary>
+    /// Gets the extended request ID from the middleware context
+    /// </summary>
+    protected string GetExtendedRequestId()
+    {
+        return HttpContext.TraceIdentifier;
     }
 
     protected static bool IsValidBucketName(string bucketName)

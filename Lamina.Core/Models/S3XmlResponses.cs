@@ -302,6 +302,9 @@ public class S3Error
 
     [XmlElement("RequestId")]
     public string RequestId { get; set; } = Guid.NewGuid().ToString();
+
+    [XmlElement("HostId")]
+    public string HostId { get; set; } = string.Empty;
 }
 
 // Version with namespace for S3 spec compliance

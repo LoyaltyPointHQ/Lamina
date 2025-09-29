@@ -102,8 +102,7 @@ public class S3ObjectsController : S3ControllerBase
         if (isDirectoryBucket)
         {
             // Randomize the order to simulate non-lexicographical ordering
-            var random = new Random();
-            objects.Contents = objects.Contents.OrderBy(x => random.Next()).ToList();
+            objects.Contents = objects.Contents.OrderBy(x => Random.Shared.Next()).ToList();
         }
 
         Response.ContentType = "application/xml";

@@ -13,6 +13,7 @@ using Lamina.Storage.Sql.Configuration;
 using Lamina.Storage.Sql.Context;
 using Lamina.WebApi.Configuration;
 using Lamina.WebApi.Extensions;
+using Lamina.WebApi.Middleware;
 using Lamina.WebApi.Services;
 using Lamina.WebApi.Streaming;
 using Lamina.WebApi.Streaming.Chunked;
@@ -290,6 +291,9 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
+
+// Add S3 response headers middleware (must be early in pipeline)
+app.UseMiddleware<S3ResponseHeadersMiddleware>();
 
 // Add standard authentication and authorization middleware
 app.UseAuthentication();

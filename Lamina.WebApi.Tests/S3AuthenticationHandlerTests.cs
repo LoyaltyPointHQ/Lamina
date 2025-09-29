@@ -22,6 +22,7 @@ namespace Lamina.WebApi.Tests.Authentication
         private readonly Mock<IStreamingAuthenticationService> _streamingAuthServiceMock;
         private readonly Mock<IOptions<AuthenticationSettings>> _authSettingsMock;
         private readonly Mock<ILogger<S3AuthenticationHandler>> _loggerMock;
+        private readonly Mock<IHttpContextAccessor> _httpContextAccessorMock;
 
         private readonly S3AuthenticationOptions _options;
         private readonly AuthenticationSettings _authSettings;
@@ -36,6 +37,7 @@ namespace Lamina.WebApi.Tests.Authentication
             _streamingAuthServiceMock = new Mock<IStreamingAuthenticationService>();
             _authSettingsMock = new Mock<IOptions<AuthenticationSettings>>();
             _loggerMock = new Mock<ILogger<S3AuthenticationHandler>>();
+            _httpContextAccessorMock = new Mock<IHttpContextAccessor>();
 
             _options = new S3AuthenticationOptions();
             _authSettings = new AuthenticationSettings { Enabled = true };
@@ -44,6 +46,7 @@ namespace Lamina.WebApi.Tests.Authentication
             _optionsMock.Setup(x => x.Get(It.IsAny<string>())).Returns(_options);
             _authSettingsMock.Setup(x => x.Value).Returns(_authSettings);
             _loggerFactoryMock.Setup(x => x.CreateLogger(It.IsAny<string>())).Returns(_loggerMock.Object);
+            _httpContextAccessorMock.Setup(x => x.HttpContext).Returns((HttpContext?)null);
 
             _httpContext = new DefaultHttpContext();
             _httpContext.Request.Scheme = "https";
@@ -60,7 +63,8 @@ namespace Lamina.WebApi.Tests.Authentication
                 _urlEncoder,
                 _authServiceMock.Object,
                 _streamingAuthServiceMock.Object,
-                _authSettingsMock.Object);
+                _authSettingsMock.Object,
+                _httpContextAccessorMock.Object);
 
             var scheme = new AuthenticationScheme(S3AuthenticationDefaults.AuthenticationScheme, null, typeof(S3AuthenticationHandler));
             
