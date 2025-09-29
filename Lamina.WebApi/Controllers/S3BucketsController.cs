@@ -147,6 +147,7 @@ public class S3BucketsController : S3ControllerBase
 
     [HttpGet("{bucketName}")]
     [RequireQueryParameter("location")]
+    [RequireNoQueryParameters("versioning")]
     [S3Authorize(S3Operations.Read, S3ResourceType.Bucket)]
     public async Task<IActionResult> GetBucketLocation(string bucketName, CancellationToken cancellationToken = default)
     {
@@ -164,6 +165,31 @@ public class S3BucketsController : S3ControllerBase
         var result = new LocationConstraintResult
         {
             Region = null // Empty for us-east-1 compatibility
+        };
+
+        Response.ContentType = "application/xml";
+        return Ok(result);
+    }
+
+    [HttpGet("{bucketName}")]
+    [RequireQueryParameter("versioning")]
+    [RequireNoQueryParameters("location")]
+    [S3Authorize(S3Operations.Read, S3ResourceType.Bucket)]
+    public async Task<IActionResult> GetBucketVersioning(string bucketName, CancellationToken cancellationToken = default)
+    {
+        // Check if bucket exists first
+        var exists = await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken);
+        if (!exists)
+        {
+            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
+        }
+
+        // Since Lamina doesn't support versioning, return empty configuration
+        // This matches S3 behavior for buckets that never had versioning configured
+        var result = new VersioningConfiguration
+        {
+            Status = null,    // No versioning state
+            MfaDelete = null  // No MFA delete
         };
 
         Response.ContentType = "application/xml";

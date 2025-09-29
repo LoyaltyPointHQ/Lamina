@@ -260,7 +260,7 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
         }
 
         // Get all part data files (without .metadata.json extension)
-        var partFiles = Directory.GetFiles(uploadDir, "part_*")
+        var partFiles = Directory.EnumerateFiles(uploadDir, "part_*")
             .Where(f => !f.EndsWith(".metadata.json"))
             .ToArray();
 

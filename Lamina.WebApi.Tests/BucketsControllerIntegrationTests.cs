@@ -184,6 +184,94 @@ public class BucketsControllerIntegrationTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task GetBucketVersioning_ExistingBucket_ReturnsEmptyVersioningConfiguration()
+    {
+        // Arrange: Create a bucket to test with
+        var bucketName = $"versioning-test-{Guid.NewGuid()}";
+        await Client.PutAsync($"/{bucketName}", null);
+
+        // Act: Request bucket versioning
+        var response = await Client.GetAsync($"/{bucketName}?versioning");
+
+        // Assert: Should return 200 with empty VersioningConfiguration
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        
+        // Per S3 API specification, GetBucketVersioning for buckets that never had versioning configured
+        // returns empty configuration with no Status or MfaDelete elements
+        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketVersioning.html
+        
+        // Lamina doesn't support versioning (documented in README.md under "Known S3 API Limitations")
+        // This implementation returns empty configuration to match S3 behavior for non-versioned buckets
+        Assert.Contains("VersioningConfiguration", xmlContent);
+        
+        // Deserialize and verify the structure
+        var serializer = new XmlSerializer(typeof(VersioningConfiguration));
+        using var reader = new StringReader(xmlContent);
+        var result = (VersioningConfiguration?)serializer.Deserialize(reader);
+        
+        Assert.NotNull(result);
+        // Status and MfaDelete should be null for buckets that never had versioning configured
+        Assert.Null(result.Status);
+        Assert.Null(result.MfaDelete);
+    }
+
+    [Fact]
+    public async Task GetBucketVersioning_NonExistingBucket_Returns404()
+    {
+        // Arrange: Use a non-existing bucket name
+        var bucketName = $"non-existing-versioning-{Guid.NewGuid()}";
+
+        // Act: Request versioning for non-existing bucket
+        var response = await Client.GetAsync($"/{bucketName}?versioning");
+
+        // Assert: Should return 404 with NoSuchBucket error
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
+
+        var errorXml = await response.Content.ReadAsStringAsync();
+        Assert.Contains("NoSuchBucket", errorXml);
+        Assert.Contains("The specified bucket does not exist", errorXml);
+        
+        // Verify error structure per S3 spec
+        var serializer = new XmlSerializer(typeof(S3Error));
+        using var reader = new StringReader(errorXml);
+        var error = (S3Error?)serializer.Deserialize(reader);
+        
+        Assert.NotNull(error);
+        Assert.Equal("NoSuchBucket", error.Code);
+        Assert.Equal(bucketName, error.Resource);
+    }
+
+    [Fact]
+    public async Task GetBucketVersioning_WithEmptyVersioningParameter_ReturnsEmptyVersioningConfiguration()
+    {
+        // Arrange: Create a bucket to test with
+        var bucketName = $"versioning-empty-param-{Guid.NewGuid()}";
+        await Client.PutAsync($"/{bucketName}", null);
+
+        // Act: Request bucket versioning with empty versioning parameter (both ?versioning and ?versioning= should work)
+        var response1 = await Client.GetAsync($"/{bucketName}?versioning");
+        var response2 = await Client.GetAsync($"/{bucketName}?versioning=");
+
+        // Assert: Both requests should return the same result
+        Assert.Equal(HttpStatusCode.OK, response1.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response2.StatusCode);
+
+        var xmlContent1 = await response1.Content.ReadAsStringAsync();
+        var xmlContent2 = await response2.Content.ReadAsStringAsync();
+        
+        // Both should contain VersioningConfiguration
+        Assert.Contains("VersioningConfiguration", xmlContent1);
+        Assert.Contains("VersioningConfiguration", xmlContent2);
+        
+        // Content should be essentially the same (empty VersioningConfiguration)
+        Assert.Equal(xmlContent1, xmlContent2);
+    }
+
+    [Fact]
     public async Task DeleteBucket_ExistingBucket_Returns204()
     {
         var bucketName = $"delete-test-{Guid.NewGuid()}";

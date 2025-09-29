@@ -377,6 +377,16 @@ public class LocationConstraintResult
     public string? Region { get; set; }
 }
 
+[XmlRoot("VersioningConfiguration", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class VersioningConfiguration
+{
+    [XmlElement("Status")]
+    public string? Status { get; set; }
+
+    [XmlElement("MfaDelete")]
+    public string? MfaDelete { get; set; }
+}
+
 // Delete Multiple Objects XML models
 [XmlRoot("Delete", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
 public class DeleteMultipleObjectsRequest

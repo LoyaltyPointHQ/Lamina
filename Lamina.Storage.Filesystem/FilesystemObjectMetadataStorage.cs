@@ -244,9 +244,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
 
     private async IAsyncEnumerable<string> EnumerateMetadataFilesInDirectoryAsync(string directory, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var files = Directory.GetFiles(directory, "*.json", SearchOption.AllDirectories);
-
-        foreach (var file in files)
+        foreach (var file in Directory.EnumerateFiles(directory, "*.json", SearchOption.AllDirectories))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -269,8 +267,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         var metadataDir = Path.Combine(currentDirectory, _inlineMetadataDirectoryName);
         if (Directory.Exists(metadataDir))
         {
-            var files = Directory.GetFiles(metadataDir, "*.json");
-            foreach (var file in files)
+            foreach (var file in Directory.EnumerateFiles(metadataDir, "*.json"))
             {
                 cancellationToken.ThrowIfCancellationRequested();
 

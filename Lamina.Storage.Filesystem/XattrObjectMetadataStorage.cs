@@ -227,8 +227,7 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
     private async IAsyncEnumerable<string> EnumerateKeysWithMetadataAsync(string currentDirectory, string keyPrefix, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         // Check files in current directory
-        var files = Directory.GetFiles(currentDirectory);
-        foreach (var file in files)
+        foreach (var file in Directory.EnumerateFiles(currentDirectory))
         {
             cancellationToken.ThrowIfCancellationRequested();
 

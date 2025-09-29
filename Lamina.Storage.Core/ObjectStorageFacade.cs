@@ -173,13 +173,8 @@ public class ObjectStorageFacade : IObjectStorageFacade
             if (meta == null)
             {
                 var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-                if (dataInfo != null)
-                {
-                    _logger.LogInformation("Found orphaned data without metadata for key {Key} in bucket {BucketName}", key, bucketName);
-
+                if (dataInfo != null) 
                     meta = await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
-
-                }
             }
             if (meta != null)
                 response.Contents.Add(meta);
@@ -309,7 +304,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 }
 
                 // Attempt to delete the object
-                var deleteResult = await DeleteObjectAsync(bucketName, objectToDelete.Key, cancellationToken);
+                _ = await DeleteObjectAsync(bucketName, objectToDelete.Key, cancellationToken);
 
                 // S3 delete operations always report success for non-existing objects
                 // (idempotent operation), so we don't check the return value
