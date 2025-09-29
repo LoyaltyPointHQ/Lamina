@@ -14,4 +14,5 @@ public interface IObjectStorageFacade
     Task<StorageResult<ListObjectsResponse>> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default);
     Task<bool> ObjectExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     bool IsValidObjectKey(string key);
+    Task<DeleteMultipleObjectsResponse> DeleteMultipleObjectsAsync(string bucketName, List<ObjectIdentifier> objectsToDelete, bool quiet = false, CancellationToken cancellationToken = default);
 }

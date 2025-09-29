@@ -376,3 +376,77 @@ public class LocationConstraintResult
     [XmlText]
     public string? Region { get; set; }
 }
+
+// Delete Multiple Objects XML models
+[XmlRoot("Delete", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class DeleteMultipleObjectsRequest
+{
+    [XmlElement("Object")]
+    public List<ObjectIdentifier> Objects { get; set; } = new();
+
+    [XmlElement("Quiet")]
+    public bool Quiet { get; set; }
+}
+
+// Version without namespace for compatibility
+[XmlRoot("Delete")]
+public class DeleteMultipleObjectsRequestNoNamespace
+{
+    [XmlElement("Object")]
+    public List<ObjectIdentifier> Objects { get; set; } = new();
+
+    [XmlElement("Quiet")]
+    public bool Quiet { get; set; }
+}
+
+[XmlRoot("Object")]
+public class ObjectIdentifier
+{
+    [XmlElement("Key")]
+    public string Key { get; set; } = string.Empty;
+
+    [XmlElement("VersionId")]
+    public string? VersionId { get; set; }
+}
+
+[XmlRoot("DeleteResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class DeleteMultipleObjectsResult
+{
+    [XmlElement("Deleted")]
+    public List<DeletedObject> Deleted { get; set; } = new();
+
+    [XmlElement("Error")]
+    public List<DeleteError> Errors { get; set; } = new();
+}
+
+[XmlRoot("Deleted")]
+public class DeletedObject
+{
+    [XmlElement("Key")]
+    public string Key { get; set; } = string.Empty;
+
+    [XmlElement("VersionId")]
+    public string? VersionId { get; set; }
+
+    [XmlElement("DeleteMarker")]
+    public bool? DeleteMarker { get; set; }
+
+    [XmlElement("DeleteMarkerVersionId")]
+    public string? DeleteMarkerVersionId { get; set; }
+}
+
+[XmlRoot("Error")]
+public class DeleteError
+{
+    [XmlElement("Key")]
+    public string Key { get; set; } = string.Empty;
+
+    [XmlElement("Code")]
+    public string Code { get; set; } = string.Empty;
+
+    [XmlElement("Message")]
+    public string Message { get; set; } = string.Empty;
+
+    [XmlElement("VersionId")]
+    public string? VersionId { get; set; }
+}

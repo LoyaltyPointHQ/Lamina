@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using System.Text.Json;
+using System.Xml.Serialization;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
@@ -326,6 +327,88 @@ public class S3ObjectsController : S3ControllerBase
         }
 
         return Ok();
+    }
+
+    [HttpPost("")]
+    [RequireQueryParameter("delete")]
+    [S3Authorize(S3Operations.Delete, S3ResourceType.Object)]
+    public async Task<IActionResult> DeleteMultipleObjects(string bucketName, CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("Deleting multiple objects in bucket: {BucketName}", bucketName);
+
+        // Check if bucket exists
+        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
+        }
+
+        // Parse the XML request body
+        DeleteMultipleObjectsRequest? deleteRequest;
+        try
+        {
+            // Try both namespace versions for compatibility
+            try
+            {
+                var serializer = new XmlSerializer(typeof(DeleteMultipleObjectsRequest));
+                deleteRequest = (DeleteMultipleObjectsRequest?)serializer.Deserialize(Request.Body);
+            }
+            catch
+            {
+                // Reset the request body position
+                Request.Body.Position = 0;
+                var serializer = new XmlSerializer(typeof(DeleteMultipleObjectsRequestNoNamespace));
+                var deleteRequestNoNamespace = (DeleteMultipleObjectsRequestNoNamespace?)serializer.Deserialize(Request.Body);
+                deleteRequest = new DeleteMultipleObjectsRequest
+                {
+                    Objects = deleteRequestNoNamespace?.Objects ?? new List<ObjectIdentifier>(),
+                    Quiet = deleteRequestNoNamespace?.Quiet ?? false
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse delete multiple objects request XML for bucket {BucketName}", bucketName);
+            return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", bucketName, 400);
+        }
+
+        if (deleteRequest == null || deleteRequest.Objects.Count == 0)
+        {
+            return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", bucketName, 400);
+        }
+
+        // S3 has a limit of 1000 objects per delete request
+        if (deleteRequest.Objects.Count > 1000)
+        {
+            return S3Error("TooManyKeys", "You have provided too many keys. The maximum allowed is 1000.", bucketName, 400);
+        }
+
+        // Call the facade to perform the deletions
+        var result = await _objectStorage.DeleteMultipleObjectsAsync(bucketName, deleteRequest.Objects, deleteRequest.Quiet, cancellationToken);
+
+        // Convert the result to XML response format
+        var xmlResult = new DeleteMultipleObjectsResult
+        {
+            Deleted = result.Deleted.Select(d => new DeletedObject
+            {
+                Key = d.Key,
+                VersionId = d.VersionId,
+                DeleteMarker = d.DeleteMarker,
+                DeleteMarkerVersionId = d.DeleteMarkerVersionId
+            }).ToList(),
+            Errors = result.Errors.Select(e => new DeleteError
+            {
+                Key = e.Key,
+                Code = e.Code,
+                Message = e.Message,
+                VersionId = e.VersionId
+            }).ToList()
+        };
+
+        _logger.LogInformation("Deleted {DeletedCount} objects with {ErrorCount} errors in bucket {BucketName}",
+            result.Deleted.Count, result.Errors.Count, bucketName);
+
+        Response.ContentType = "application/xml";
+        return Ok(xmlResult);
     }
 
     /// <summary>

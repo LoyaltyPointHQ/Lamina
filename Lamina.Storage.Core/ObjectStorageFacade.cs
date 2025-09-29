@@ -291,4 +291,45 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
         return null; // Validation passed
     }
+
+    public async Task<DeleteMultipleObjectsResponse> DeleteMultipleObjectsAsync(string bucketName, List<ObjectIdentifier> objectsToDelete, bool quiet = false, CancellationToken cancellationToken = default)
+    {
+        var deleted = new List<DeletedObjectResult>();
+        var errors = new List<DeleteErrorResult>();
+
+        foreach (var objectToDelete in objectsToDelete)
+        {
+            try
+            {
+                // Validate the object key
+                if (!IsValidObjectKey(objectToDelete.Key))
+                {
+                    errors.Add(new DeleteErrorResult(objectToDelete.Key, "InvalidObjectName", "Object key forbidden", objectToDelete.VersionId));
+                    continue;
+                }
+
+                // Attempt to delete the object
+                var deleteResult = await DeleteObjectAsync(bucketName, objectToDelete.Key, cancellationToken);
+
+                // S3 delete operations always report success for non-existing objects
+                // (idempotent operation), so we don't check the return value
+                deleted.Add(new DeletedObjectResult(objectToDelete.Key, objectToDelete.VersionId));
+
+                _logger.LogDebug("Successfully deleted object {Key} from bucket {BucketName}", objectToDelete.Key, bucketName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to delete object {Key} from bucket {BucketName}", objectToDelete.Key, bucketName);
+                errors.Add(new DeleteErrorResult(objectToDelete.Key, "InternalError", "Internal error occurred during delete", objectToDelete.VersionId));
+            }
+        }
+
+        // In quiet mode, return only errors
+        if (quiet)
+        {
+            return new DeleteMultipleObjectsResponse(new List<DeletedObjectResult>(), errors);
+        }
+
+        return new DeleteMultipleObjectsResponse(deleted, errors);
+    }
 }
