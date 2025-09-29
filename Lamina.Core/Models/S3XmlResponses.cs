@@ -446,6 +446,10 @@ public class DeletedObject
 
     [XmlElement("DeleteMarkerVersionId")]
     public string? DeleteMarkerVersionId { get; set; }
+
+    public bool ShouldSerializeDeleteMarker() => DeleteMarker.HasValue;
+
+    public bool ShouldSerializeDeleteMarkerVersionId() => !string.IsNullOrEmpty(DeleteMarkerVersionId);
 }
 
 [XmlRoot("Error")]
