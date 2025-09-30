@@ -308,6 +308,7 @@ Note: Authentication now uses the standard ASP.NET Core authentication framework
 - **Metadata is optional** - generated on-the-fly when missing
 - **Content type detection** based on file extensions
 - **Optimized storage** - metadata only stored when differs from defaults
+- **Filesystem-safe** - direct filesystem modifications (files added/modified/deleted outside API) are handled correctly, with metadata regenerated on-demand
 
 ### Performance Optimizations
 
@@ -346,13 +347,18 @@ Note: Authentication now uses the standard ASP.NET Core authentication framework
 ### Testing Filesystem Storage
 
 ```bash
-# Create test data
+# Create test data via API
 curl -X PUT http://localhost:5214/test-bucket
 echo "content" | curl -X PUT --data-binary @- http://localhost:5214/test-bucket/test.txt
 
 # Check storage structure
 ls -la /tmp/laminas/data/test-bucket/
 ls -la /tmp/laminas/metadata/test-bucket/  # SeparateDirectory mode
+
+# Test direct filesystem modification (this is safe and supported!)
+echo "direct write" > /tmp/laminas/data/test-bucket/direct.txt
+mkdir -p /tmp/laminas/data/test-bucket/new-folder
+# Lamina will detect these files and serve them via S3 API with auto-generated metadata
 ```
 
 ### S3 Client Testing

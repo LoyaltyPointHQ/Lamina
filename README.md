@@ -79,6 +79,7 @@ Lamina uses a **data-first architecture** where:
 - **Metadata is optional** - automatically generated when missing
 - **Content-Type detection** - intelligent MIME type detection based on file extensions
 - **Optimized storage** - metadata only stored when it differs from defaults
+- **Direct filesystem modification safe** - Lamina handles files being added, modified, or deleted directly on the filesystem and regenerates metadata on-the-fly as needed
 
 ### Storage Options
 
@@ -170,8 +171,9 @@ Lamina operates as a **single-region storage system** and does not implement AWS
 
 - **🎯 Focused Purpose**: Specifically designed as a filesystem-to-S3 gateway with performance optimizations
 - **🔧 Simple Setup**: No complex clustering or distributed storage configuration
-- **📁 Direct Filesystem Access**: Data remains accessible via standard filesystem tools
+- **📁 Direct Filesystem Access**: Data remains accessible and modifiable via standard filesystem tools - Lamina safely handles concurrent filesystem changes
 - **🚀 Hierarchical Data Optimized**: Ideal for document management, backups, media libraries, and structured data
+- **💪 Filesystem-Resilient**: Lamina tolerates direct filesystem modifications (files added/modified/deleted outside of API) and regenerates metadata automatically
 
 ## ⚙️ Configuration
 
