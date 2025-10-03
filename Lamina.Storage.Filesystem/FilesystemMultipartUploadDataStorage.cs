@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using Lamina.Core.Models;
+using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Filesystem.Configuration;
@@ -90,6 +91,82 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
         };
 
         return part;
+    }
+
+    public async Task<UploadPart?> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkedDataParser chunkedDataParser, IChunkSignatureValidator chunkValidator, CancellationToken cancellationToken = default)
+    {
+        var partPath = GetPartPath(uploadId, partNumber);
+        var partDir = Path.GetDirectoryName(partPath)!;
+        Directory.CreateDirectory(partDir);
+
+        // Create a temporary file for validated data
+        var tempPath = Path.Combine(partDir, $".lamina-tmp-{Guid.NewGuid():N}");
+
+        try
+        {
+            ChunkedDataResult parseResult;
+
+            // Write validated chunks directly to temp file
+            {
+                await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
+                parseResult = await chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, cancellationToken);
+                await fileStream.FlushAsync(cancellationToken);
+            } // FileStream is fully disposed here
+
+            // Check if validation succeeded
+            if (!parseResult.Success)
+            {
+                // Invalid chunk signature - clean up temp file and return null
+                _logger.LogWarning("Chunk signature validation failed for part {PartNumber} of upload {UploadId}: {Error}", partNumber, uploadId, parseResult.ErrorMessage);
+
+                if (File.Exists(tempPath))
+                {
+                    try
+                    {
+                        File.Delete(tempPath);
+                    }
+                    catch (Exception cleanupEx)
+                    {
+                        _logger.LogWarning(cleanupEx, "Failed to clean up temporary file: {TempPath}", tempPath);
+                    }
+                }
+
+                return null;
+            }
+
+            // Compute ETag from the temp file
+            var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
+
+            // Atomically move temp file to final location
+            File.Move(tempPath, partPath, overwrite: true);
+
+            var part = new UploadPart
+            {
+                PartNumber = partNumber,
+                ETag = etag,
+                Size = parseResult.TotalBytesWritten,
+                LastModified = DateTime.UtcNow
+            };
+
+            return part;
+        }
+        catch
+        {
+            // Clean up temp file on any other error
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch (Exception cleanupEx)
+                {
+                    _logger.LogWarning(cleanupEx, "Failed to clean up temporary file: {TempPath}", tempPath);
+                }
+            }
+
+            throw;
+        }
     }
 
     public async Task<IEnumerable<PipeReader>> GetPartReadersAsync(string bucketName, string key, string uploadId, List<CompletedPart> parts, CancellationToken cancellationToken = default)

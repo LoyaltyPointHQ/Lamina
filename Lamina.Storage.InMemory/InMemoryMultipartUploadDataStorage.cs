@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using Lamina.Core.Models;
+using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
 
@@ -18,6 +19,39 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
 
         var combinedData = await PipeReaderHelper.ReadAllBytesAsync(dataReader, false, cancellationToken);
 
+        var etag = ETagHelper.ComputeETag(combinedData);
+
+        var part = new UploadPart
+        {
+            PartNumber = partNumber,
+            ETag = etag,
+            Size = combinedData.Length,
+            LastModified = DateTime.UtcNow,
+            Data = combinedData
+        };
+
+        parts[partNumber] = part;
+        return part;
+    }
+
+    public async Task<UploadPart?> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkedDataParser chunkedDataParser, IChunkSignatureValidator chunkValidator, CancellationToken cancellationToken = default)
+    {
+        var uploadKey = $"{bucketName}/{key}/{uploadId}";
+        var parts = _uploadParts.GetOrAdd(uploadKey, _ => new ConcurrentDictionary<int, UploadPart>());
+
+        // For in-memory storage, using MemoryStream is acceptable
+        using var memoryStream = new MemoryStream();
+
+        var parseResult = await chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, cancellationToken);
+
+        // Check if validation succeeded
+        if (!parseResult.Success)
+        {
+            // Invalid chunk signature
+            return null;
+        }
+
+        var combinedData = memoryStream.ToArray();
         var etag = ETagHelper.ComputeETag(combinedData);
 
         var part = new UploadPart

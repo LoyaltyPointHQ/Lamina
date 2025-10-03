@@ -121,16 +121,15 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         try
         {
             // Write the decoded data to temp file
-            long bytesWritten;
+            ChunkedDataResult parseResult;
             {
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
                 // Parse AWS chunked encoding and write decoded data directly to file with signature validation
-                try
-                {
-                    bytesWritten = await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, cancellationToken);
-                }
-                catch (InvalidOperationException ex) when (ex.Message.Contains("Invalid") && ex.Message.Contains("signature"))
+                parseResult = await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, cancellationToken);
+
+                // Check if validation succeeded
+                if (!parseResult.Success)
                 {
                     // Invalid chunk signature - clean up and return failure
                     await fileStream.FlushAsync(cancellationToken);
@@ -148,7 +147,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             // Atomically move the temp file to the final location
             await _networkHelper.AtomicMoveAsync(tempPath, dataPath, overwrite: true);
 
-            return (bytesWritten, etag);
+            return (parseResult.TotalBytesWritten, etag);
         }
         catch
         {

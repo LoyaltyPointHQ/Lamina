@@ -50,11 +50,12 @@ namespace Lamina.WebApi.Tests.Streaming.Chunked
                 .ReturnsAsync(true);
 
             // Act
-            var totalBytes = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
+            var result = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
                 pipeReader, destinationStream, _chunkValidatorMock.Object);
 
             // Assert
-            Assert.Equal(11, totalBytes); // "Hello World"
+            Assert.True(result.Success);
+            Assert.Equal(11, result.TotalBytesWritten); // "Hello World"
 
             // Verify destination stream content
             destinationStream.Position = 0;
@@ -70,11 +71,12 @@ namespace Lamina.WebApi.Tests.Streaming.Chunked
             var destinationStream = new MemoryStream();
 
             // Act
-            var totalBytes = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
+            var result = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
                 pipeReader, destinationStream, null);
 
             // Assert
-            Assert.Equal(0, totalBytes);
+            Assert.True(result.Success);
+            Assert.Equal(0, result.TotalBytesWritten);
         }
 
         [Fact]
@@ -96,11 +98,12 @@ namespace Lamina.WebApi.Tests.Streaming.Chunked
                 .ReturnsAsync(true);
 
             // Act
-            var totalBytes = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
+            var result = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
                 pipeReader, destinationStream, _chunkValidatorMock.Object);
 
             // Assert
-            Assert.Equal(34, totalBytes); // 21 + 13 bytes
+            Assert.True(result.Success);
+            Assert.Equal(34, result.TotalBytesWritten); // 21 + 13 bytes
 
             // Verify destination stream content
             destinationStream.Position = 0;
@@ -135,12 +138,13 @@ namespace Lamina.WebApi.Tests.Streaming.Chunked
 
             _chunkValidatorMock.SetupGet(v => v.ChunkIndex).Returns(1);
 
-            // Act & Assert
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-                await _chunkedDataParser.ParseChunkedDataToStreamAsync(
-                    pipeReader, destinationStream, _chunkValidatorMock.Object));
+            // Act
+            var result = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
+                pipeReader, destinationStream, _chunkValidatorMock.Object);
 
-            Assert.Contains("Invalid chunk signature at chunk 1", exception.Message);
+            // Assert
+            Assert.False(result.Success);
+            Assert.Contains("Invalid chunk signature at chunk 1", result.ErrorMessage);
         }
 
         private byte[] CreateSimpleChunkedData()

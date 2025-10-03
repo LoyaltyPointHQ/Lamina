@@ -6,6 +6,11 @@ namespace Lamina.Core.Models
     public class ChunkedDataResult
     {
         /// <summary>
+        /// Whether parsing and validation succeeded
+        /// </summary>
+        public bool Success { get; set; } = true;
+
+        /// <summary>
         /// The parsed trailer headers (if any)
         /// </summary>
         public List<StreamingTrailer> Trailers { get; set; } = new();

@@ -448,7 +448,7 @@ public class MultipartUploadStorageFacadeTests
         // Data-first approach: No metadata check required
         _mockChunkedDataParser
             .Setup(x => x.ParseChunkedDataToStreamAsync(It.IsAny<PipeReader>(), It.IsAny<Stream>(), mockValidator.Object, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(100L);
+            .ReturnsAsync(new ChunkedDataResult { Success = true, TotalBytesWritten = 100L });
 
         _mockDataStorage
             .Setup(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<CancellationToken>()))
@@ -480,7 +480,7 @@ public class MultipartUploadStorageFacadeTests
         // Data-first approach: No metadata check required
         _mockChunkedDataParser
             .Setup(x => x.ParseChunkedDataToStreamAsync(It.IsAny<PipeReader>(), It.IsAny<Stream>(), mockValidator.Object, It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException("Invalid chunk signature"));
+            .ReturnsAsync(new ChunkedDataResult { Success = false, ErrorMessage = "Invalid chunk signature" });
 
         // Act
         var result = await _facade.UploadPartAsync(bucketName, key, uploadId, partNumber, pipe.Reader, mockValidator.Object);

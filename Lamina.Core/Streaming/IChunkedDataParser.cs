@@ -9,17 +9,9 @@ namespace Lamina.Core.Streaming
     public interface IChunkedDataParser
     {
         /// <summary>
-        /// Parses AWS chunked encoding data and returns decoded chunks
-        /// </summary>
-        IAsyncEnumerable<ReadOnlyMemory<byte>> ParseChunkedDataAsync(
-            PipeReader dataReader,
-            IChunkSignatureValidator? chunkValidator = null,
-            CancellationToken cancellationToken = default);
-
-        /// <summary>
         /// Parses AWS chunked encoding data and writes directly to a stream
         /// </summary>
-        Task<long> ParseChunkedDataToStreamAsync(
+        Task<ChunkedDataResult> ParseChunkedDataToStreamAsync(
             PipeReader dataReader,
             Stream destinationStream,
             IChunkSignatureValidator? chunkValidator = null,

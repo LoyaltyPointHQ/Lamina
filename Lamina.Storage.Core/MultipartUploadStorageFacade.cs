@@ -53,32 +53,8 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         }
 
         // Data-first approach: Don't check metadata, just validate and store the part
-        // For streaming validation, parse and validate chunks while streaming to storage
-        using var tempStream = new MemoryStream();
-        try
-        {
-            await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, tempStream, chunkValidator, cancellationToken);
-        }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("Invalid") && ex.Message.Contains("signature"))
-        {
-            // Invalid chunk signature
-            _logger.LogWarning("Chunk signature validation failed for part {PartNumber} of upload {UploadId}", partNumber, uploadId);
-            return null;
-        }
-
-        // Create a pipe reader from the validated decoded data
-        tempStream.Position = 0;
-        var pipe = new Pipe();
-        var writeTask = Task.Run(async () =>
-        {
-            await tempStream.CopyToAsync(pipe.Writer.AsStream(), cancellationToken);
-            await pipe.Writer.CompleteAsync();
-        });
-
-        var result = await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, pipe.Reader, cancellationToken);
-        await writeTask;
-
-        return result;
+        // Use the specialized overload that handles validation and storage in a single pass
+        return await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, _chunkedDataParser, chunkValidator, cancellationToken);
     }
 
     public async Task<StorageResult<CompleteMultipartUploadResponse>> CompleteMultipartUploadAsync(string bucketName, string key, CompleteMultipartUploadRequest request, CancellationToken cancellationToken = default)

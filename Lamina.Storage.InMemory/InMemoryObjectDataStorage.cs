@@ -46,38 +46,22 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
 
         var bucketData = _data.GetOrAdd(bucketName, _ => new ConcurrentDictionary<string, byte[]>());
 
-        // Parse AWS chunked encoding and collect decoded data with signature validation
-        var decodedData = new List<byte[]>();
-        long totalDecodedSize = 0;
+        // Parse AWS chunked encoding and write decoded data to memory stream
+        using var memoryStream = new MemoryStream();
+        var parseResult = await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, cancellationToken);
 
-        try
+        // Check if validation succeeded
+        if (!parseResult.Success)
         {
-            await foreach (var chunk in _chunkedDataParser.ParseChunkedDataAsync(dataReader, chunkValidator, cancellationToken))
-            {
-                var chunkArray = chunk.ToArray();
-                decodedData.Add(chunkArray);
-                totalDecodedSize += chunkArray.Length;
-            }
-        }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("Invalid") && ex.Message.Contains("signature"))
-        {
-            // Invalid chunk signature - return null to indicate failure
+            // Invalid chunk signature
             return (0, string.Empty);
         }
 
-        // Combine all decoded chunks
-        var combinedData = new byte[totalDecodedSize];
-        var offset = 0;
-        foreach (var chunk in decodedData)
-        {
-            Buffer.BlockCopy(chunk, 0, combinedData, offset, chunk.Length);
-            offset += chunk.Length;
-        }
-
+        var combinedData = memoryStream.ToArray();
         var etag = ETagHelper.ComputeETag(combinedData);
         bucketData[key] = combinedData;
 
-        return (totalDecodedSize, etag);
+        return (parseResult.TotalBytesWritten, etag);
     }
 
     public async Task<(long size, string etag)> StoreMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
