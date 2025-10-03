@@ -56,7 +56,8 @@ public class FilesystemObjectDataStorageTests : IDisposable
         await pipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
         await pipe.Writer.CompleteAsync();
 
-        await _storage.StoreDataAsync(bucketName, key, pipe.Reader);
+        var storeResult = await _storage.StoreDataAsync(bucketName, key, pipe.Reader, null);
+        Assert.True(storeResult.IsSuccess);
 
         // Verify object exists
         Assert.True(await _storage.DataExistsAsync(bucketName, key));
@@ -88,7 +89,8 @@ public class FilesystemObjectDataStorageTests : IDisposable
         await pipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
         await pipe.Writer.CompleteAsync();
 
-        await _storage.StoreDataAsync(bucketName, key, pipe.Reader);
+        var storeResult = await _storage.StoreDataAsync(bucketName, key, pipe.Reader, null);
+        Assert.True(storeResult.IsSuccess);
 
         // Verify directories exist
         Assert.True(Directory.Exists(bucketDirectory));
@@ -121,12 +123,14 @@ public class FilesystemObjectDataStorageTests : IDisposable
         var pipe1 = new Pipe();
         await pipe1.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
         await pipe1.Writer.CompleteAsync();
-        await _storage.StoreDataAsync(bucketName, key1, pipe1.Reader);
+        var storeResult1 = await _storage.StoreDataAsync(bucketName, key1, pipe1.Reader, null);
+        Assert.True(storeResult1.IsSuccess);
 
         var pipe2 = new Pipe();
         await pipe2.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
         await pipe2.Writer.CompleteAsync();
-        await _storage.StoreDataAsync(bucketName, key2, pipe2.Reader);
+        var storeResult2 = await _storage.StoreDataAsync(bucketName, key2, pipe2.Reader, null);
+        Assert.True(storeResult2.IsSuccess);
 
         // Verify both objects exist
         Assert.True(await _storage.DataExistsAsync(bucketName, key1));
@@ -171,7 +175,8 @@ public class FilesystemObjectDataStorageTests : IDisposable
         await pipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
         await pipe.Writer.CompleteAsync();
 
-        await inlineStorage.StoreDataAsync(bucketName, key, pipe.Reader);
+        var storeResult = await inlineStorage.StoreDataAsync(bucketName, key, pipe.Reader, null);
+        Assert.True(storeResult.IsSuccess);
 
         // Create a metadata directory to simulate inline metadata
         var metadataDir = Path.Combine(bucketDirectory, ".lamina-meta");
@@ -210,7 +215,7 @@ public class FilesystemObjectDataStorageTests : IDisposable
 
         // Act & Assert
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => _storage.StoreDataAsync(bucketName, key, pipe.Reader));
+            () => _storage.StoreDataAsync(bucketName, key, pipe.Reader, null));
 
         Assert.Contains("conflicts with temporary file pattern", exception.Message);
         Assert.Contains(".lamina-tmp-", exception.Message);
@@ -230,7 +235,7 @@ public class FilesystemObjectDataStorageTests : IDisposable
 
         // Act & Assert
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => _storage.StoreDataAsync(bucketName, key, pipe.Reader));
+            () => _storage.StoreDataAsync(bucketName, key, pipe.Reader, null));
 
         Assert.Contains("conflicts with temporary file pattern", exception.Message);
     }
@@ -247,7 +252,8 @@ public class FilesystemObjectDataStorageTests : IDisposable
         var pipe = new Pipe();
         await pipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
         await pipe.Writer.CompleteAsync();
-        await _storage.StoreDataAsync(bucketName, normalKey, pipe.Reader);
+        var storeResult = await _storage.StoreDataAsync(bucketName, normalKey, pipe.Reader, null);
+        Assert.True(storeResult.IsSuccess);
 
         // Manually create a temporary file to simulate what happens during write operations
         var bucketDirectory = Path.Combine(_testDataDirectory, bucketName);
@@ -391,7 +397,8 @@ public class FilesystemObjectDataStorageTests : IDisposable
         var pipe = new Pipe();
         await pipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
         await pipe.Writer.CompleteAsync();
-        await customStorage.StoreDataAsync(bucketName, normalKey, pipe.Reader);
+        var storeResult = await customStorage.StoreDataAsync(bucketName, normalKey, pipe.Reader, null);
+        Assert.True(storeResult.IsSuccess);
 
         // Manually create files with different prefixes
         var bucketDirectory = Path.Combine(_testDataDirectory, bucketName);
@@ -441,7 +448,8 @@ public class FilesystemObjectDataStorageTests : IDisposable
         await pipe.Writer.CompleteAsync();
 
         // Act & Assert - Should not throw because we're using a different temp prefix
-        await customStorage.StoreDataAsync(bucketName, key, pipe.Reader);
+        var storeResult = await customStorage.StoreDataAsync(bucketName, key, pipe.Reader, null);
+        Assert.True(storeResult.IsSuccess);
 
         // Verify the object was actually stored and is accessible
         var exists = await customStorage.DataExistsAsync(bucketName, key);

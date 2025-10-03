@@ -41,14 +41,17 @@ public class ObjectStorageFacade : IObjectStorageFacade
         try
         {
             // Store data with chunk validation and get ETag
-            var (size, etag) = await _dataStorage.StoreDataAsync(bucketName, key, dataReader, chunkValidator, cancellationToken);
+            var storeResult = await _dataStorage.StoreDataAsync(bucketName, key, dataReader, chunkValidator, cancellationToken);
 
-            // Check if validation failed (indicated by empty etag)
-            if (string.IsNullOrEmpty(etag))
+            // Check if storage failed
+            if (!storeResult.IsSuccess)
             {
-                _logger.LogWarning("Chunk signature validation failed for object {Key} in bucket {BucketName}", key, bucketName);
+                _logger.LogWarning("Failed to store object {Key} in bucket {BucketName}: {ErrorCode} - {ErrorMessage}", 
+                    key, bucketName, storeResult.ErrorCode, storeResult.ErrorMessage);
                 return null;
             }
+
+            var (size, etag) = storeResult.Value;
 
             // Check if we should store metadata or just return auto-generated object
             if (ShouldStoreMetadata(key, request))

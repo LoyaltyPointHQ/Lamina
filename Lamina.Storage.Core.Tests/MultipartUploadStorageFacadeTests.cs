@@ -451,7 +451,7 @@ public class MultipartUploadStorageFacadeTests
             .ReturnsAsync(new ChunkedDataResult { Success = true, TotalBytesWritten = 100L });
 
         _mockDataStorage
-            .Setup(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<IChunkedDataParser>(), It.IsAny<IChunkSignatureValidator>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(expectedPart);
 
         // Act
@@ -459,7 +459,8 @@ public class MultipartUploadStorageFacadeTests
 
         // Assert
         Assert.Equal(expectedPart, result);
-        _mockChunkedDataParser.Verify(x => x.ParseChunkedDataToStreamAsync(It.IsAny<PipeReader>(), It.IsAny<Stream>(), mockValidator.Object, It.IsAny<CancellationToken>()), Times.Once);
+        // Verify the data storage received the validator (parser usage is an implementation detail of the storage layer)
+        _mockDataStorage.Verify(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<IChunkedDataParser>(), mockValidator.Object, It.IsAny<CancellationToken>()), Times.Once);
         // Verify metadata was NOT checked (data-first approach)
         _mockMetadataStorage.Verify(x => x.GetUploadMetadataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -477,17 +478,18 @@ public class MultipartUploadStorageFacadeTests
         var pipe = new Pipe();
         await pipe.Writer.CompleteAsync();
 
-        // Data-first approach: No metadata check required
-        _mockChunkedDataParser
-            .Setup(x => x.ParseChunkedDataToStreamAsync(It.IsAny<PipeReader>(), It.IsAny<Stream>(), mockValidator.Object, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ChunkedDataResult { Success = false, ErrorMessage = "Invalid chunk signature" });
+        // Data-first approach: Storage layer handles validation failure
+        _mockDataStorage
+            .Setup(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<IChunkedDataParser>(), mockValidator.Object, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((UploadPart?)null); // Storage returns null when validation fails
 
         // Act
         var result = await _facade.UploadPartAsync(bucketName, key, uploadId, partNumber, pipe.Reader, mockValidator.Object);
 
         // Assert
         Assert.Null(result);
-        _mockDataStorage.Verify(x => x.StorePartDataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<PipeReader>(), It.IsAny<CancellationToken>()), Times.Never);
+        // Verify the storage was called (it's responsible for handling validation)
+        _mockDataStorage.Verify(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<IChunkedDataParser>(), mockValidator.Object, It.IsAny<CancellationToken>()), Times.Once);
         // Verify metadata was NOT checked (data-first approach)
         _mockMetadataStorage.Verify(x => x.GetUploadMetadataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }

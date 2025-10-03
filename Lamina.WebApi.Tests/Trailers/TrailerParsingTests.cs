@@ -194,10 +194,13 @@ namespace Lamina.WebApi.Tests.Streaming.Trailers
             _chunkValidatorMock.Setup(v => v.ValidateChunkStreamAsync(It.IsAny<Stream>(), It.IsAny<long>(), It.IsAny<string>(), false))
                 .ReturnsAsync(false);
 
-            // Act & Assert
-            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-                await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(
-                    pipeReader, destinationStream, _chunkValidatorMock.Object));
+            // Act
+            var result = await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(
+                pipeReader, destinationStream, _chunkValidatorMock.Object);
+
+            // Assert
+            Assert.False(result.Success);
+            Assert.Contains("Invalid chunk signature", result.ErrorMessage);
         }
 
         [Fact]

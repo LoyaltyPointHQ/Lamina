@@ -18,19 +18,9 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         _chunkedDataParser = chunkedDataParser;
     }
 
-    public async Task<(long size, string etag)> StoreDataAsync(string bucketName, string key, PipeReader dataReader, CancellationToken cancellationToken = default)
-    {
-        var bucketData = _data.GetOrAdd(bucketName, _ => new ConcurrentDictionary<string, byte[]>());
 
-        var combinedData = await PipeReaderHelper.ReadAllBytesAsync(dataReader, false, cancellationToken);
 
-        var etag = ETagHelper.ComputeETag(combinedData);
-        bucketData[key] = combinedData;
-
-        return (combinedData.Length, etag);
-    }
-
-    public async Task<(long size, string etag)> StoreDataAsync(
+    public async Task<StorageResult<(long size, string etag)>> StoreDataAsync(
         string bucketName,
         string key,
         PipeReader dataReader,
@@ -38,30 +28,39 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         CancellationToken cancellationToken = default
     )
     {
-        // If no chunk validator is provided, use the standard method
-        if (chunkValidator == null)
-        {
-            return await StoreDataAsync(bucketName, key, dataReader, cancellationToken);
-        }
-
         var bucketData = _data.GetOrAdd(bucketName, _ => new ConcurrentDictionary<string, byte[]>());
 
-        // Parse AWS chunked encoding and write decoded data to memory stream
-        using var memoryStream = new MemoryStream();
-        var parseResult = await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, cancellationToken);
+        byte[] combinedData;
+        long bytesWritten;
 
-        // Check if validation succeeded
-        if (!parseResult.Success)
+        // Handle chunked data with validation if validator is provided
+        if (chunkValidator != null)
         {
-            // Invalid chunk signature
-            return (0, string.Empty);
+            // Parse AWS chunked encoding and write decoded data to memory stream
+            using var memoryStream = new MemoryStream();
+            var parseResult = await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, cancellationToken);
+
+            // Check if validation succeeded
+            if (!parseResult.Success)
+            {
+                // Invalid chunk signature
+                return StorageResult<(long size, string etag)>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
+            }
+
+            combinedData = memoryStream.ToArray();
+            bytesWritten = parseResult.TotalBytesWritten;
+        }
+        else
+        {
+            // Standard read without chunked encoding
+            combinedData = await PipeReaderHelper.ReadAllBytesAsync(dataReader, false, cancellationToken);
+            bytesWritten = combinedData.Length;
         }
 
-        var combinedData = memoryStream.ToArray();
         var etag = ETagHelper.ComputeETag(combinedData);
         bucketData[key] = combinedData;
 
-        return (parseResult.TotalBytesWritten, etag);
+        return StorageResult<(long size, string etag)>.Success((bytesWritten, etag));
     }
 
     public async Task<(long size, string etag)> StoreMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
