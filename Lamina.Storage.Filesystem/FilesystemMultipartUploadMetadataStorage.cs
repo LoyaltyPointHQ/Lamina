@@ -135,12 +135,6 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
         return uploads.OrderBy(u => u.Initiated).ToList();
     }
 
-    public async Task<bool> UploadExistsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
-    {
-        var upload = await GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
-        return upload != null;
-    }
-
     private string GetUploadMetadataPath(string uploadId)
     {
         if (_metadataMode == MetadataStorageMode.SeparateDirectory)

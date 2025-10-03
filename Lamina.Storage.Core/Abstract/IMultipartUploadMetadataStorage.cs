@@ -8,5 +8,4 @@ public interface IMultipartUploadMetadataStorage
     Task<MultipartUpload?> GetUploadMetadataAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default);
     Task<bool> DeleteUploadMetadataAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default);
     Task<List<MultipartUpload>> ListUploadsAsync(string bucketName, CancellationToken cancellationToken = default);
-    Task<bool> UploadExistsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default);
 }

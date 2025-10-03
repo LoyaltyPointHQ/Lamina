@@ -386,10 +386,10 @@ Three background services handle maintenance:
 
 When user says "release vX.X.X", perform these steps:
 
-1. Check commits since last release with `git log --oneline $(git describe --tags --abbrev=0)..HEAD` to identify [Feature], [Enhancement], [Fix], and [Breaking] commits for release notes
-2. Create annotated git tag: `git tag -a vX.X.X -m "Release vX.X.X\n\n[organize commits by type with Features/Enhancements/Bug Fixes/Breaking Changes sections]"`
+1. Check commits since last release with `git log --oneline $(git describe --tags --abbrev=0)..HEAD` to identify [Feature], [Enhancement], [Fix], [Refactor], and [Breaking] commits for release notes
+2. Create annotated git tag: `git tag -a vX.X.X -m "Release vX.X.X\n\n[organize commits by type with Features/Enhancements/Bug Fixes/Refactorings/Breaking Changes sections]"`
 3. Push tag: `git push origin vX.X.X`
-4. Create GitHub release: `gh release create vX.X.X --title "Release vX.X.X" --notes "[organize by sections: ## Features, ## Enhancements, ## Bug Fixes, ## Breaking Changes as applicable]"`
+4. Create GitHub release: `gh release create vX.X.X --title "Release vX.X.X" --notes "[organize by sections: ## Features, ## Enhancements, ## Bug Fixes, ## Refactorings, ## Breaking Changes as applicable]"`
 
 ### Release Notes Convention
 
@@ -399,6 +399,7 @@ When making commits that introduce features or changes that should appear in rel
 [Feature] Brief description of the feature
 [Enhancement] Brief description of the improvement
 [Fix] Brief description of the bug fix (only for user-facing fixes)
+[Refactor] Brief description of code improvement (internal changes, no user-facing impact)
 [Breaking] Brief description of breaking change
 ```
 

@@ -130,32 +130,6 @@ public class SqlMultipartUploadMetadataStorageTests : IDisposable
     }
 
     [Fact]
-    public async Task UploadExistsAsync_ExistingUpload_ReturnsTrue()
-    {
-        // Arrange
-        var bucketName = "test-bucket";
-        var key = "test-key";
-        var request = new InitiateMultipartUploadRequest { Key = key };
-        var initiated = await _storage.InitiateUploadAsync(bucketName, key, request);
-
-        // Act
-        var result = await _storage.UploadExistsAsync(bucketName, key, initiated.UploadId);
-
-        // Assert
-        Assert.True(result);
-    }
-
-    [Fact]
-    public async Task UploadExistsAsync_NonExistentUpload_ReturnsFalse()
-    {
-        // Act
-        var result = await _storage.UploadExistsAsync("bucket", "key", "non-existent-id");
-
-        // Assert
-        Assert.False(result);
-    }
-
-    [Fact]
     public async Task ListUploadsAsync_EmptyBucket_ReturnsEmptyList()
     {
         // Act

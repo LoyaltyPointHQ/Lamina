@@ -33,52 +33,6 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         return part;
     }
 
-    public Task<byte[]?> GetPartDataAsync(string bucketName, string key, string uploadId, int partNumber, CancellationToken cancellationToken = default)
-    {
-        var uploadKey = $"{bucketName}/{key}/{uploadId}";
-        if (_uploadParts.TryGetValue(uploadKey, out var parts) &&
-            parts.TryGetValue(partNumber, out var part))
-        {
-            return Task.FromResult<byte[]?>(part.Data);
-        }
-        return Task.FromResult<byte[]?>(null);
-    }
-
-    public Task<byte[]?> AssemblePartsAsync(string bucketName, string key, string uploadId, List<CompletedPart> parts, CancellationToken cancellationToken = default)
-    {
-        var uploadKey = $"{bucketName}/{key}/{uploadId}";
-        if (!_uploadParts.TryGetValue(uploadKey, out var storedParts))
-        {
-            return Task.FromResult<byte[]?>(null);
-        }
-
-        var orderedParts = parts.OrderBy(p => p.PartNumber).ToList();
-        var totalSize = 0L;
-
-        foreach (var completePart in orderedParts)
-        {
-            if (!storedParts.TryGetValue(completePart.PartNumber, out var part))
-            {
-                return Task.FromResult<byte[]?>(null);
-            }
-            totalSize += part.Size;
-        }
-
-        var combinedData = new byte[totalSize];
-        var offset = 0;
-
-        foreach (var completePart in orderedParts)
-        {
-            if (storedParts.TryGetValue(completePart.PartNumber, out var part))
-            {
-                Buffer.BlockCopy(part.Data!, 0, combinedData, offset, (int)part.Size);
-                offset += (int)part.Size;
-            }
-        }
-
-        return Task.FromResult<byte[]?>(combinedData);
-    }
-
     public Task<IEnumerable<PipeReader>> GetPartReadersAsync(string bucketName, string key, string uploadId, List<CompletedPart> parts, CancellationToken cancellationToken = default)
     {
         var uploadKey = $"{bucketName}/{key}/{uploadId}";
@@ -109,16 +63,6 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         }
 
         return Task.FromResult<IEnumerable<PipeReader>>(readers);
-    }
-
-    public Task<bool> DeletePartDataAsync(string bucketName, string key, string uploadId, int partNumber, CancellationToken cancellationToken = default)
-    {
-        var uploadKey = $"{bucketName}/{key}/{uploadId}";
-        if (_uploadParts.TryGetValue(uploadKey, out var parts))
-        {
-            return Task.FromResult(parts.TryRemove(partNumber, out _));
-        }
-        return Task.FromResult(false);
     }
 
     public Task<bool> DeleteAllPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)

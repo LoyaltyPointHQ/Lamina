@@ -81,15 +81,4 @@ public class SqlMultipartUploadMetadataStorage : IMultipartUploadMetadataStorage
 
         return entities.Select(e => e.ToMultipartUpload()).ToList();
     }
-
-    public async Task<bool> UploadExistsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(bucketName);
-        ArgumentException.ThrowIfNullOrEmpty(key);
-        ArgumentException.ThrowIfNullOrEmpty(uploadId);
-
-        return await _context.MultipartUploads
-            .AnyAsync(u => u.BucketName == bucketName && u.Key == key && u.UploadId == uploadId, cancellationToken);
-    }
-
 }
