@@ -39,12 +39,8 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
 
     public async Task<UploadPart> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, CancellationToken cancellationToken = default)
     {
-        var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
-        if (upload == null)
-        {
-            throw new InvalidOperationException($"Upload '{uploadId}' not found");
-        }
-
+        // Data-first approach: Store the part data without checking metadata
+        // This allows parts to be uploaded even if metadata was lost or corrupted
         return await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, cancellationToken);
     }
 
@@ -56,13 +52,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             return await UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, cancellationToken);
         }
 
-        // Verify upload exists
-        var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
-        if (upload == null)
-        {
-            throw new InvalidOperationException($"Upload '{uploadId}' not found");
-        }
-
+        // Data-first approach: Don't check metadata, just validate and store the part
         // For streaming validation, parse and validate chunks while streaming to storage
         using var tempStream = new MemoryStream();
         try
@@ -93,14 +83,16 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
 
     public async Task<StorageResult<CompleteMultipartUploadResponse>> CompleteMultipartUploadAsync(string bucketName, string key, CompleteMultipartUploadRequest request, CancellationToken cancellationToken = default)
     {
-        var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, request.UploadId, cancellationToken);
-        if (upload == null)
+        // Data-first approach: Check for data existence instead of metadata
+        // Phase 3 & 4 Validation: Part size and ETag validation
+        var storedParts = await _dataStorage.GetStoredPartsAsync(bucketName, key, request.UploadId, cancellationToken);
+
+        // Check if any parts exist - this is the real validation
+        if (!storedParts.Any())
         {
             return StorageResult<CompleteMultipartUploadResponse>.Error("NoSuchUpload", $"Upload '{request.UploadId}' not found");
         }
 
-        // Phase 3 & 4 Validation: Part size and ETag validation
-        var storedParts = await _dataStorage.GetStoredPartsAsync(bucketName, key, request.UploadId, cancellationToken);
         var storedPartsDict = storedParts.ToDictionary(p => p.PartNumber, p => p);
 
         for (int i = 0; i < request.Parts.Count; i++)
@@ -131,11 +123,12 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             throw new InvalidOperationException("Failed to get part readers");
         }
 
+        // Use defaults without fetching metadata (data-first, lock-free approach)
         var putRequest = new PutObjectRequest
         {
             Key = key,
-            ContentType = upload.ContentType,
-            Metadata = upload.Metadata
+            ContentType = "application/octet-stream",
+            Metadata = new Dictionary<string, string>()
         };
 
         // Phase 5: Compute proper multipart ETag from individual part ETags
