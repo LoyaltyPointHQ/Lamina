@@ -11,6 +11,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
     private readonly IObjectDataStorage _dataStorage;
     private readonly IObjectMetadataStorage _metadataStorage;
     private readonly IBucketStorageFacade _bucketStorage;
+    private readonly IMultipartUploadStorageFacade _multipartUploadStorage;
     private readonly ILogger<ObjectStorageFacade> _logger;
     private readonly IContentTypeDetector _contentTypeDetector;
 
@@ -18,12 +19,14 @@ public class ObjectStorageFacade : IObjectStorageFacade
         IObjectDataStorage dataStorage,
         IObjectMetadataStorage metadataStorage,
         IBucketStorageFacade bucketStorage,
+        IMultipartUploadStorageFacade multipartUploadStorage,
         ILogger<ObjectStorageFacade> logger,
         IContentTypeDetector contentTypeDetector)
     {
         _dataStorage = dataStorage;
         _metadataStorage = metadataStorage;
         _bucketStorage = bucketStorage;
+        _multipartUploadStorage = multipartUploadStorage;
         _logger = logger;
         _contentTypeDetector = contentTypeDetector;
     }
@@ -166,6 +169,40 @@ public class ObjectStorageFacade : IObjectStorageFacade
             CommonPrefixes = dataResult.CommonPrefixes ?? new List<string>()
         };
 
+        // For Directory buckets with delimiter, include prefixes from in-progress multipart uploads in CommonPrefixes
+        if (bucketType == BucketType.Directory && !string.IsNullOrEmpty(request.Delimiter))
+        {
+            var multipartUploads = await _multipartUploadStorage.ListMultipartUploadsAsync(bucketName, cancellationToken);
+
+            // Extract prefixes from multipart upload keys
+            var prefixLength = request.Prefix?.Length ?? 0;
+            var multipartPrefixes = new HashSet<string>();
+
+            foreach (var upload in multipartUploads)
+            {
+                // Filter by prefix if specified
+                if (!string.IsNullOrEmpty(request.Prefix) && !upload.Key.StartsWith(request.Prefix))
+                    continue;
+
+                // Find the first delimiter after the prefix
+                var delimiterIndex = upload.Key.IndexOf(request.Delimiter, prefixLength, StringComparison.Ordinal);
+                if (delimiterIndex > 0)
+                {
+                    var prefix = upload.Key.Substring(0, delimiterIndex + request.Delimiter.Length);
+                    multipartPrefixes.Add(prefix);
+                }
+            }
+
+            // Merge multipart prefixes into CommonPrefixes (avoiding duplicates)
+            foreach (var prefix in multipartPrefixes)
+            {
+                if (!response.CommonPrefixes.Contains(prefix))
+                {
+                    response.CommonPrefixes.Add(prefix);
+                }
+            }
+        }
+
         // Process keys to get object metadata
         foreach (var key in dataResult.Keys)
         {
@@ -173,7 +210,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
             if (meta == null)
             {
                 var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-                if (dataInfo != null) 
+                if (dataInfo != null)
                     meta = await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
             }
             if (meta != null)

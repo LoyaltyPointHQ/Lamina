@@ -68,7 +68,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
 
         // Create a pipe reader from the validated decoded data
         tempStream.Position = 0;
-        var pipe = new System.IO.Pipelines.Pipe();
+        var pipe = new Pipe();
         var writeTask = Task.Run(async () =>
         {
             await tempStream.CopyToAsync(pipe.Writer.AsStream(), cancellationToken);

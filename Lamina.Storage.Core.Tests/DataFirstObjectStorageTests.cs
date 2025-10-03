@@ -16,6 +16,7 @@ public class DataFirstObjectStorageTests
     private readonly Mock<IObjectDataStorage> _dataStorageMock;
     private readonly Mock<IObjectMetadataStorage> _metadataStorageMock;
     private readonly Mock<IBucketStorageFacade> _bucketStorageMock;
+    private readonly Mock<IMultipartUploadStorageFacade> _multipartUploadStorageMock;
     private readonly Mock<ILogger<ObjectStorageFacade>> _loggerMock;
     private readonly IContentTypeDetector _contentTypeDetector;
     private readonly ObjectStorageFacade _facade;
@@ -25,6 +26,7 @@ public class DataFirstObjectStorageTests
         _dataStorageMock = new Mock<IObjectDataStorage>();
         _metadataStorageMock = new Mock<IObjectMetadataStorage>();
         _bucketStorageMock = new Mock<IBucketStorageFacade>();
+        _multipartUploadStorageMock = new Mock<IMultipartUploadStorageFacade>();
         _loggerMock = new Mock<ILogger<ObjectStorageFacade>>();
         _contentTypeDetector = new FileExtensionContentTypeDetector();
 
@@ -37,7 +39,7 @@ public class DataFirstObjectStorageTests
                 CreationDate = DateTime.UtcNow
             });
 
-        _facade = new ObjectStorageFacade(_dataStorageMock.Object, _metadataStorageMock.Object, _bucketStorageMock.Object, _loggerMock.Object, _contentTypeDetector);
+        _facade = new ObjectStorageFacade(_dataStorageMock.Object, _metadataStorageMock.Object, _bucketStorageMock.Object, _multipartUploadStorageMock.Object, _loggerMock.Object, _contentTypeDetector);
     }
 
     [Fact]
@@ -251,5 +253,286 @@ public class DataFirstObjectStorageTests
             Assert.NotNull(objectInfo);
             Assert.Equal(expectedContentType, objectInfo.ContentType);
         }
+    }
+
+    [Fact]
+    public async Task ListObjectsAsync_DirectoryBucket_IncludesMultipartUploadPrefixesWithDelimiter()
+    {
+        // Arrange
+        var bucketName = "test-bucket";
+        var delimiter = "/";
+        var prefix = "uploads/";
+
+        // Setup bucket as Directory bucket
+        _bucketStorageMock.Setup(x => x.GetBucketAsync(bucketName, default))
+            .ReturnsAsync(new Bucket
+            {
+                Name = bucketName,
+                Type = BucketType.Directory,
+                CreationDate = DateTime.UtcNow
+            });
+
+        // Setup data storage to return completed objects
+        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, BucketType.Directory, prefix, delimiter, null, 1000, default))
+            .ReturnsAsync(new ListDataResult
+            {
+                Keys = new List<string> { "uploads/completed/file.txt" },
+                CommonPrefixes = new List<string> { "uploads/completed/" }
+            });
+
+        // Setup multipart uploads with in-progress uploads
+        _multipartUploadStorageMock.Setup(x => x.ListMultipartUploadsAsync(bucketName, default))
+            .ReturnsAsync(new List<MultipartUpload>
+            {
+                new MultipartUpload { Key = "uploads/inprogress/file1.txt", UploadId = "upload1" },
+                new MultipartUpload { Key = "uploads/inprogress/file2.txt", UploadId = "upload2" },
+                new MultipartUpload { Key = "uploads/other/file3.txt", UploadId = "upload3" }
+            });
+
+        // Setup metadata for completed object
+        _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "uploads/completed/file.txt", default))
+            .ReturnsAsync(new S3ObjectInfo
+            {
+                Key = "uploads/completed/file.txt",
+                Size = 100,
+                LastModified = DateTime.UtcNow,
+                ETag = "etag1",
+                ContentType = "text/plain"
+            });
+
+        // Act
+        var request = new ListObjectsRequest { Prefix = prefix, Delimiter = delimiter };
+        var response = await _facade.ListObjectsAsync(bucketName, request);
+
+        // Assert
+        Assert.NotNull(response);
+        Assert.True(response.IsSuccess);
+        Assert.NotNull(response.Value);
+
+        // Should include prefixes from both completed objects and multipart uploads
+        Assert.Contains("uploads/completed/", response.Value.CommonPrefixes);
+        Assert.Contains("uploads/inprogress/", response.Value.CommonPrefixes);
+        Assert.Contains("uploads/other/", response.Value.CommonPrefixes);
+        Assert.Equal(3, response.Value.CommonPrefixes.Count);
+    }
+
+    [Fact]
+    public async Task ListObjectsAsync_GeneralPurposeBucket_DoesNotIncludeMultipartUploadPrefixes()
+    {
+        // Arrange
+        var bucketName = "test-bucket";
+        var delimiter = "/";
+
+        // Setup bucket as General Purpose bucket (default)
+        _bucketStorageMock.Setup(x => x.GetBucketAsync(bucketName, default))
+            .ReturnsAsync(new Bucket
+            {
+                Name = bucketName,
+                Type = BucketType.GeneralPurpose,
+                CreationDate = DateTime.UtcNow
+            });
+
+        // Setup data storage to return completed objects
+        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, BucketType.GeneralPurpose, null, delimiter, null, 1000, default))
+            .ReturnsAsync(new ListDataResult
+            {
+                Keys = new List<string> { "folder/file.txt" },
+                CommonPrefixes = new List<string> { "folder/" }
+            });
+
+        // Setup multipart uploads (these should NOT be included)
+        _multipartUploadStorageMock.Setup(x => x.ListMultipartUploadsAsync(bucketName, default))
+            .ReturnsAsync(new List<MultipartUpload>
+            {
+                new MultipartUpload { Key = "inprogress/file1.txt", UploadId = "upload1" }
+            });
+
+        // Setup metadata for completed object
+        _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "folder/file.txt", default))
+            .ReturnsAsync(new S3ObjectInfo
+            {
+                Key = "folder/file.txt",
+                Size = 100,
+                LastModified = DateTime.UtcNow,
+                ETag = "etag1",
+                ContentType = "text/plain"
+            });
+
+        // Act
+        var request = new ListObjectsRequest { Delimiter = delimiter };
+        var response = await _facade.ListObjectsAsync(bucketName, request);
+
+        // Assert
+        Assert.NotNull(response);
+        Assert.True(response.IsSuccess);
+        Assert.NotNull(response.Value);
+
+        // Should only include completed object prefix, NOT multipart upload prefix
+        Assert.Single(response.Value.CommonPrefixes);
+        Assert.Contains("folder/", response.Value.CommonPrefixes);
+        Assert.DoesNotContain("inprogress/", response.Value.CommonPrefixes);
+
+        // Verify multipart upload list was never called for General Purpose buckets
+        _multipartUploadStorageMock.Verify(x => x.ListMultipartUploadsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ListObjectsAsync_DirectoryBucket_WithoutDelimiter_DoesNotIncludeMultipartUploadPrefixes()
+    {
+        // Arrange
+        var bucketName = "test-bucket";
+
+        // Setup bucket as Directory bucket
+        _bucketStorageMock.Setup(x => x.GetBucketAsync(bucketName, default))
+            .ReturnsAsync(new Bucket
+            {
+                Name = bucketName,
+                Type = BucketType.Directory,
+                CreationDate = DateTime.UtcNow
+            });
+
+        // Setup data storage to return completed objects
+        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, BucketType.Directory, null, null, null, 1000, default))
+            .ReturnsAsync(new ListDataResult
+            {
+                Keys = new List<string> { "file1.txt" },
+                CommonPrefixes = new List<string>()
+            });
+
+        // Setup multipart uploads (should NOT be processed without delimiter)
+        _multipartUploadStorageMock.Setup(x => x.ListMultipartUploadsAsync(bucketName, default))
+            .ReturnsAsync(new List<MultipartUpload>
+            {
+                new MultipartUpload { Key = "inprogress/file1.txt", UploadId = "upload1" }
+            });
+
+        // Setup metadata for completed object
+        _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "file1.txt", default))
+            .ReturnsAsync(new S3ObjectInfo
+            {
+                Key = "file1.txt",
+                Size = 100,
+                LastModified = DateTime.UtcNow,
+                ETag = "etag1",
+                ContentType = "text/plain"
+            });
+
+        // Act
+        var response = await _facade.ListObjectsAsync(bucketName, null);
+
+        // Assert
+        Assert.NotNull(response);
+        Assert.True(response.IsSuccess);
+        Assert.NotNull(response.Value);
+        Assert.Empty(response.Value.CommonPrefixes);
+
+        // Verify multipart upload list was never called (no delimiter)
+        _multipartUploadStorageMock.Verify(x => x.ListMultipartUploadsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ListObjectsAsync_DirectoryBucket_FiltersMultipartUploadsByPrefix()
+    {
+        // Arrange
+        var bucketName = "test-bucket";
+        var delimiter = "/";
+        var prefix = "uploads/docs/";
+
+        // Setup bucket as Directory bucket
+        _bucketStorageMock.Setup(x => x.GetBucketAsync(bucketName, default))
+            .ReturnsAsync(new Bucket
+            {
+                Name = bucketName,
+                Type = BucketType.Directory,
+                CreationDate = DateTime.UtcNow
+            });
+
+        // Setup data storage to return no completed objects
+        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, BucketType.Directory, prefix, delimiter, null, 1000, default))
+            .ReturnsAsync(new ListDataResult
+            {
+                Keys = new List<string>(),
+                CommonPrefixes = new List<string>()
+            });
+
+        // Setup multipart uploads - some match prefix, some don't
+        _multipartUploadStorageMock.Setup(x => x.ListMultipartUploadsAsync(bucketName, default))
+            .ReturnsAsync(new List<MultipartUpload>
+            {
+                new MultipartUpload { Key = "uploads/docs/report.pdf", UploadId = "upload1" },
+                new MultipartUpload { Key = "uploads/docs/presentation.pptx", UploadId = "upload2" },
+                new MultipartUpload { Key = "uploads/images/photo.jpg", UploadId = "upload3" }, // Different prefix
+                new MultipartUpload { Key = "other/file.txt", UploadId = "upload4" } // Different prefix
+            });
+
+        // Act
+        var request = new ListObjectsRequest { Prefix = prefix, Delimiter = delimiter };
+        var response = await _facade.ListObjectsAsync(bucketName, request);
+
+        // Assert
+        Assert.NotNull(response);
+        Assert.True(response.IsSuccess);
+        Assert.NotNull(response.Value);
+
+        // Should NOT include any CommonPrefixes because the multipart upload keys don't have
+        // a delimiter after the prefix (they are at the prefix level itself)
+        Assert.Empty(response.Value.CommonPrefixes);
+    }
+
+    [Fact]
+    public async Task ListObjectsAsync_DirectoryBucket_MergesDuplicatePrefixes()
+    {
+        // Arrange
+        var bucketName = "test-bucket";
+        var delimiter = "/";
+
+        // Setup bucket as Directory bucket
+        _bucketStorageMock.Setup(x => x.GetBucketAsync(bucketName, default))
+            .ReturnsAsync(new Bucket
+            {
+                Name = bucketName,
+                Type = BucketType.Directory,
+                CreationDate = DateTime.UtcNow
+            });
+
+        // Setup data storage to return completed objects with prefix
+        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, BucketType.Directory, null, delimiter, null, 1000, default))
+            .ReturnsAsync(new ListDataResult
+            {
+                Keys = new List<string> { "folder/completed.txt" },
+                CommonPrefixes = new List<string> { "folder/" }
+            });
+
+        // Setup multipart uploads with same prefix
+        _multipartUploadStorageMock.Setup(x => x.ListMultipartUploadsAsync(bucketName, default))
+            .ReturnsAsync(new List<MultipartUpload>
+            {
+                new MultipartUpload { Key = "folder/inprogress1.txt", UploadId = "upload1" },
+                new MultipartUpload { Key = "folder/inprogress2.txt", UploadId = "upload2" }
+            });
+
+        // Setup metadata for completed object
+        _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "folder/completed.txt", default))
+            .ReturnsAsync(new S3ObjectInfo
+            {
+                Key = "folder/completed.txt",
+                Size = 100,
+                LastModified = DateTime.UtcNow,
+                ETag = "etag1",
+                ContentType = "text/plain"
+            });
+
+        // Act
+        var request = new ListObjectsRequest { Delimiter = delimiter };
+        var response = await _facade.ListObjectsAsync(bucketName, request);
+
+        // Assert
+        Assert.NotNull(response);
+        Assert.True(response.IsSuccess);
+        Assert.NotNull(response.Value);
+
+        // Should only have one "folder/" prefix (no duplicates)
+        Assert.Single(response.Value.CommonPrefixes);
+        Assert.Contains("folder/", response.Value.CommonPrefixes);
     }
 }
