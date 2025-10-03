@@ -29,8 +29,7 @@ public class SqlMultipartUploadMetadataStorage : IMultipartUploadMetadataStorage
             Key = key,
             Initiated = DateTime.UtcNow,
             ContentType = request.ContentType,
-            Metadata = request.Metadata ?? new Dictionary<string, string>(),
-            Parts = new List<UploadPart>()
+            Metadata = request.Metadata ?? new Dictionary<string, string>()
         };
 
         var entity = MultipartUploadEntity.FromMultipartUpload(upload);
@@ -47,7 +46,6 @@ public class SqlMultipartUploadMetadataStorage : IMultipartUploadMetadataStorage
         ArgumentException.ThrowIfNullOrEmpty(uploadId);
 
         var entity = await _context.MultipartUploads
-            .Include(u => u.Parts)
             .FirstOrDefaultAsync(u => u.BucketName == bucketName && u.Key == key && u.UploadId == uploadId, cancellationToken);
 
         return entity?.ToMultipartUpload();
@@ -77,7 +75,6 @@ public class SqlMultipartUploadMetadataStorage : IMultipartUploadMetadataStorage
         ArgumentException.ThrowIfNullOrEmpty(bucketName);
 
         var entities = await _context.MultipartUploads
-            .Include(u => u.Parts)
             .Where(u => u.BucketName == bucketName)
             .OrderBy(u => u.Initiated)
             .ToListAsync(cancellationToken);

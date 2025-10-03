@@ -50,10 +50,6 @@ public class LaminaDbContext : DbContext
         {
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => new { e.UploadId, e.PartNumber }).IsUnique();
-            entity.HasOne(e => e.Upload)
-                  .WithMany(u => u.Parts)
-                  .HasForeignKey(e => e.UploadId)
-                  .OnDelete(DeleteBehavior.Cascade);
         });
 
         // Configure JSON columns for different database providers

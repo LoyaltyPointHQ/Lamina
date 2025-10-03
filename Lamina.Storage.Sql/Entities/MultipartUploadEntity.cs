@@ -38,8 +38,6 @@ public class MultipartUploadEntity
         set => MetadataJson = JsonSerializer.Serialize(value);
     }
 
-    public virtual ICollection<UploadPartEntity> Parts { get; set; } = new List<UploadPartEntity>();
-
     public static MultipartUploadEntity FromMultipartUpload(MultipartUpload upload)
     {
         return new MultipartUploadEntity
@@ -62,8 +60,7 @@ public class MultipartUploadEntity
             Key = Key,
             Initiated = Initiated,
             ContentType = ContentType,
-            Metadata = Metadata,
-            Parts = Parts.Select(p => p.ToUploadPart()).ToList()
+            Metadata = Metadata
         };
     }
 }

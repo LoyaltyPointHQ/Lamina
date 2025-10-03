@@ -18,7 +18,7 @@ public class LaminaDbContextFactory : IDesignTimeDbContextFactory<LaminaDbContex
         {
             optionsBuilder.UseNpgsql(connectionString, npgsqlOptions =>
             {
-                npgsqlOptions.MigrationsAssembly("Lamina");
+                npgsqlOptions.MigrationsAssembly("Lamina.Storage.Sql");
                 npgsqlOptions.MigrationsHistoryTable("__EFMigrationsHistory", "public");
             });
         }
@@ -26,7 +26,7 @@ public class LaminaDbContextFactory : IDesignTimeDbContextFactory<LaminaDbContex
         {
             optionsBuilder.UseSqlite(connectionString, sqliteOptions =>
             {
-                sqliteOptions.MigrationsAssembly("Lamina");
+                sqliteOptions.MigrationsAssembly("Lamina.Storage.Sql");
             });
         }
 

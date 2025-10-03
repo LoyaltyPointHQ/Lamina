@@ -139,7 +139,7 @@ if (metadataStorageType.Equals("Sql", StringComparison.OrdinalIgnoreCase))
             options.UseNpgsql(sqlSettings.ConnectionString, npgsqlOptions =>
             {
                 npgsqlOptions.CommandTimeout(sqlSettings.CommandTimeout);
-                npgsqlOptions.MigrationsAssembly("Lamina");
+                npgsqlOptions.MigrationsAssembly("Lamina.Storage.Sql");
                 npgsqlOptions.MigrationsHistoryTable("__EFMigrationsHistory", "public");
             });
         }
@@ -148,7 +148,7 @@ if (metadataStorageType.Equals("Sql", StringComparison.OrdinalIgnoreCase))
             options.UseSqlite(sqlSettings.ConnectionString, sqliteOptions =>
             {
                 sqliteOptions.CommandTimeout(sqlSettings.CommandTimeout);
-                sqliteOptions.MigrationsAssembly("Lamina");
+                sqliteOptions.MigrationsAssembly("Lamina.Storage.Sql");
             });
         }
 

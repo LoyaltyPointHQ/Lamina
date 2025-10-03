@@ -6,7 +6,6 @@ public class MultipartUpload
     public string BucketName { get; set; } = string.Empty;
     public string Key { get; set; } = string.Empty;
     public DateTime Initiated { get; set; }
-    public List<UploadPart> Parts { get; set; } = new();
     public Dictionary<string, string> Metadata { get; set; } = new();
     public string? ContentType { get; set; }
 }

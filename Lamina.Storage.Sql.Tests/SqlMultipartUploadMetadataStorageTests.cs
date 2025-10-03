@@ -47,7 +47,6 @@ public class SqlMultipartUploadMetadataStorageTests : IDisposable
         Assert.Single(result.Metadata);
         Assert.Equal("value", result.Metadata["custom"]);
         Assert.True(result.Initiated <= DateTime.UtcNow);
-        Assert.Empty(result.Parts);
     }
 
     [Fact]
