@@ -123,12 +123,13 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             throw new InvalidOperationException("Failed to get part readers");
         }
 
-        // Use defaults without fetching metadata (data-first, lock-free approach)
+        // Try to retrieve metadata for S3 compliance, but fall back to defaults if missing (data-first resilience)
+        var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, request.UploadId, cancellationToken);
         var putRequest = new PutObjectRequest
         {
             Key = key,
-            ContentType = "application/octet-stream",
-            Metadata = new Dictionary<string, string>()
+            ContentType = upload?.ContentType ?? "application/octet-stream",
+            Metadata = upload?.Metadata ?? new Dictionary<string, string>()
         };
 
         // Phase 5: Compute proper multipart ETag from individual part ETags
