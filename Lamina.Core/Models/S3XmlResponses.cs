@@ -73,6 +73,9 @@ public class ListBucketResult
 
     [XmlElement("CommonPrefixes")]
     public List<CommonPrefixes> CommonPrefixesList { get; set; } = new();
+
+    // Conditionally serialize NextMarker only when IsTruncated is true
+    public bool ShouldSerializeNextMarker() => IsTruncated && !string.IsNullOrEmpty(NextMarker);
 }
 
 [XmlRoot("Contents")]
@@ -132,6 +135,9 @@ public class ListBucketResultV2
 
     [XmlElement("CommonPrefixes")]
     public List<CommonPrefixes> CommonPrefixesList { get; set; } = new();
+
+    // Conditionally serialize NextContinuationToken only when IsTruncated is true
+    public bool ShouldSerializeNextContinuationToken() => IsTruncated && !string.IsNullOrEmpty(NextContinuationToken);
 }
 
 [XmlRoot("CommonPrefixes")]

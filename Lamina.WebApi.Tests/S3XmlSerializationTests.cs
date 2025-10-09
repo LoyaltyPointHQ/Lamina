@@ -222,4 +222,112 @@ public class S3XmlSerializationTests
         Assert.Contains("<NextKeyMarker>some-key</NextKeyMarker>", xml);
         Assert.Contains("<NextUploadIdMarker>some-upload-id</NextUploadIdMarker>", xml);
     }
+
+    [Fact]
+    public void ListBucketResult_WhenNotTruncated_OmitsNextMarker()
+    {
+        // Arrange
+        var result = new ListBucketResult
+        {
+            Name = "test-bucket",
+            IsTruncated = false,
+            NextMarker = "some-marker"
+        };
+
+        // Act
+        var xml = SerializeToXml(result);
+
+        // Assert
+        Assert.DoesNotContain("<NextMarker>", xml);
+    }
+
+    [Fact]
+    public void ListBucketResult_WhenTruncatedWithValue_IncludesNextMarker()
+    {
+        // Arrange
+        var result = new ListBucketResult
+        {
+            Name = "test-bucket",
+            IsTruncated = true,
+            NextMarker = "some-marker"
+        };
+
+        // Act
+        var xml = SerializeToXml(result);
+
+        // Assert
+        Assert.Contains("<NextMarker>some-marker</NextMarker>", xml);
+    }
+
+    [Fact]
+    public void ListBucketResult_WhenTruncatedWithEmptyValue_OmitsNextMarker()
+    {
+        // Arrange
+        var result = new ListBucketResult
+        {
+            Name = "test-bucket",
+            IsTruncated = true,
+            NextMarker = ""
+        };
+
+        // Act
+        var xml = SerializeToXml(result);
+
+        // Assert
+        Assert.DoesNotContain("<NextMarker>", xml);
+    }
+
+    [Fact]
+    public void ListBucketResultV2_WhenNotTruncated_OmitsNextContinuationToken()
+    {
+        // Arrange
+        var result = new ListBucketResultV2
+        {
+            Name = "test-bucket",
+            IsTruncated = false,
+            NextContinuationToken = "some-token"
+        };
+
+        // Act
+        var xml = SerializeToXml(result);
+
+        // Assert
+        Assert.DoesNotContain("<NextContinuationToken>", xml);
+    }
+
+    [Fact]
+    public void ListBucketResultV2_WhenTruncatedWithValue_IncludesNextContinuationToken()
+    {
+        // Arrange
+        var result = new ListBucketResultV2
+        {
+            Name = "test-bucket",
+            IsTruncated = true,
+            NextContinuationToken = "some-token"
+        };
+
+        // Act
+        var xml = SerializeToXml(result);
+
+        // Assert
+        Assert.Contains("<NextContinuationToken>some-token</NextContinuationToken>", xml);
+    }
+
+    [Fact]
+    public void ListBucketResultV2_WhenTruncatedWithNullValue_OmitsNextContinuationToken()
+    {
+        // Arrange
+        var result = new ListBucketResultV2
+        {
+            Name = "test-bucket",
+            IsTruncated = true,
+            NextContinuationToken = null
+        };
+
+        // Act
+        var xml = SerializeToXml(result);
+
+        // Assert
+        Assert.DoesNotContain("<NextContinuationToken>", xml);
+    }
 }
