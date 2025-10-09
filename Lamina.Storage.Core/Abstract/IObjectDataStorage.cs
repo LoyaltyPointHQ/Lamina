@@ -22,4 +22,5 @@ public interface IObjectDataStorage
     Task<(long size, DateTime lastModified)?> GetDataInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     Task<ListDataResult> ListDataKeysAsync(string bucketName, BucketType bucketType, string? prefix = null, string? delimiter = null, string? startAfter = null, int maxKeys = 1000, CancellationToken cancellationToken = default);
     Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    Task<(long size, string etag)?> CopyDataAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, CancellationToken cancellationToken = default);
 }

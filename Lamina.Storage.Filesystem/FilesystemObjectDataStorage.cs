@@ -598,6 +598,80 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         return await ETagHelper.ComputeETagFromFileAsync(dataPath);
     }
 
+    public async Task<(long size, string etag)?> CopyDataAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, CancellationToken cancellationToken = default)
+    {
+        // Validate keys
+        if (FilesystemStorageHelper.IsKeyForbidden(sourceKey, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName) ||
+            FilesystemStorageHelper.IsKeyForbidden(destKey, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return null;
+        }
+
+        var sourcePath = GetDataPath(sourceBucketName, sourceKey);
+        if (!File.Exists(sourcePath))
+        {
+            return null;
+        }
+
+        // Check if source is a temporary file
+        var sourceFileName = Path.GetFileName(sourcePath);
+        if (FilesystemStorageHelper.IsTemporaryFile(sourceFileName, _tempFilePrefix))
+        {
+            return null; // Temporary files should be invisible
+        }
+
+        var destPath = GetDataPath(destBucketName, destKey);
+        var destDir = Path.GetDirectoryName(destPath)!;
+        Directory.CreateDirectory(destDir);
+
+        // Use a temporary file for atomic copy
+        var tempPath = Path.Combine(destDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
+        try
+        {
+            // Copy the file
+            await _networkHelper.ExecuteWithRetryAsync(() =>
+                {
+                    File.Copy(sourcePath, tempPath, overwrite: false);
+                    return Task.FromResult(true);
+                },
+                "CopyFile");
+
+            // Move temp file to final destination atomically
+            await _networkHelper.ExecuteWithRetryAsync(() =>
+                {
+                    File.Move(tempPath, destPath, overwrite: true);
+                    return Task.FromResult(true);
+                },
+                "MoveFile");
+
+            // Get the size and compute ETag of the destination file
+            var fileInfo = new FileInfo(destPath);
+            var etag = await ETagHelper.ComputeETagFromFileAsync(destPath);
+
+            return (fileInfo.Length, etag);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error copying data from {SourceBucket}/{SourceKey} to {DestBucket}/{DestKey}",
+                sourceBucketName, sourceKey, destBucketName, destKey);
+
+            // Clean up temp file if it exists
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // Ignore cleanup errors
+                }
+            }
+
+            return null;
+        }
+    }
+
     private string GetDataPath(string bucketName, string key)
     {
         return Path.Combine(_dataDirectory, bucketName, key);

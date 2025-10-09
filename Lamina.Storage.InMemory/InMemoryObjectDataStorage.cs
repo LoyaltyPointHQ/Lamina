@@ -229,4 +229,28 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
 
         return Task.FromResult<string?>(null);
     }
+
+    public Task<(long size, string etag)?> CopyDataAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, CancellationToken cancellationToken = default)
+    {
+        if (!_data.TryGetValue(sourceBucketName, out var sourceBucketData) ||
+            !sourceBucketData.TryGetValue(sourceKey, out var sourceData))
+        {
+            return Task.FromResult<(long size, string etag)?>(null);
+        }
+
+        // Create destination bucket if it doesn't exist
+        var destBucketData = _data.GetOrAdd(destBucketName, _ => new ConcurrentDictionary<string, byte[]>());
+
+        // Copy the byte array (create a new copy, not a reference)
+        var copiedData = new byte[sourceData.Length];
+        Buffer.BlockCopy(sourceData, 0, copiedData, 0, sourceData.Length);
+
+        // Store in destination
+        destBucketData[destKey] = copiedData;
+
+        // Compute ETag of the copied data
+        var etag = ETagHelper.ComputeETag(copiedData);
+
+        return Task.FromResult<(long size, string etag)?>((copiedData.Length, etag));
+    }
 }

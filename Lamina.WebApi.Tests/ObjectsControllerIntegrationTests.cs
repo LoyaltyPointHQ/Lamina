@@ -766,4 +766,135 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         Assert.Equal("item03.txt", result.ContentsList[0].Key);
         Assert.Equal("item04.txt", result.ContentsList[1].Key);
     }
+
+    [Fact]
+    public async Task CopyObject_WithinSameBucket_Returns200()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var sourceContent = "Source object content";
+
+        // Create source object
+        await Client.PutAsync($"/{bucketName}/source.txt",
+            new StringContent(sourceContent, Encoding.UTF8, "text/plain"));
+
+        // Copy to destination
+        var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/destination.txt");
+        request.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.txt");
+
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
+
+        // Verify CopyObjectResult XML
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(CopyObjectResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (CopyObjectResult?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+        Assert.NotNull(result.ETag);
+        Assert.NotNull(result.LastModified);
+
+        // Verify destination object exists and has same content
+        var getResponse = await Client.GetAsync($"/{bucketName}/destination.txt");
+        var destContent = await getResponse.Content.ReadAsStringAsync();
+        Assert.Equal(sourceContent, destContent);
+    }
+
+    [Fact]
+    public async Task CopyObject_ToDifferentBucket_Returns200()
+    {
+        var sourceBucket = await CreateTestBucketAsync();
+        var destBucket = await CreateTestBucketAsync();
+        var sourceContent = "Source object content";
+
+        // Create source object
+        await Client.PutAsync($"/{sourceBucket}/source.txt",
+            new StringContent(sourceContent, Encoding.UTF8, "text/plain"));
+
+        // Copy to different bucket
+        var request = new HttpRequestMessage(HttpMethod.Put, $"/{destBucket}/destination.txt");
+        request.Headers.Add("x-amz-copy-source", $"/{sourceBucket}/source.txt");
+
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // Verify destination object exists in different bucket
+        var getResponse = await Client.GetAsync($"/{destBucket}/destination.txt");
+        var destContent = await getResponse.Content.ReadAsStringAsync();
+        Assert.Equal(sourceContent, destContent);
+    }
+
+    [Fact]
+    public async Task CopyObject_NonExistentSource_Returns404()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/destination.txt");
+        request.Headers.Add("x-amz-copy-source", $"/{bucketName}/non-existent.txt");
+
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+
+        var errorXml = await response.Content.ReadAsStringAsync();
+        Assert.Contains("NoSuchKey", errorXml);
+    }
+
+    [Fact]
+    public async Task CopyObject_WithMetadataDirectiveCopy_CopiesMetadata()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create source object with custom metadata
+        var putRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/source.txt");
+        putRequest.Content = new StringContent("Content", Encoding.UTF8, "text/plain");
+        putRequest.Headers.Add("x-amz-meta-custom", "custom-value");
+        await Client.SendAsync(putRequest);
+
+        // Copy with metadata directive COPY
+        var copyRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/destination.txt");
+        copyRequest.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.txt");
+        copyRequest.Headers.Add("x-amz-metadata-directive", "COPY");
+
+        var response = await Client.SendAsync(copyRequest);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // Verify destination has the same metadata
+        var headRequest = new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}/destination.txt");
+        var headResponse = await Client.SendAsync(headRequest);
+        Assert.Contains("x-amz-meta-custom", headResponse.Headers.Select(h => h.Key));
+    }
+
+    [Fact]
+    public async Task CopyObject_WithMetadataDirectiveReplace_ReplacesMetadata()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create source object with custom metadata
+        var putRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/source.txt");
+        putRequest.Content = new StringContent("Content", Encoding.UTF8, "text/plain");
+        putRequest.Headers.Add("x-amz-meta-original", "original-value");
+        await Client.SendAsync(putRequest);
+
+        // Copy with metadata directive REPLACE and new metadata
+        var copyRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/destination.txt");
+        copyRequest.Content = new StringContent("", Encoding.UTF8, "application/octet-stream");
+        copyRequest.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.txt");
+        copyRequest.Headers.Add("x-amz-metadata-directive", "REPLACE");
+        copyRequest.Headers.Add("x-amz-meta-new", "new-value");
+
+        var response = await Client.SendAsync(copyRequest);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // Verify destination has new metadata (not original)
+        var headRequest = new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}/destination.txt");
+        var headResponse = await Client.SendAsync(headRequest);
+        Assert.Contains("x-amz-meta-new", headResponse.Headers.Select(h => h.Key));
+        Assert.DoesNotContain("x-amz-meta-original", headResponse.Headers.Select(h => h.Key));
+    }
 }

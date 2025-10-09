@@ -367,4 +367,113 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
         return new DeleteMultipleObjectsResponse(deleted, errors);
     }
+
+    public async Task<S3Object?> CopyObjectAsync(
+        string sourceBucketName,
+        string sourceKey,
+        string destBucketName,
+        string destKey,
+        string? metadataDirective = null,
+        PutObjectRequest? request = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Validate keys
+            if (!IsValidObjectKey(sourceKey) || !IsValidObjectKey(destKey))
+            {
+                _logger.LogWarning("Invalid object key: source={SourceKey}, dest={DestKey}", sourceKey, destKey);
+                return null;
+            }
+
+            // Check if source object exists
+            var sourceInfo = await GetObjectInfoAsync(sourceBucketName, sourceKey, cancellationToken);
+            if (sourceInfo == null)
+            {
+                _logger.LogWarning("Source object {SourceKey} not found in bucket {SourceBucket}", sourceKey, sourceBucketName);
+                return null;
+            }
+
+            // Copy the data at storage level
+            var copyResult = await _dataStorage.CopyDataAsync(sourceBucketName, sourceKey, destBucketName, destKey, cancellationToken);
+            if (copyResult == null)
+            {
+                _logger.LogError("Failed to copy data from {SourceBucket}/{SourceKey} to {DestBucket}/{DestKey}",
+                    sourceBucketName, sourceKey, destBucketName, destKey);
+                return null;
+            }
+
+            var (size, etag) = copyResult.Value;
+
+            // Determine metadata handling based on directive
+            // Default is "COPY" per S3 spec
+            var directive = metadataDirective?.ToUpperInvariant() ?? "COPY";
+
+            PutObjectRequest effectiveRequest;
+            if (directive == "REPLACE" && request != null)
+            {
+                // Use the provided metadata
+                effectiveRequest = request;
+            }
+            else
+            {
+                // COPY mode: use source object's metadata
+                effectiveRequest = new PutObjectRequest
+                {
+                    Key = destKey,
+                    ContentType = sourceInfo.ContentType,
+                    Metadata = new Dictionary<string, string>(sourceInfo.Metadata),
+                    OwnerId = request?.OwnerId ?? sourceInfo.OwnerId,
+                    OwnerDisplayName = request?.OwnerDisplayName ?? sourceInfo.OwnerDisplayName
+                };
+            }
+
+            // Decide if we need to store metadata
+            if (ShouldStoreMetadata(destKey, effectiveRequest))
+            {
+                // Store metadata
+                var s3Object = await _metadataStorage.StoreMetadataAsync(destBucketName, destKey, etag, size, effectiveRequest, cancellationToken);
+
+                if (s3Object == null)
+                {
+                    // Rollback data if metadata storage failed
+                    await _dataStorage.DeleteDataAsync(destBucketName, destKey, cancellationToken);
+                    _logger.LogError("Failed to store metadata for copied object {DestKey} in bucket {DestBucket}", destKey, destBucketName);
+                    return null;
+                }
+
+                return s3Object;
+            }
+            else
+            {
+                // Return object with auto-generated metadata without storing it
+                var dataInfo = await _dataStorage.GetDataInfoAsync(destBucketName, destKey, cancellationToken);
+                if (dataInfo == null)
+                {
+                    _logger.LogError("Data was copied but cannot be retrieved for object {DestKey} in bucket {DestBucket}", destKey, destBucketName);
+                    return null;
+                }
+
+                var contentType = GetContentTypeFromKey(destKey);
+                return new S3Object
+                {
+                    Key = destKey,
+                    BucketName = destBucketName,
+                    Size = size,
+                    LastModified = dataInfo.Value.lastModified,
+                    ETag = etag,
+                    ContentType = contentType,
+                    Metadata = new Dictionary<string, string>(),
+                    OwnerId = effectiveRequest.OwnerId,
+                    OwnerDisplayName = effectiveRequest.OwnerDisplayName
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error copying object from {SourceBucket}/{SourceKey} to {DestBucket}/{DestKey}",
+                sourceBucketName, sourceKey, destBucketName, destKey);
+            return null;
+        }
+    }
 }

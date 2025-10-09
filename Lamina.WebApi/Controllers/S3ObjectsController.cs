@@ -177,6 +177,15 @@ public class S3ObjectsController : S3ControllerBase
         CancellationToken cancellationToken = default
     )
     {
+        // Check if this is a copy operation (presence of x-amz-copy-source header)
+        if (Request.Headers.TryGetValue("x-amz-copy-source", out var copySourceHeader) &&
+            !string.IsNullOrEmpty(copySourceHeader.ToString()))
+        {
+            // Handle CopyObject operation
+            return await HandleCopyObject(bucketName, key, copySourceHeader.ToString(), cancellationToken);
+        }
+
+        // Handle regular PutObject operation
         // Validate the object key
         if (!_objectStorage.IsValidObjectKey(key))
         {
@@ -232,6 +241,115 @@ public class S3ObjectsController : S3ControllerBase
         Response.Headers.Append("ETag", $"\"{s3Object.ETag}\"");
         Response.Headers.Append("x-amz-version-id", "null");
         return Ok();
+    }
+
+    private async Task<IActionResult> HandleCopyObject(
+        string bucketName,
+        string key,
+        string copySourceHeader,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Copying object to {Key} in bucket {BucketName} from {CopySource}", key, bucketName, copySourceHeader);
+
+        // Validate the destination object key
+        if (!_objectStorage.IsValidObjectKey(key))
+        {
+            return S3Error("InvalidObjectName", "Object key forbidden", $"/{bucketName}/{key}", 400);
+        }
+
+        // Check if destination bucket exists
+        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
+        }
+
+        // Parse the copy source header: format is /source-bucket/source-key or source-bucket/source-key
+        var copySource = copySourceHeader.TrimStart('/');
+        var firstSlash = copySource.IndexOf('/');
+        if (firstSlash <= 0)
+        {
+            return S3Error("InvalidArgument", "Copy Source must be in the format /source-bucket/source-key", $"/{bucketName}/{key}", 400);
+        }
+
+        var sourceBucketName = copySource.Substring(0, firstSlash);
+        var sourceKey = Uri.UnescapeDataString(copySource.Substring(firstSlash + 1));
+
+        // Validate the source object key
+        if (!_objectStorage.IsValidObjectKey(sourceKey))
+        {
+            return S3Error("InvalidObjectName", "Source object key forbidden", $"/{sourceBucketName}/{sourceKey}", 400);
+        }
+
+        // Check if source bucket exists
+        if (!await _bucketStorage.BucketExistsAsync(sourceBucketName, cancellationToken))
+        {
+            return S3Error("NoSuchBucket", "The specified source bucket does not exist", sourceBucketName, 404);
+        }
+
+        // Get metadata directive (COPY or REPLACE)
+        Request.Headers.TryGetValue("x-amz-metadata-directive", out var metadataDirective);
+
+        // Get authenticated user from claims
+        var authenticatedUser = GetS3UserFromClaims();
+
+        // Build request for new metadata if REPLACE directive
+        PutObjectRequest? putRequest = null;
+        if (metadataDirective.ToString().Equals("REPLACE", StringComparison.OrdinalIgnoreCase))
+        {
+            var contentType = Request.Headers.ContentType.ToString();
+            putRequest = new PutObjectRequest
+            {
+                Key = key,
+                ContentType = contentType,
+                Metadata = Request.Headers
+                    .Where(h => h.Key.StartsWith("x-amz-meta-", StringComparison.OrdinalIgnoreCase))
+                    .ToDictionary(h => h.Key[11..], h => h.Value.ToString()),
+                OwnerId = authenticatedUser?.AccessKeyId ?? "anonymous",
+                OwnerDisplayName = authenticatedUser?.Name ?? "anonymous"
+            };
+        }
+        else
+        {
+            // For COPY mode, still pass owner info
+            putRequest = new PutObjectRequest
+            {
+                Key = key,
+                OwnerId = authenticatedUser?.AccessKeyId ?? "anonymous",
+                OwnerDisplayName = authenticatedUser?.Name ?? "anonymous"
+            };
+        }
+
+        // Perform the copy
+        var copiedObject = await _objectStorage.CopyObjectAsync(
+            sourceBucketName,
+            sourceKey,
+            bucketName,
+            key,
+            metadataDirective.ToString(),
+            putRequest,
+            cancellationToken
+        );
+
+        if (copiedObject == null)
+        {
+            _logger.LogError("Failed to copy object from {SourceBucket}/{SourceKey} to {DestBucket}/{DestKey}",
+                sourceBucketName, sourceKey, bucketName, key);
+            return S3Error("NoSuchKey", "The specified source key does not exist.", $"/{sourceBucketName}/{sourceKey}", 404);
+        }
+
+        _logger.LogInformation("Object copied successfully from {SourceBucket}/{SourceKey} to {DestBucket}/{DestKey}, ETag: {ETag}",
+            sourceBucketName, sourceKey, bucketName, key, copiedObject.ETag);
+
+        // Return CopyObjectResult XML response
+        var result = new CopyObjectResult
+        {
+            ETag = $"\"{copiedObject.ETag}\"",
+            LastModified = copiedObject.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
+        };
+
+        Response.ContentType = "application/xml";
+        Response.Headers.Append("x-amz-version-id", "null");
+        return Ok(result);
     }
 
     [HttpGet("{*key}")]
