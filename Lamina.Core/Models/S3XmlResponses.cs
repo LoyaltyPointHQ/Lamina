@@ -245,6 +245,9 @@ public class ListPartsResult
 
     [XmlElement("Part")]
     public List<Part> Parts { get; set; } = new();
+
+    // Conditionally serialize NextPartNumberMarker only when IsTruncated is true
+    public bool ShouldSerializeNextPartNumberMarker() => IsTruncated && NextPartNumberMarker.HasValue;
 }
 
 [XmlRoot("Part")]
@@ -289,6 +292,10 @@ public class ListMultipartUploadsResult
 
     [XmlElement("Upload")]
     public List<Upload> Uploads { get; set; } = new();
+
+    // Conditionally serialize NextKeyMarker and NextUploadIdMarker only when IsTruncated is true
+    public bool ShouldSerializeNextKeyMarker() => IsTruncated && !string.IsNullOrEmpty(NextKeyMarker);
+    public bool ShouldSerializeNextUploadIdMarker() => IsTruncated && !string.IsNullOrEmpty(NextUploadIdMarker);
 }
 
 [XmlRoot("Upload")]
