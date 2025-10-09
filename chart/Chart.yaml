@@ -2,8 +2,8 @@ apiVersion: v2
 name: lamina-chart
 description: S3-compatible storage API service with support for Kubernetes and OpenShift
 type: application
-version: 1.0.0
-appVersion: "1.0.0"
+version: 1.3.3
+appVersion: "1.3.3"
 keywords:
   - s3
   - storage
@@ -17,6 +17,6 @@ maintainers:
     email: admin@loyaltypoint.io
 dependencies:
   - name: redis
-    version: "~20.3.0"
+    version: "~23.0.2"
     repository: "https://charts.bitnami.com/bitnami"
     condition: redis.enabled
