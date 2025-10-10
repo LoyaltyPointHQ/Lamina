@@ -300,7 +300,19 @@ Note: Authentication now uses the standard ASP.NET Core authentication framework
 
 1. Initiate: `POST /{bucket}/{key}?uploads`
 2. Upload Part: `PUT /{bucket}/{key}?partNumber=N&uploadId=ID`
+   - Regular upload: Send data in request body
+   - Copy from existing object: Include `x-amz-copy-source` header
+   - Copy byte range: Include `x-amz-copy-source-range: bytes=start-end` header
 3. Complete: `POST /{bucket}/{key}?uploadId=ID`
+
+#### UploadPartCopy Support
+
+Lamina supports S3 UploadPartCopy for server-side copying of data:
+- Copy entire objects or byte ranges to multipart upload parts
+- Enables efficient deduplication (e.g., Docker registry layer sharing)
+- Supports cross-bucket copying
+- No data transfer through client - server-side operation
+- Detects copy operation via `x-amz-copy-source` header presence
 
 ### Data-First Architecture
 

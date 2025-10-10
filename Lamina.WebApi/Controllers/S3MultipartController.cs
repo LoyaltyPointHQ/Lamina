@@ -15,16 +15,19 @@ public class S3MultipartController : S3ControllerBase
 {
     private readonly IMultipartUploadStorageFacade _multipartStorage;
     private readonly IBucketStorageFacade _bucketStorage;
+    private readonly IObjectStorageFacade _objectStorage;
     private readonly ILogger<S3MultipartController> _logger;
 
     public S3MultipartController(
         IMultipartUploadStorageFacade multipartStorage,
         IBucketStorageFacade bucketStorage,
+        IObjectStorageFacade objectStorage,
         ILogger<S3MultipartController> logger
     )
     {
         _multipartStorage = multipartStorage;
         _bucketStorage = bucketStorage;
+        _objectStorage = objectStorage;
         _logger = logger;
     }
 
@@ -207,7 +210,13 @@ public class S3MultipartController : S3ControllerBase
         // Log comprehensive request headers for diagnostics
         LogUploadRequestHeaders(_logger, "UploadPart", bucketName, key, ("Part", partNumber), ("UploadId", uploadId));
 
-        // Validate Content-Length header (required by S3 API)
+        // Check if this is an UploadPartCopy operation
+        if (Request.Headers.ContainsKey("x-amz-copy-source"))
+        {
+            return await HandleUploadPartCopy(bucketName, key, partNumber, uploadId, cancellationToken);
+        }
+
+        // Validate Content-Length header (required by S3 API for regular uploads)
         var contentLengthError = ValidateContentLengthHeader($"/{bucketName}/{key}");
         if (contentLengthError != null)
         {
@@ -254,6 +263,123 @@ public class S3MultipartController : S3ControllerBase
         catch (InvalidOperationException ex)
         {
             return S3Error("NoSuchUpload", ex.Message, $"{bucketName}/{key}", 404);
+        }
+    }
+
+    private async Task<IActionResult> HandleUploadPartCopy(
+        string bucketName,
+        string key,
+        int partNumber,
+        string uploadId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Parse x-amz-copy-source header
+            if (!Request.Headers.TryGetValue("x-amz-copy-source", out var copySourceValue))
+            {
+                return S3Error("InvalidArgument", "x-amz-copy-source header is required for copy operations", $"/{bucketName}/{key}", 400);
+            }
+
+            var copySource = copySourceValue.ToString();
+
+            // Copy source format: /sourceBucket/sourceKey or sourceBucket/sourceKey
+            var copySourceParts = copySource.TrimStart('/').Split('/', 2);
+            if (copySourceParts.Length != 2)
+            {
+                return S3Error("InvalidArgument", "Invalid x-amz-copy-source format. Expected: /sourceBucket/sourceKey", $"/{bucketName}/{key}", 400);
+            }
+
+            var sourceBucketName = Uri.UnescapeDataString(copySourceParts[0]);
+            var sourceKey = Uri.UnescapeDataString(copySourceParts[1]);
+
+            // Parse optional byte range header (x-amz-copy-source-range: bytes=start-end)
+            long? byteRangeStart = null;
+            long? byteRangeEnd = null;
+
+            if (Request.Headers.TryGetValue("x-amz-copy-source-range", out var rangeValue))
+            {
+                var rangeStr = rangeValue.ToString();
+                if (rangeStr.StartsWith("bytes=", StringComparison.OrdinalIgnoreCase))
+                {
+                    var bytesRange = rangeStr.Substring(6); // Remove "bytes=" prefix
+                    var rangeParts = bytesRange.Split('-');
+
+                    if (rangeParts.Length == 2 &&
+                        long.TryParse(rangeParts[0], out var start) &&
+                        long.TryParse(rangeParts[1], out var end))
+                    {
+                        byteRangeStart = start;
+                        byteRangeEnd = end;
+                    }
+                    else
+                    {
+                        return S3Error("InvalidArgument", "Invalid x-amz-copy-source-range format. Expected: bytes=start-end", $"/{bucketName}/{key}", 400);
+                    }
+                }
+            }
+
+            _logger.LogInformation(
+                "UploadPartCopy: source={SourceBucket}/{SourceKey}, dest={DestBucket}/{DestKey}, part={PartNumber}, uploadId={UploadId}, range={RangeStart}-{RangeEnd}",
+                sourceBucketName, sourceKey, bucketName, key, partNumber, uploadId, byteRangeStart, byteRangeEnd);
+
+            // Call the facade to copy the object part
+            var uploadPart = await _objectStorage.CopyObjectPartAsync(
+                sourceBucketName,
+                sourceKey,
+                bucketName,
+                key,
+                uploadId,
+                partNumber,
+                byteRangeStart,
+                byteRangeEnd,
+                cancellationToken);
+
+            if (uploadPart == null)
+            {
+                // Check if source object exists
+                var sourceExists = await _objectStorage.ObjectExistsAsync(sourceBucketName, sourceKey, cancellationToken);
+                if (!sourceExists)
+                {
+                    return S3Error("NoSuchKey", "The specified key does not exist.", $"/{sourceBucketName}/{sourceKey}", 404);
+                }
+
+                // Check if the byte range is invalid
+                if (byteRangeStart.HasValue || byteRangeEnd.HasValue)
+                {
+                    return S3Error("InvalidRange", "The requested range is not satisfiable", $"/{sourceBucketName}/{sourceKey}", 416);
+                }
+
+                // Generic error
+                return StatusCode(500);
+            }
+
+            // Return success with ETag and copy metadata
+            Response.Headers.Append("ETag", $"\"{uploadPart.ETag}\"");
+            Response.Headers.Append("x-amz-copy-source-version-id", "null"); // No versioning support yet
+
+            // Return CopyPartResult XML response
+            var copyPartResult = new CopyPartResult
+            {
+                LastModified = uploadPart.LastModified.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+                ETag = uploadPart.ETag
+            };
+
+            Response.ContentType = "application/xml";
+            var xmlSerializer = new XmlSerializer(typeof(CopyPartResult));
+            await using var stringWriter = new StringWriter();
+            xmlSerializer.Serialize(stringWriter, copyPartResult);
+
+            return Content(stringWriter.ToString(), "application/xml");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return S3Error("NoSuchUpload", ex.Message, $"{bucketName}/{key}", 404);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error in UploadPartCopy for {Bucket}/{Key} part {PartNumber}", bucketName, key, partNumber);
+            return StatusCode(500);
         }
     }
 

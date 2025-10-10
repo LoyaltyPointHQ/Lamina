@@ -270,4 +270,291 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
 
         Assert.Equal(HttpStatusCode.NotFound, headResponse.StatusCode);
     }
+
+    [Fact]
+    public async Task UploadPartCopy_EntireObject_Succeeds()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create source object
+        var sourceContent = "This is the source object content for copying";
+        await Client.PutAsync($"/{bucketName}/source-object.txt",
+            new StringContent(sourceContent, Encoding.UTF8));
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/dest-object.txt?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Upload part using UploadPartCopy
+        var copyRequest = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/dest-object.txt?partNumber=1&uploadId={initResult.UploadId}");
+        copyRequest.Headers.Add("x-amz-copy-source", $"/{bucketName}/source-object.txt");
+        var copyResponse = await Client.SendAsync(copyRequest);
+
+        Assert.Equal(HttpStatusCode.OK, copyResponse.StatusCode);
+        Assert.True(copyResponse.Headers.Contains("ETag"));
+
+        // Verify response contains CopyPartResult XML
+        var copyXml = await copyResponse.Content.ReadAsStringAsync();
+        Assert.Contains("<CopyPartResult", copyXml);
+        Assert.Contains("<ETag>", copyXml);
+        Assert.Contains("<LastModified>", copyXml);
+    }
+
+    [Fact]
+    public async Task UploadPartCopy_WithByteRange_CopiesOnlySpecifiedBytes()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create source object with known content
+        var sourceContent = "0123456789ABCDEFGHIJ"; // 20 bytes
+        await Client.PutAsync($"/{bucketName}/source.bin",
+            new StringContent(sourceContent, Encoding.UTF8));
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/dest.bin?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Copy bytes 5-14 (10 bytes: "56789ABCDE")
+        var copyRequest = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/dest.bin?partNumber=1&uploadId={initResult.UploadId}");
+        copyRequest.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.bin");
+        copyRequest.Headers.Add("x-amz-copy-source-range", "bytes=5-14");
+        var copyResponse = await Client.SendAsync(copyRequest);
+
+        Assert.Equal(HttpStatusCode.OK, copyResponse.StatusCode);
+        var partETag = copyResponse.Headers.GetValues("ETag").First().Trim('\"');
+
+        // Complete the upload with just this one part
+        var completeRequestXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<CompleteMultipartUpload>
+    <Part>
+        <PartNumber>1</PartNumber>
+        <ETag>{partETag}</ETag>
+    </Part>
+</CompleteMultipartUpload>";
+
+        var completeResponse = await Client.PostAsync(
+            $"/{bucketName}/dest.bin?uploadId={initResult.UploadId}",
+            new StringContent(completeRequestXml, Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
+
+        // Verify the final object contains only the byte range
+        var getResponse = await Client.GetAsync($"/{bucketName}/dest.bin");
+        var resultContent = await getResponse.Content.ReadAsStringAsync();
+        Assert.Equal("56789ABCDE", resultContent);
+    }
+
+    [Fact]
+    public async Task UploadPartCopy_MultiplePartsFromSameSource_Succeeds()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create large source object
+        var sourceContent = new string('A', 10000) + new string('B', 10000) + new string('C', 10000); // 30KB
+        await Client.PutAsync($"/{bucketName}/large-source.bin",
+            new StringContent(sourceContent, Encoding.UTF8));
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/large-dest.bin?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Copy part 1: bytes 0-9999 (10KB of 'A')
+        var copy1Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/large-dest.bin?partNumber=1&uploadId={initResult.UploadId}");
+        copy1Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/large-source.bin");
+        copy1Request.Headers.Add("x-amz-copy-source-range", "bytes=0-9999");
+        var copy1Response = await Client.SendAsync(copy1Request);
+        Assert.Equal(HttpStatusCode.OK, copy1Response.StatusCode);
+        var part1ETag = copy1Response.Headers.GetValues("ETag").First().Trim('\"');
+
+        // Copy part 2: bytes 10000-19999 (10KB of 'B')
+        var copy2Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/large-dest.bin?partNumber=2&uploadId={initResult.UploadId}");
+        copy2Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/large-source.bin");
+        copy2Request.Headers.Add("x-amz-copy-source-range", "bytes=10000-19999");
+        var copy2Response = await Client.SendAsync(copy2Request);
+        Assert.Equal(HttpStatusCode.OK, copy2Response.StatusCode);
+        var part2ETag = copy2Response.Headers.GetValues("ETag").First().Trim('\"');
+
+        // Complete multipart upload
+        var completeRequestXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<CompleteMultipartUpload>
+    <Part>
+        <PartNumber>1</PartNumber>
+        <ETag>{part1ETag}</ETag>
+    </Part>
+    <Part>
+        <PartNumber>2</PartNumber>
+        <ETag>{part2ETag}</ETag>
+    </Part>
+</CompleteMultipartUpload>";
+
+        var completeResponse = await Client.PostAsync(
+            $"/{bucketName}/large-dest.bin?uploadId={initResult.UploadId}",
+            new StringContent(completeRequestXml, Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
+
+        // Verify the final object
+        var getResponse = await Client.GetAsync($"/{bucketName}/large-dest.bin");
+        var resultContent = await getResponse.Content.ReadAsStringAsync();
+        Assert.Equal(20000, resultContent.Length);
+        Assert.StartsWith(new string('A', 10000), resultContent);
+        Assert.StartsWith(new string('B', 10000), resultContent.Substring(10000));
+    }
+
+    [Fact]
+    public async Task UploadPartCopy_AcrossBuckets_Succeeds()
+    {
+        var sourceBucket = await CreateTestBucketAsync();
+        var destBucket = await CreateTestBucketAsync();
+
+        // Create source object
+        var sourceContent = "Content in source bucket";
+        await Client.PutAsync($"/{sourceBucket}/source-object.txt",
+            new StringContent(sourceContent, Encoding.UTF8));
+
+        // Initiate multipart upload in destination bucket
+        var initResponse = await Client.PostAsync($"/{destBucket}/dest-object.txt?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Copy from source bucket to dest bucket
+        var copyRequest = new HttpRequestMessage(HttpMethod.Put,
+            $"/{destBucket}/dest-object.txt?partNumber=1&uploadId={initResult.UploadId}");
+        copyRequest.Headers.Add("x-amz-copy-source", $"/{sourceBucket}/source-object.txt");
+        var copyResponse = await Client.SendAsync(copyRequest);
+
+        Assert.Equal(HttpStatusCode.OK, copyResponse.StatusCode);
+        Assert.True(copyResponse.Headers.Contains("ETag"));
+    }
+
+    [Fact]
+    public async Task UploadPartCopy_NonExistentSource_ReturnsNoSuchKey()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/dest.txt?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Try to copy from non-existent source
+        var copyRequest = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/dest.txt?partNumber=1&uploadId={initResult.UploadId}");
+        copyRequest.Headers.Add("x-amz-copy-source", $"/{bucketName}/nonexistent-source.txt");
+        var copyResponse = await Client.SendAsync(copyRequest);
+
+        Assert.Equal(HttpStatusCode.NotFound, copyResponse.StatusCode);
+        var errorXml = await copyResponse.Content.ReadAsStringAsync();
+        Assert.Contains("NoSuchKey", errorXml);
+    }
+
+    [Fact]
+    public async Task UploadPartCopy_InvalidByteRange_ReturnsInvalidRange()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create small source object (10 bytes)
+        var sourceContent = "0123456789";
+        await Client.PutAsync($"/{bucketName}/source.txt",
+            new StringContent(sourceContent, Encoding.UTF8));
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/dest.txt?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Try to copy with invalid byte range (beyond object size)
+        var copyRequest = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/dest.txt?partNumber=1&uploadId={initResult.UploadId}");
+        copyRequest.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.txt");
+        copyRequest.Headers.Add("x-amz-copy-source-range", "bytes=5-100"); // End is beyond object size
+        var copyResponse = await Client.SendAsync(copyRequest);
+
+        Assert.Equal(HttpStatusCode.RequestedRangeNotSatisfiable, copyResponse.StatusCode);
+        var errorXml = await copyResponse.Content.ReadAsStringAsync();
+        Assert.Contains("InvalidRange", errorXml);
+    }
+
+    [Fact]
+    public async Task UploadPartCopy_MixedWithRegularUpload_Succeeds()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create source object
+        var sourceContent = "Copied content from source";
+        await Client.PutAsync($"/{bucketName}/source.txt",
+            new StringContent(sourceContent, Encoding.UTF8));
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/mixed-upload.bin?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Part 1: Regular upload
+        var part1Response = await Client.PutAsync(
+            $"/{bucketName}/mixed-upload.bin?partNumber=1&uploadId={initResult.UploadId}",
+            new StringContent("Regular upload part", Encoding.UTF8));
+        Assert.Equal(HttpStatusCode.OK, part1Response.StatusCode);
+        var part1ETag = part1Response.Headers.GetValues("ETag").First().Trim('\"');
+
+        // Part 2: UploadPartCopy
+        var copy2Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/mixed-upload.bin?partNumber=2&uploadId={initResult.UploadId}");
+        copy2Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.txt");
+        var copy2Response = await Client.SendAsync(copy2Request);
+        Assert.Equal(HttpStatusCode.OK, copy2Response.StatusCode);
+        var part2ETag = copy2Response.Headers.GetValues("ETag").First().Trim('\"');
+
+        // Complete multipart upload
+        var completeRequestXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<CompleteMultipartUpload>
+    <Part>
+        <PartNumber>1</PartNumber>
+        <ETag>{part1ETag}</ETag>
+    </Part>
+    <Part>
+        <PartNumber>2</PartNumber>
+        <ETag>{part2ETag}</ETag>
+    </Part>
+</CompleteMultipartUpload>";
+
+        var completeResponse = await Client.PostAsync(
+            $"/{bucketName}/mixed-upload.bin?uploadId={initResult.UploadId}",
+            new StringContent(completeRequestXml, Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
+
+        // Verify the combined result
+        var getResponse = await Client.GetAsync($"/{bucketName}/mixed-upload.bin");
+        var resultContent = await getResponse.Content.ReadAsStringAsync();
+        Assert.Equal("Regular upload part" + sourceContent, resultContent);
+    }
 }
