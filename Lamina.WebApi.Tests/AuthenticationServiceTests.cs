@@ -603,5 +603,256 @@ namespace Lamina.WebApi.Tests.Services
             Assert.NotNull(calculatedSig);
             Assert.NotEmpty(calculatedSig);
         }
+
+        [Fact]
+        public async Task ValidateRequestAsync_SupportsPresignedUrlAuthentication()
+        {
+            // Test presigned URL authentication (query parameter based)
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Method = "HEAD";
+            context.Request.Scheme = "http";
+            context.Request.Host = new HostString("lamina.openshift-adp.svc");
+            context.Request.Path = "/oadp/docker/registry/v2/blobs/sha256/2a/2ab09b027e7f3a0c2e8bb1944ac46de38cebab7145f0bd6effebfe5492c818b6/data";
+
+            // Build query string with presigned URL parameters
+            var queryString = new QueryCollection(new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
+            {
+                { "X-Amz-Algorithm", "AWS4-HMAC-SHA256" },
+                { "X-Amz-Credential", $"TESTACCESSKEY/{dateStamp}/us-east-1/s3/aws4_request" },
+                { "X-Amz-Date", amzDate },
+                { "X-Amz-Expires", "1200" },
+                { "X-Amz-SignedHeaders", "host" },
+                { "X-Amz-Signature", "dummysignature1234567890abcdef" }
+            });
+            context.Request.Query = queryString;
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(
+                context.Request,
+                "oadp",
+                "docker/registry/v2/blobs/sha256/2a/2ab09b027e7f3a0c2e8bb1944ac46de38cebab7145f0bd6effebfe5492c818b6/data",
+                "HEAD"
+            );
+
+            // Should fail with signature mismatch (expected since we used dummy signature)
+            // But the important thing is that presigned URL should be detected and parsed
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Invalid signature", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_PresignedUrl_ValidatesExpiration()
+        {
+            // Test that expired presigned URLs are rejected
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow.AddMinutes(-30); // 30 minutes ago
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Method = "GET";
+            context.Request.Host = new HostString("localhost");
+            context.Request.Path = "/test-bucket/test-object";
+
+            var queryString = new QueryCollection(new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
+            {
+                { "X-Amz-Algorithm", "AWS4-HMAC-SHA256" },
+                { "X-Amz-Credential", $"TESTACCESSKEY/{dateStamp}/us-east-1/s3/aws4_request" },
+                { "X-Amz-Date", amzDate },
+                { "X-Amz-Expires", "600" }, // 10 minutes, but request was 30 minutes ago
+                { "X-Amz-SignedHeaders", "host" },
+                { "X-Amz-Signature", "dummysignature" }
+            });
+            context.Request.Query = queryString;
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(
+                context.Request,
+                "test-bucket",
+                "test-object",
+                "GET"
+            );
+
+            Assert.False(isValid);
+            Assert.Null(user);
+            Assert.Equal("Presigned URL has expired", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_PresignedUrl_RejectsExcessiveExpiration()
+        {
+            // Test that presigned URLs with expiration > 7 days are rejected
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Method = "GET";
+            context.Request.Host = new HostString("localhost");
+            context.Request.Path = "/test-bucket/test-object";
+
+            var queryString = new QueryCollection(new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
+            {
+                { "X-Amz-Algorithm", "AWS4-HMAC-SHA256" },
+                { "X-Amz-Credential", $"TESTACCESSKEY/{dateStamp}/us-east-1/s3/aws4_request" },
+                { "X-Amz-Date", amzDate },
+                { "X-Amz-Expires", "700000" }, // > 7 days (604800 seconds)
+                { "X-Amz-SignedHeaders", "host" },
+                { "X-Amz-Signature", "dummysignature" }
+            });
+            context.Request.Query = queryString;
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(
+                context.Request,
+                "test-bucket",
+                "test-object",
+                "GET"
+            );
+
+            Assert.False(isValid);
+            Assert.Null(user);
+            Assert.Equal("X-Amz-Expires exceeds maximum of 7 days", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_PresignedUrl_RejectsMissingParameters()
+        {
+            // Test that presigned URLs with missing required parameters are rejected
+            var context = new DefaultHttpContext();
+
+            context.Request.Method = "GET";
+            context.Request.Host = new HostString("localhost");
+            context.Request.Path = "/test-bucket/test-object";
+
+            // Missing X-Amz-Signature
+            var queryString = new QueryCollection(new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
+            {
+                { "X-Amz-Algorithm", "AWS4-HMAC-SHA256" },
+                { "X-Amz-Credential", "TESTACCESSKEY/20250101/us-east-1/s3/aws4_request" },
+                { "X-Amz-Date", "20250101T120000Z" },
+                { "X-Amz-SignedHeaders", "host" }
+            });
+            context.Request.Query = queryString;
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(
+                context.Request,
+                "test-bucket",
+                "test-object",
+                "GET"
+            );
+
+            Assert.False(isValid);
+            Assert.Null(user);
+            Assert.Equal("Invalid presigned URL format", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_PresignedUrl_RejectsInvalidCredentialFormat()
+        {
+            // Test that presigned URLs with invalid credential format are rejected
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Method = "GET";
+            context.Request.Host = new HostString("localhost");
+            context.Request.Path = "/test-bucket/test-object";
+
+            // Invalid credential format (missing parts)
+            var queryString = new QueryCollection(new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
+            {
+                { "X-Amz-Algorithm", "AWS4-HMAC-SHA256" },
+                { "X-Amz-Credential", "TESTACCESSKEY/20250101" }, // Missing region/service/request
+                { "X-Amz-Date", amzDate },
+                { "X-Amz-SignedHeaders", "host" },
+                { "X-Amz-Signature", "dummysignature" }
+            });
+            context.Request.Query = queryString;
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(
+                context.Request,
+                "test-bucket",
+                "test-object",
+                "GET"
+            );
+
+            Assert.False(isValid);
+            Assert.Null(user);
+            Assert.Equal("Invalid presigned URL format", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_PresignedUrl_RejectsInvalidAccessKey()
+        {
+            // Test that presigned URLs with invalid access key are rejected
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Method = "GET";
+            context.Request.Host = new HostString("localhost");
+            context.Request.Path = "/test-bucket/test-object";
+
+            var queryString = new QueryCollection(new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
+            {
+                { "X-Amz-Algorithm", "AWS4-HMAC-SHA256" },
+                { "X-Amz-Credential", $"INVALIDKEY/{dateStamp}/us-east-1/s3/aws4_request" },
+                { "X-Amz-Date", amzDate },
+                { "X-Amz-Expires", "1200" },
+                { "X-Amz-SignedHeaders", "host" },
+                { "X-Amz-Signature", "dummysignature" }
+            });
+            context.Request.Query = queryString;
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(
+                context.Request,
+                "test-bucket",
+                "test-object",
+                "GET"
+            );
+
+            Assert.False(isValid);
+            Assert.Null(user);
+            Assert.Equal("Invalid access key", error);
+        }
+
+        [Fact]
+        public async Task ValidateRequestAsync_PresignedUrl_WorksWithoutExpiration()
+        {
+            // Test that presigned URLs work without X-Amz-Expires parameter
+            var context = new DefaultHttpContext();
+            var dateTime = DateTime.UtcNow;
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            context.Request.Method = "GET";
+            context.Request.Host = new HostString("localhost");
+            context.Request.Path = "/test-bucket/test-object";
+
+            var queryString = new QueryCollection(new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
+            {
+                { "X-Amz-Algorithm", "AWS4-HMAC-SHA256" },
+                { "X-Amz-Credential", $"TESTACCESSKEY/{dateStamp}/us-east-1/s3/aws4_request" },
+                { "X-Amz-Date", amzDate },
+                { "X-Amz-SignedHeaders", "host" },
+                { "X-Amz-Signature", "dummysignature" }
+            });
+            context.Request.Query = queryString;
+
+            var (isValid, user, error) = await _authService.ValidateRequestAsync(
+                context.Request,
+                "test-bucket",
+                "test-object",
+                "GET"
+            );
+
+            // Should fail with signature mismatch (not expiration error)
+            Assert.False(isValid);
+            Assert.NotNull(user);
+            Assert.Equal("Invalid signature", error);
+        }
     }
 }

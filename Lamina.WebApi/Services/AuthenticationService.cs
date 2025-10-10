@@ -37,21 +37,46 @@ namespace Lamina.WebApi.Services
 
             try
             {
+                SignatureV4Request? sigV4Request = null;
                 var authHeader = request.Headers["Authorization"].FirstOrDefault();
-                if (string.IsNullOrEmpty(authHeader))
-                {
-                    return (false, null, "Missing Authorization header");
-                }
 
-                if (!authHeader.StartsWith("AWS4-HMAC-SHA256"))
+                // Try header-based authentication first
+                if (!string.IsNullOrEmpty(authHeader))
                 {
-                    return (false, null, "Unsupported authentication method");
-                }
+                    if (!authHeader.StartsWith("AWS4-HMAC-SHA256"))
+                    {
+                        return (false, null, "Unsupported authentication method");
+                    }
 
-                var sigV4Request = ParseSignatureV4Request(request, authHeader);
-                if (sigV4Request == null)
+                    sigV4Request = ParseSignatureV4Request(request, authHeader);
+                    if (sigV4Request == null)
+                    {
+                        return (false, null, "Invalid authorization header format");
+                    }
+                }
+                else
                 {
-                    return (false, null, "Invalid authorization header format");
+                    // Try presigned URL authentication
+                    var algorithm = request.Query["X-Amz-Algorithm"].FirstOrDefault();
+                    if (!string.IsNullOrEmpty(algorithm))
+                    {
+                        sigV4Request = ParsePresignedUrlRequest(request);
+                        if (sigV4Request == null)
+                        {
+                            return (false, null, "Invalid presigned URL format");
+                        }
+
+                        // Validate expiration for presigned URLs
+                        var (isValidExpiration, expirationError) = ValidatePresignedUrlExpiration(request, sigV4Request.RequestDateTime);
+                        if (!isValidExpiration)
+                        {
+                            return (false, null, expirationError);
+                        }
+                    }
+                    else
+                    {
+                        return (false, null, "Missing Authorization header");
+                    }
                 }
 
                 var user = GetUserByAccessKey(sigV4Request.AccessKeyId);
@@ -176,11 +201,123 @@ namespace Lamina.WebApi.Services
             };
         }
 
-        private string GetCanonicalQueryString(IQueryCollection query)
+        private SignatureV4Request? ParsePresignedUrlRequest(HttpRequest request)
+        {
+            // Extract authentication parameters from query string
+            var algorithm = request.Query["X-Amz-Algorithm"].FirstOrDefault();
+            var credential = request.Query["X-Amz-Credential"].FirstOrDefault();
+            var xAmzDate = request.Query["X-Amz-Date"].FirstOrDefault();
+            var signedHeaders = request.Query["X-Amz-SignedHeaders"].FirstOrDefault();
+            var signature = request.Query["X-Amz-Signature"].FirstOrDefault();
+
+            if (string.IsNullOrEmpty(algorithm) || string.IsNullOrEmpty(credential) ||
+                string.IsNullOrEmpty(xAmzDate) || string.IsNullOrEmpty(signedHeaders) ||
+                string.IsNullOrEmpty(signature))
+            {
+                return null;
+            }
+
+            if (algorithm != "AWS4-HMAC-SHA256")
+            {
+                return null;
+            }
+
+            // Parse credential: accessKeyId/date/region/service/aws4_request
+            var credentialParts = credential.Split('/');
+            if (credentialParts.Length != 5)
+            {
+                return null;
+            }
+
+            var accessKeyId = credentialParts[0];
+            var dateStamp = credentialParts[1];
+            var region = credentialParts[2];
+
+            // Build headers dictionary from request headers
+            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var header in request.Headers)
+            {
+                headers[header.Key.ToLower()] = string.Join(",", header.Value.ToArray());
+            }
+
+            // Add Host header if not present (required for presigned URLs)
+            if (!headers.ContainsKey("host"))
+            {
+                headers["host"] = request.Host.HasValue ? request.Host.Value : "localhost";
+            }
+
+            // For presigned URLs, x-amz-content-sha256 is always UNSIGNED-PAYLOAD
+            headers["x-amz-content-sha256"] = "UNSIGNED-PAYLOAD";
+
+            var canonicalUri = request.Path.Value ?? "/";
+            // Exclude X-Amz-Signature from canonical query string
+            var canonicalQueryString = GetCanonicalQueryString(request.Query, excludeSignature: true);
+
+            return new SignatureV4Request
+            {
+                Method = request.Method,
+                CanonicalUri = canonicalUri,
+                CanonicalQueryString = canonicalQueryString,
+                Headers = headers,
+                Payload = [],
+                Region = region,
+                Service = "s3",
+                RequestDateTime = DateTime.ParseExact(xAmzDate, "yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal),
+                AccessKeyId = accessKeyId,
+                Signature = signature,
+                SignedHeaders = signedHeaders
+            };
+        }
+
+        private (bool isValid, string? error) ValidatePresignedUrlExpiration(HttpRequest request, DateTime requestDateTime)
+        {
+            var expiresParam = request.Query["X-Amz-Expires"].FirstOrDefault();
+            if (string.IsNullOrEmpty(expiresParam))
+            {
+                // Expires is optional but recommended
+                return (true, null);
+            }
+
+            if (!int.TryParse(expiresParam, out var expiresSeconds))
+            {
+                return (false, "Invalid X-Amz-Expires value");
+            }
+
+            // AWS S3 maximum expiration is 7 days (604800 seconds)
+            if (expiresSeconds > 604800)
+            {
+                return (false, "X-Amz-Expires exceeds maximum of 7 days");
+            }
+
+            if (expiresSeconds < 0)
+            {
+                return (false, "X-Amz-Expires must be positive");
+            }
+
+            // Ensure both DateTimes are in UTC for correct comparison
+            var requestTimeUtc = requestDateTime.ToUniversalTime();
+            var expirationTime = requestTimeUtc.AddSeconds(expiresSeconds);
+            var currentTime = DateTime.UtcNow;
+
+            if (currentTime > expirationTime)
+            {
+                return (false, "Presigned URL has expired");
+            }
+
+            return (true, null);
+        }
+
+        private string GetCanonicalQueryString(IQueryCollection query, bool excludeSignature = false)
         {
             var parameters = new SortedDictionary<string, string>(StringComparer.Ordinal);
             foreach (var kvp in query)
             {
+                // Skip X-Amz-Signature when building canonical query string for presigned URL validation
+                if (excludeSignature && kvp.Key.Equals("X-Amz-Signature", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 var key = Uri.EscapeDataString(kvp.Key);
                 var value = kvp.Value.FirstOrDefault() ?? "";
                 parameters[key] = Uri.EscapeDataString(value);
