@@ -204,7 +204,24 @@ public class S3MultipartController : S3ControllerBase
         CancellationToken cancellationToken = default
     )
     {
-        _logger.LogInformation("Uploading part {PartNumber} for upload {UploadId} in bucket {BucketName}, key {Key}", partNumber, uploadId, bucketName, key);
+        // Log comprehensive request headers for diagnostics
+        LogUploadRequestHeaders(_logger, "UploadPart", bucketName, key, ("Part", partNumber), ("UploadId", uploadId));
+
+        // Validate Content-Length header (required by S3 API)
+        var contentLengthError = ValidateContentLengthHeader($"/{bucketName}/{key}");
+        if (contentLengthError != null)
+        {
+            _logger.LogWarning("UploadPart request missing Content-Length header for part {PartNumber} of upload {UploadId}", partNumber, uploadId);
+            return contentLengthError;
+        }
+
+        // Validate x-amz-content-sha256 header when using AWS Signature V4
+        var contentSha256Error = ValidateContentSha256Header($"/{bucketName}/{key}");
+        if (contentSha256Error != null)
+        {
+            _logger.LogWarning("UploadPart request has invalid or missing x-amz-content-sha256 header for part {PartNumber} of upload {UploadId}", partNumber, uploadId);
+            return contentSha256Error;
+        }
 
         try
         {
@@ -404,5 +421,51 @@ public class S3MultipartController : S3ControllerBase
 
         Response.ContentType = "application/xml";
         return Ok(result);
+    }
+
+    [HttpHead("{*key}")]
+    [RequireQueryParameter("uploadId")]
+    [S3Authorize(S3Operations.Read, S3ResourceType.Object)]
+    public async Task<IActionResult> HeadParts(
+        string bucketName,
+        string key,
+        [FromQuery] string uploadId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        try
+        {
+            var parts = await _multipartStorage.ListPartsAsync(bucketName, key, uploadId, cancellationToken);
+
+            // If no parts and upload doesn't exist, return 404
+            // We can check if the upload exists by attempting to list parts
+            // An empty list could mean either no parts uploaded yet or upload doesn't exist
+            // To be safe, we'll check if the upload metadata exists
+            var uploads = await _multipartStorage.ListMultipartUploadsAsync(bucketName, cancellationToken);
+            var uploadExists = uploads.Any(u => u.UploadId == uploadId && u.Key == key);
+
+            if (!uploadExists)
+            {
+                Response.StatusCode = 404;
+                Response.ContentType = "application/xml";
+                return new EmptyResult();
+            }
+
+            // Add metadata to response headers for HEAD request
+            Response.Headers.Append("x-amz-parts-count", parts.Count.ToString());
+            if (parts.Any())
+            {
+                Response.Headers.Append("x-amz-last-part-number", parts.Max(p => p.PartNumber).ToString());
+                Response.Headers.Append("x-amz-total-size", parts.Sum(p => p.Size).ToString());
+            }
+
+            return Ok();
+        }
+        catch (InvalidOperationException)
+        {
+            Response.StatusCode = 404;
+            Response.ContentType = "application/xml";
+            return new EmptyResult();
+        }
     }
 }

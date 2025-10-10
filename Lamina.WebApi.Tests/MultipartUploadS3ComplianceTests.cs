@@ -215,4 +215,59 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var errorXml = await completeResponse.Content.ReadAsStringAsync();
         Assert.Contains("InvalidPart", errorXml);
     }
+
+    [Fact]
+    public async Task HeadMultipartUpload_ReturnsPartMetadata()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/head-test.bin?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Upload parts
+        var part1Response = await Client.PutAsync(
+            $"/{bucketName}/head-test.bin?partNumber=1&uploadId={initResult.UploadId}",
+            new StringContent("Part 1 content with 50 bytes of data here!!!!", Encoding.UTF8));
+        Assert.Equal(HttpStatusCode.OK, part1Response.StatusCode);
+
+        var part2Response = await Client.PutAsync(
+            $"/{bucketName}/head-test.bin?partNumber=2&uploadId={initResult.UploadId}",
+            new StringContent("Part 2 content", Encoding.UTF8));
+        Assert.Equal(HttpStatusCode.OK, part2Response.StatusCode);
+
+        // HEAD request to get metadata
+        var headRequest = new HttpRequestMessage(HttpMethod.Head,
+            $"/{bucketName}/head-test.bin?uploadId={initResult.UploadId}");
+        var headResponse = await Client.SendAsync(headRequest);
+
+        Assert.Equal(HttpStatusCode.OK, headResponse.StatusCode);
+
+        // Verify metadata headers
+        Assert.True(headResponse.Headers.Contains("x-amz-parts-count"));
+        Assert.Equal("2", headResponse.Headers.GetValues("x-amz-parts-count").First());
+
+        Assert.True(headResponse.Headers.Contains("x-amz-last-part-number"));
+        Assert.Equal("2", headResponse.Headers.GetValues("x-amz-last-part-number").First());
+
+        Assert.True(headResponse.Headers.Contains("x-amz-total-size"));
+        var totalSize = long.Parse(headResponse.Headers.GetValues("x-amz-total-size").First());
+        Assert.True(totalSize > 0);
+    }
+
+    [Fact]
+    public async Task HeadMultipartUpload_NonExistentUpload_Returns404()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        var headRequest = new HttpRequestMessage(HttpMethod.Head,
+            $"/{bucketName}/nonexistent.bin?uploadId=fake-upload-id");
+        var headResponse = await Client.SendAsync(headRequest);
+
+        Assert.Equal(HttpStatusCode.NotFound, headResponse.StatusCode);
+    }
 }

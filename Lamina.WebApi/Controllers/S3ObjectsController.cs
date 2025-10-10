@@ -186,6 +186,25 @@ public class S3ObjectsController : S3ControllerBase
         }
 
         // Handle regular PutObject operation
+        // Log comprehensive request headers for diagnostics
+        LogUploadRequestHeaders(_logger, "PutObject", bucketName, key);
+
+        // Validate Content-Length header (required by S3 API)
+        var contentLengthError = ValidateContentLengthHeader($"/{bucketName}/{key}");
+        if (contentLengthError != null)
+        {
+            _logger.LogWarning("PutObject request missing Content-Length header for key {Key} in bucket {BucketName}", key, bucketName);
+            return contentLengthError;
+        }
+
+        // Validate x-amz-content-sha256 header when using AWS Signature V4
+        var contentSha256Error = ValidateContentSha256Header($"/{bucketName}/{key}");
+        if (contentSha256Error != null)
+        {
+            _logger.LogWarning("PutObject request has invalid or missing x-amz-content-sha256 header for key {Key} in bucket {BucketName}", key, bucketName);
+            return contentSha256Error;
+        }
+
         // Validate the object key
         if (!_objectStorage.IsValidObjectKey(key))
         {
