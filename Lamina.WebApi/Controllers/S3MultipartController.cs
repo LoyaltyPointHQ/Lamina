@@ -362,7 +362,7 @@ public class S3MultipartController : S3ControllerBase
             var copyPartResult = new CopyPartResult
             {
                 LastModified = uploadPart.LastModified.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
-                ETag = uploadPart.ETag
+                ETag = $"\"{uploadPart.ETag}\""
             };
 
             Response.ContentType = "application/xml";

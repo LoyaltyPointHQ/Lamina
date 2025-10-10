@@ -557,4 +557,47 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var resultContent = await getResponse.Content.ReadAsStringAsync();
         Assert.Equal("Regular upload part" + sourceContent, resultContent);
     }
+
+    [Fact]
+    public async Task UploadPartCopy_XmlResponse_ETagContainsQuotes()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create source object
+        var sourceContent = "Test content for ETag quote validation";
+        await Client.PutAsync($"/{bucketName}/source.txt",
+            new StringContent(sourceContent, Encoding.UTF8));
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/dest.txt?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Upload part using UploadPartCopy
+        var copyRequest = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/dest.txt?partNumber=1&uploadId={initResult.UploadId}");
+        copyRequest.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.txt");
+        var copyResponse = await Client.SendAsync(copyRequest);
+
+        Assert.Equal(HttpStatusCode.OK, copyResponse.StatusCode);
+
+        // Get XML response
+        var copyXml = await copyResponse.Content.ReadAsStringAsync();
+
+        // Deserialize to verify structure
+        var copySerializer = new XmlSerializer(typeof(CopyPartResult));
+        using var copyReader = new StringReader(copyXml);
+        var copyResult = (CopyPartResult?)copySerializer.Deserialize(copyReader);
+        Assert.NotNull(copyResult);
+
+        // Verify ETag contains quotes in the XML (S3 specification requirement)
+        Assert.StartsWith("\"", copyResult.ETag);
+        Assert.EndsWith("\"", copyResult.ETag);
+
+        // Verify the raw XML also contains quoted ETag
+        Assert.Matches(@"<ETag>""[a-f0-9]+""</ETag>", copyXml);
+    }
 }
