@@ -49,17 +49,43 @@ public class StreamingChecksumCalculator : IDisposable
                 _requestedAlgorithms.Add(key.ToUpperInvariant());
             }
         }
-        
+
+        InitializeHashAlgorithms();
+    }
+
+    /// <summary>
+    /// Creates a new streaming checksum calculator for specific algorithms.
+    /// </summary>
+    /// <param name="algorithms">List of algorithm names to compute (e.g., "CRC32", "SHA256")</param>
+    public StreamingChecksumCalculator(IEnumerable<string> algorithms)
+    {
+        _requestedAlgorithms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _providedChecksums = new Dictionary<string, string>();
+
+        // Add all valid algorithms
+        foreach (var algorithm in algorithms)
+        {
+            if (IsValidAlgorithm(algorithm))
+            {
+                _requestedAlgorithms.Add(algorithm.ToUpperInvariant());
+            }
+        }
+
+        InitializeHashAlgorithms();
+    }
+
+    private void InitializeHashAlgorithms()
+    {
         if (_requestedAlgorithms.Contains("CRC32"))
         {
             _crc32Hash = 0;
         }
-        
+
         if (_requestedAlgorithms.Contains("CRC32C"))
         {
             _crc32CHash = 0;
         }
-        
+
         if (_requestedAlgorithms.Contains("CRC64NVME"))
         {
             _crc64 = new Crc64();
