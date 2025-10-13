@@ -39,7 +39,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         {
             // Parse AWS chunked encoding and write decoded data to memory stream
             using var memoryStream = new MemoryStream();
-            var parseResult = await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, cancellationToken);
+            var parseResult = await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken);
 
             // Check if validation succeeded
             if (!parseResult.Success)

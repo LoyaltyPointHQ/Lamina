@@ -451,7 +451,7 @@ public class MultipartUploadStorageFacadeTests
 
         // Data-first approach: No metadata check required
         _mockChunkedDataParser
-            .Setup(x => x.ParseChunkedDataToStreamAsync(It.IsAny<PipeReader>(), It.IsAny<Stream>(), mockValidator.Object, It.IsAny<CancellationToken>()))
+            .Setup(x => x.ParseChunkedDataToStreamAsync(It.IsAny<PipeReader>(), It.IsAny<Stream>(), mockValidator.Object, It.IsAny<Action<ReadOnlySpan<byte>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ChunkedDataResult { Success = true, TotalBytesWritten = 100L });
 
         _mockDataStorage

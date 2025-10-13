@@ -61,35 +61,8 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
             {
                 await using var fileStream = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    var result = await dataReader.ReadAsync(cancellationToken);
-                    var buffer = result.Buffer;
-
-                    if (buffer.IsEmpty && result.IsCompleted)
-                    {
-                        break;
-                    }
-
-                    foreach (var segment in buffer)
-                    {
-                        // Calculate checksum if needed
-                        if (checksumCalculator?.HasChecksums == true)
-                        {
-                            checksumCalculator.Append(segment.Span);
-                        }
-
-                        await fileStream.WriteAsync(segment, cancellationToken);
-                        bytesWritten += segment.Length;
-                    }
-
-                    dataReader.AdvanceTo(buffer.End);
-
-                    if (result.IsCompleted)
-                    {
-                        break;
-                    }
-                }
+                // Use helper to write and calculate checksums in one pass
+                bytesWritten = await ChecksumStreamHelper.WriteDataWithChecksumsAsync(dataReader, fileStream, checksumCalculator, cancellationToken);
 
                 await fileStream.FlushAsync(cancellationToken);
             } // FileStream is fully disposed here
@@ -176,7 +149,12 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
             // Write validated chunks directly to temp file
             {
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
-                parseResult = await chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, cancellationToken);
+                parseResult = await chunkedDataParser.ParseChunkedDataToStreamAsync(
+                    dataReader, 
+                    fileStream, 
+                    chunkValidator,
+                    checksumCalculator?.HasChecksums == true ? data => checksumCalculator.Append(data) : null,
+                    cancellationToken);
                 await fileStream.FlushAsync(cancellationToken);
             } // FileStream is fully disposed here
 
@@ -201,17 +179,9 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
                 return StorageResult<UploadPart>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
             }
 
-            // Calculate checksums from the temp file if requested
+            // Finalize and validate checksums if they were calculated
             if (checksumCalculator?.HasChecksums == true)
             {
-                await using var fileStream = File.OpenRead(tempPath);
-                var buffer = new byte[8192];
-                int read;
-                while ((read = await fileStream.ReadAsync(buffer, cancellationToken)) > 0)
-                {
-                    checksumCalculator.Append(buffer.AsSpan(0, read));
-                }
-
                 var result = checksumCalculator.Finish();
 
                 if (!result.IsValid)

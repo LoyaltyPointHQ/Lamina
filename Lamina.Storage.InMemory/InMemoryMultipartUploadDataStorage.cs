@@ -71,7 +71,7 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         // For in-memory storage, using MemoryStream is acceptable
         using var memoryStream = new MemoryStream();
 
-        var parseResult = await chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, cancellationToken);
+        var parseResult = await chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken);
 
         // Check if validation succeeded
         if (!parseResult.Success)

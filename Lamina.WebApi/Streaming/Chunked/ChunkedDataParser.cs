@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.IO.Pipelines;
+using JetBrains.Annotations;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.WebApi.Streaming.Trailers;
@@ -24,6 +25,7 @@ namespace Lamina.WebApi.Streaming.Chunked
             PipeReader dataReader,
             Stream destinationStream,
             IChunkSignatureValidator? chunkValidator = null,
+            [InstantHandle] Action<ReadOnlySpan<byte>>? onDataWritten = null,
             CancellationToken cancellationToken = default)
         {
             var result = new ChunkedDataResult();
@@ -45,7 +47,7 @@ namespace Lamina.WebApi.Streaming.Chunked
                 try
                 {
                     var processingResult = await ProcessChunksToStreamAsync(
-                        dataBuffer, dataLength, destinationStream, chunkValidator, cancellationToken);
+                        dataBuffer, dataLength, destinationStream, chunkValidator, onDataWritten, cancellationToken);
 
                     // Check for validation failure
                     if (processingResult.validationError != null)
@@ -85,6 +87,7 @@ namespace Lamina.WebApi.Streaming.Chunked
             PipeReader dataReader,
             Stream destinationStream,
             IChunkSignatureValidator? chunkValidator = null,
+            [InstantHandle] Action<ReadOnlySpan<byte>>? onDataWritten = null,
             CancellationToken cancellationToken = default)
         {
             var result = new ChunkedDataResult();
@@ -104,7 +107,7 @@ namespace Lamina.WebApi.Streaming.Chunked
                 var parsePosition = 0;
 
                 var processingResult = await ProcessChunksToStreamAsync(
-                    dataBuffer, dataBuffer.Length, destinationStream, chunkValidator, cancellationToken);
+                    dataBuffer, dataBuffer.Length, destinationStream, chunkValidator, onDataWritten, cancellationToken);
 
                 // Check for validation failure
                 if (processingResult.validationError != null)
@@ -149,6 +152,7 @@ namespace Lamina.WebApi.Streaming.Chunked
             int dataLength,
             Stream destinationStream,
             IChunkSignatureValidator? chunkValidator,
+            [InstantHandle] Action<ReadOnlySpan<byte>>? onDataWritten,
             CancellationToken cancellationToken)
         {
             long totalBytesWritten = 0;
@@ -186,6 +190,9 @@ namespace Lamina.WebApi.Streaming.Chunked
 
                 await destinationStream.WriteAsync(dataBuffer.AsMemory(position, header.Size), cancellationToken);
                 totalBytesWritten += header.Size;
+
+                // Invoke callback with the decoded chunk data
+                onDataWritten?.Invoke(dataBuffer.AsSpan(position, header.Size));
 
                 var validationResult = await ValidateChunkStreamAsync(dataBuffer, position, header, chunkValidator);
                 if (!validationResult.isValid)

@@ -82,7 +82,13 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
                 // Parse AWS chunked encoding and write decoded data directly to file with signature validation
-                var parseResult = await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, cancellationToken);
+                // If checksums are needed, calculate them inline during parsing
+                var parseResult = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
+                    dataReader, 
+                    fileStream, 
+                    chunkValidator,
+                    checksumCalculator?.HasChecksums == true ? data => checksumCalculator.Append(data) : null,
+                    cancellationToken);
 
                 // Check if validation succeeded
                 if (!parseResult.Success)
@@ -102,62 +108,18 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                 // Standard write without chunked encoding
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
-                // If we need checksums, we need to calculate while writing
-                if (checksumCalculator?.HasChecksums == true)
-                {
-                    bytesWritten = 0;
-                    ReadResult readResult;
-                    do
-                    {
-                        readResult = await dataReader.ReadAsync(cancellationToken);
-                        var buffer = readResult.Buffer;
-
-                        foreach (var segment in buffer)
-                        {
-                            // Update checksum calculator
-                            checksumCalculator.Append(segment.Span);
-
-                            // Write to file
-                            await fileStream.WriteAsync(segment, cancellationToken);
-                            bytesWritten += segment.Length;
-                        }
-
-                        dataReader.AdvanceTo(buffer.End);
-                    } while (!readResult.IsCompleted);
-
-                    await dataReader.CompleteAsync();
-                }
-                else
-                {
-                    bytesWritten = await PipeReaderHelper.CopyToAsync(dataReader, fileStream, false, cancellationToken);
-                }
+                // Use helper to write and calculate checksums in one pass
+                bytesWritten = checksumCalculator?.HasChecksums == true
+                    ? await ChecksumStreamHelper.WriteDataWithChecksumsAsync(dataReader, fileStream, checksumCalculator, cancellationToken)
+                    : await PipeReaderHelper.CopyToAsync(dataReader, fileStream, false, cancellationToken);
 
                 await fileStream.FlushAsync(cancellationToken);
             }
 
-            // Calculate checksums from the file if needed but not yet calculated
+            // Finalize and validate checksums if they were calculated
             var checksums = new Dictionary<string, string>();
             if (checksumCalculator?.HasChecksums == true)
             {
-                // If we didn't calculate during write (chunked path), read file now
-                if (chunkValidator != null)
-                {
-                    await using var fileStream = File.OpenRead(tempPath);
-                    var buffer = ArrayPool<byte>.Shared.Rent(8192);
-                    try
-                    {
-                        int read;
-                        while ((read = await fileStream.ReadAsync(buffer, cancellationToken)) > 0)
-                        {
-                            checksumCalculator.Append(buffer.AsSpan(0, read));
-                        }
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(buffer);
-                    }
-                }
-
                 var result = checksumCalculator.Finish();
 
                 if (!result.IsValid)
