@@ -118,6 +118,21 @@ else
     builder.Services.AddSingleton<IFileSystemLockManager, InMemoryLockManager>();
 }
 
+// Configure metadata caching
+builder.Services.Configure<MetadataCacheSettings>(
+    builder.Configuration.GetSection("MetadataCache"));
+
+var metadataCacheSettings = builder.Configuration.GetSection("MetadataCache").Get<MetadataCacheSettings>() ?? new MetadataCacheSettings();
+
+// Add MemoryCache if caching is enabled
+if (metadataCacheSettings.Enabled)
+{
+    builder.Services.AddMemoryCache(options =>
+    {
+        options.SizeLimit = metadataCacheSettings.SizeLimit;
+    });
+}
+
 // Register S3 services based on configuration
 var storageType = builder.Configuration["StorageType"] ?? "InMemory";
 var metadataStorageType = builder.Configuration["MetadataStorageType"] ?? storageType;
@@ -194,14 +209,14 @@ else
 // Register metadata storage services as scoped (works with all storage types)
 if (metadataStorageType.Equals("Sql", StringComparison.OrdinalIgnoreCase))
 {
-    // Register SQL metadata services
+    // Register SQL metadata services (no caching needed - already optimized)
     builder.Services.AddScoped<IBucketMetadataStorage, SqlBucketMetadataStorage>();
     builder.Services.AddScoped<IObjectMetadataStorage, SqlObjectMetadataStorage>();
     builder.Services.AddScoped<IMultipartUploadMetadataStorage, SqlMultipartUploadMetadataStorage>();
 }
 else if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
 {
-    // Register filesystem metadata services based on metadata mode
+    // Register filesystem metadata services based on metadata mode (caching is built-in)
     var metadataMode = builder.Configuration.GetValue<string>("FilesystemStorage:MetadataMode") ?? "Inline";
     if (metadataMode.Equals("Xattr", StringComparison.OrdinalIgnoreCase))
     {
@@ -219,7 +234,7 @@ else if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
 }
 else
 {
-    // Register in-memory metadata services
+    // Register in-memory metadata services (no caching needed - already in memory)
     builder.Services.AddScoped<IBucketMetadataStorage, InMemoryBucketMetadataStorage>();
     builder.Services.AddScoped<IObjectMetadataStorage, InMemoryObjectMetadataStorage>();
     builder.Services.AddScoped<IMultipartUploadMetadataStorage, InMemoryMultipartUploadMetadataStorage>();

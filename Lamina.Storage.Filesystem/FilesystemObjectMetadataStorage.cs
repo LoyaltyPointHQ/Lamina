@@ -2,10 +2,12 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Configuration;
 using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.Filesystem.Locking;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -20,14 +22,18 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
     private readonly IBucketStorageFacade _bucketStorage;
     private readonly IFileSystemLockManager _lockManager;
     private readonly NetworkFileSystemHelper _networkHelper;
+    private readonly IMemoryCache? _cache;
+    private readonly MetadataCacheSettings _cacheSettings;
     private readonly ILogger<FilesystemObjectMetadataStorage> _logger;
 
     public FilesystemObjectMetadataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
+        IOptions<MetadataCacheSettings> cacheSettingsOptions,
         IBucketStorageFacade bucketStorage,
         IFileSystemLockManager lockManager,
         NetworkFileSystemHelper networkHelper,
-        ILogger<FilesystemObjectMetadataStorage> logger)
+        ILogger<FilesystemObjectMetadataStorage> logger,
+        IMemoryCache? cache = null)
     {
         var settings = settingsOptions.Value;
         _dataDirectory = settings.DataDirectory;
@@ -37,6 +43,8 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         _bucketStorage = bucketStorage;
         _lockManager = lockManager;
         _networkHelper = networkHelper;
+        _cacheSettings = cacheSettingsOptions.Value;
+        _cache = _cacheSettings.Enabled ? cache : null;
         _logger = logger;
 
         Directory.CreateDirectory(_dataDirectory);
@@ -53,6 +61,9 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
 
     public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, CancellationToken cancellationToken = default)
     {
+        // Invalidate cache before storing
+        InvalidateCache(bucketName, key);
+
         if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return null;
@@ -105,7 +116,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
 
         await _lockManager.WriteFileAsync(metadataPath, json, cancellationToken);
 
-        return new S3Object
+        var s3Object = new S3Object
         {
             Key = key,
             BucketName = bucketName,
@@ -122,12 +133,84 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             ChecksumSHA1 = metadata.ChecksumSHA1,
             ChecksumSHA256 = metadata.ChecksumSHA256
         };
+
+        // Cache the result (convert to S3ObjectInfo)
+        var objectInfo = new S3ObjectInfo
+        {
+            Key = key,
+            Size = size,
+            LastModified = fileInfo.LastWriteTimeUtc,
+            ETag = etag,
+            ContentType = metadata.ContentType,
+            Metadata = metadata.Metadata,
+            OwnerId = metadata.OwnerId,
+            OwnerDisplayName = metadata.OwnerDisplayName,
+            ChecksumCRC32 = metadata.ChecksumCRC32,
+            ChecksumCRC32C = metadata.ChecksumCRC32C,
+            ChecksumCRC64NVME = metadata.ChecksumCRC64NVME,
+            ChecksumSHA1 = metadata.ChecksumSHA1,
+            ChecksumSHA256 = metadata.ChecksumSHA256
+        };
+        await CacheObjectInfoAsync(bucketName, key, objectInfo, cancellationToken);
+
+        return s3Object;
     }
 
     public async Task<S3ObjectInfo?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
+        var cacheKey = GetCacheKey(bucketName, key);
         var metadataPath = GetMetadataPath(bucketName, key);
         var dataPath = GetDataPath(bucketName, key);
+
+        // Try to get from cache
+        if (_cache?.TryGetValue<CachedObjectInfo>(cacheKey, out var cachedEntry) == true && cachedEntry != null)
+        {
+            // Validate staleness by checking if metadata JSON file has been modified
+            if (File.Exists(metadataPath))
+            {
+                var currentMtime = File.GetLastWriteTimeUtc(metadataPath);
+                if (currentMtime <= cachedEntry.MetadataFileLastModified)
+                {
+                    // Fresh cache entry - but still check data staleness
+                    if (File.Exists(dataPath))
+                    {
+                        var dataFileInfo = new FileInfo(dataPath);
+                        // If data file is newer than the cached metadata's data timestamp, need to recompute
+                        if (dataFileInfo.LastWriteTimeUtc <= cachedEntry.ObjectInfo.LastModified)
+                        {
+                            _logger.LogDebug("Cache hit for object {Key} in bucket {BucketName}", key, bucketName);
+                            return cachedEntry.ObjectInfo;
+                        }
+                        // Data has changed - fall through to recompute
+                        _logger.LogDebug("Data file modified for cached object {Key} in bucket {BucketName}, recomputing", key, bucketName);
+                        _cache.Remove(cacheKey);
+                    }
+                    else
+                    {
+                        // Data no longer exists
+                        _logger.LogDebug("Data file no longer exists for cached object {Key} in bucket {BucketName}", key, bucketName);
+                        _cache.Remove(cacheKey);
+                        return null;
+                    }
+                }
+                else
+                {
+                    // Stale - metadata JSON file modified, fall through
+                    _logger.LogDebug("Stale cache entry detected for object {Key} in bucket {BucketName} (file mtime: {FileTime}, cache mtime: {CacheTime})",
+                        key, bucketName, currentMtime, cachedEntry.MetadataFileLastModified);
+                    _cache.Remove(cacheKey);
+                }
+            }
+            else
+            {
+                // Metadata file no longer exists, remove from cache
+                _logger.LogDebug("Metadata file no longer exists for cached object {Key} in bucket {BucketName}, removing from cache", key, bucketName);
+                _cache.Remove(cacheKey);
+            }
+        }
+
+        // Cache miss or stale entry
+        _logger.LogDebug("Cache miss for object {Key} in bucket {BucketName}", key, bucketName);
 
         // Only return metadata if the metadata file exists
         // The facade will handle generating metadata on-the-fly if data exists without metadata
@@ -174,7 +257,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             metadata.ChecksumSHA256 = recomputed.checksums.GetValueOrDefault("SHA256");
         }
 
-        return new S3ObjectInfo
+        var objectInfo = new S3ObjectInfo
         {
             Key = key,
             LastModified = fileInfo.LastWriteTimeUtc,
@@ -190,10 +273,18 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             ChecksumSHA1 = metadata.ChecksumSHA1,
             ChecksumSHA256 = metadata.ChecksumSHA256
         };
+
+        // Cache the result
+        await CacheObjectInfoAsync(bucketName, key, objectInfo, cancellationToken);
+
+        return objectInfo;
     }
 
     public async Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
+        // Invalidate cache
+        InvalidateCache(bucketName, key);
+
         var metadataPath = GetMetadataPath(bucketName, key);
         var result = await _lockManager.DeleteFile(metadataPath);
 
@@ -450,6 +541,114 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
     private string GetDataPath(string bucketName, string key)
     {
         return Path.Combine(_dataDirectory, bucketName, key);
+    }
+
+    private async Task CacheObjectInfoAsync(string bucketName, string key, S3ObjectInfo objectInfo, CancellationToken cancellationToken)
+    {
+        if (_cache == null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Get current metadata file modification time for staleness tracking
+            var metadataPath = GetMetadataPath(bucketName, key);
+            if (!File.Exists(metadataPath))
+            {
+                // Don't cache if metadata file doesn't exist
+                return;
+            }
+
+            var metadataFileLastModified = File.GetLastWriteTimeUtc(metadataPath);
+
+            var cachedEntry = new CachedObjectInfo
+            {
+                ObjectInfo = objectInfo,
+                MetadataFileLastModified = metadataFileLastModified
+            };
+
+            var cacheKey = GetCacheKey(bucketName, key);
+            var entrySize = cachedEntry.EstimateSize();
+
+            var cacheEntryOptions = new MemoryCacheEntryOptions()
+                .SetSize(entrySize);
+
+            // Set absolute expiration if configured
+            if (_cacheSettings.AbsoluteExpirationMinutes.HasValue)
+            {
+                cacheEntryOptions.SetAbsoluteExpiration(TimeSpan.FromMinutes(_cacheSettings.AbsoluteExpirationMinutes.Value));
+            }
+
+            // Set sliding expiration if configured
+            if (_cacheSettings.SlidingExpirationMinutes.HasValue)
+            {
+                cacheEntryOptions.SetSlidingExpiration(TimeSpan.FromMinutes(_cacheSettings.SlidingExpirationMinutes.Value));
+            }
+
+            _cache.Set(cacheKey, cachedEntry, cacheEntryOptions);
+            _logger.LogDebug("Cached object metadata for {Key} in bucket {BucketName} (size: {Size} bytes)", key, bucketName, entrySize);
+        }
+        catch (Exception ex)
+        {
+            // Don't fail the operation if caching fails
+            _logger.LogWarning(ex, "Failed to cache object metadata for {Key} in bucket {BucketName}", key, bucketName);
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private void InvalidateCache(string bucketName, string key)
+    {
+        if (_cache == null)
+        {
+            return;
+        }
+
+        var cacheKey = GetCacheKey(bucketName, key);
+        _cache.Remove(cacheKey);
+    }
+
+    private static string GetCacheKey(string bucketName, string key)
+    {
+        return $"object:{bucketName}:{key}";
+    }
+
+    private class CachedObjectInfo
+    {
+        public required S3ObjectInfo ObjectInfo { get; init; }
+        public required DateTime MetadataFileLastModified { get; init; }
+
+        public long EstimateSize()
+        {
+            long size = 200; // Base overhead
+
+            // String fields
+            size += (ObjectInfo.Key?.Length ?? 0) * 2;
+            size += (ObjectInfo.ETag?.Length ?? 0) * 2;
+            size += (ObjectInfo.ContentType?.Length ?? 0) * 2;
+            size += (ObjectInfo.OwnerId?.Length ?? 0) * 2;
+            size += (ObjectInfo.OwnerDisplayName?.Length ?? 0) * 2;
+
+            // Metadata dictionary
+            if (ObjectInfo.Metadata != null)
+            {
+                foreach (var kvp in ObjectInfo.Metadata)
+                {
+                    size += (kvp.Key.Length + kvp.Value.Length) * 2;
+                    size += 32; // Dictionary entry overhead
+                }
+            }
+
+            // Checksum strings
+            size += (ObjectInfo.ChecksumCRC32?.Length ?? 0) * 2;
+            size += (ObjectInfo.ChecksumCRC32C?.Length ?? 0) * 2;
+            size += (ObjectInfo.ChecksumCRC64NVME?.Length ?? 0) * 2;
+            size += (ObjectInfo.ChecksumSHA1?.Length ?? 0) * 2;
+            size += (ObjectInfo.ChecksumSHA256?.Length ?? 0) * 2;
+
+            return size;
+        }
     }
 
     private class S3ObjectMetadata

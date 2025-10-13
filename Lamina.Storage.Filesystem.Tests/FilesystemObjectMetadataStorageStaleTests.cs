@@ -1,5 +1,6 @@
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Configuration;
 using Lamina.Storage.Filesystem;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
@@ -47,12 +48,16 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
         var networkHelper = new NetworkFileSystemHelper(Options.Create(settings), Mock.Of<ILogger<NetworkFileSystemHelper>>());
         var metadataLogger = Mock.Of<ILogger<FilesystemObjectMetadataStorage>>();
 
+        var cacheSettings = new MetadataCacheSettings { Enabled = false };
+
         _storage = new FilesystemObjectMetadataStorage(
             Options.Create(settings),
+            Options.Create(cacheSettings),
             _bucketStorageMock.Object,
             lockManager,
             networkHelper,
-            metadataLogger);
+            metadataLogger,
+            null);
 
         var dataLogger = Mock.Of<ILogger<FilesystemObjectDataStorage>>();
         var chunkedDataParser = Mock.Of<Lamina.Core.Streaming.IChunkedDataParser>();

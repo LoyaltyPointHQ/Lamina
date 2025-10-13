@@ -60,6 +60,7 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         }
 
         parts[partNumber] = part;
+
         return StorageResult<UploadPart>.Success(part);
     }
 
@@ -122,6 +123,7 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         }
 
         parts[partNumber] = part;
+
         return StorageResult<UploadPart>.Success(part);
     }
 
@@ -172,5 +174,4 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         }
         return Task.FromResult(new List<UploadPart>());
     }
-
 }

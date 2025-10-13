@@ -425,4 +425,17 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
             return Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_multipart_uploads", uploadId, $"part_{partNumber}");
         }
     }
+
+    private string GetUploadDirectory(string uploadId)
+    {
+        if (_metadataMode == MetadataStorageMode.SeparateDirectory)
+        {
+            return Path.Combine(_metadataDirectory!, "_multipart_uploads", uploadId);
+        }
+        else
+        {
+            return Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_multipart_uploads", uploadId);
+        }
+    }
+
 }

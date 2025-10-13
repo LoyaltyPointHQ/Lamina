@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Configuration;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Locking;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -16,13 +18,17 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
     private readonly string _inlineMetadataDirectoryName;
     private readonly IFileSystemLockManager _lockManager;
     private readonly IBucketDataStorage _dataStorage;
+    private readonly IMemoryCache? _cache;
+    private readonly MetadataCacheSettings _cacheSettings;
     private readonly ILogger<FilesystemBucketMetadataStorage> _logger;
 
     public FilesystemBucketMetadataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
+        IOptions<MetadataCacheSettings> cacheSettingsOptions,
         IFileSystemLockManager lockManager,
         IBucketDataStorage dataStorage,
-        ILogger<FilesystemBucketMetadataStorage> logger
+        ILogger<FilesystemBucketMetadataStorage> logger,
+        IMemoryCache? cache = null
     )
     {
         var settings = settingsOptions.Value;
@@ -32,6 +38,8 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
         _lockManager = lockManager;
         _dataStorage = dataStorage;
+        _cacheSettings = cacheSettingsOptions.Value;
+        _cache = _cacheSettings.Enabled ? cache : null;
         _logger = logger;
 
         Directory.CreateDirectory(_dataDirectory);
@@ -62,8 +70,40 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
         public string? OwnerDisplayName { get; set; }
     }
 
+    private class CachedBucketMetadata
+    {
+        public required Bucket Bucket { get; init; }
+        public required DateTime MetadataFileLastModified { get; init; }
+
+        public long EstimateSize()
+        {
+            long size = 200; // Base overhead
+
+            // String fields
+            size += (Bucket.Name?.Length ?? 0) * 2;
+            size += (Bucket.StorageClass?.Length ?? 0) * 2;
+            size += (Bucket.OwnerId?.Length ?? 0) * 2;
+            size += (Bucket.OwnerDisplayName?.Length ?? 0) * 2;
+
+            // Tags dictionary
+            if (Bucket.Tags != null)
+            {
+                foreach (var kvp in Bucket.Tags)
+                {
+                    size += (kvp.Key.Length + kvp.Value.Length) * 2;
+                    size += 32; // Dictionary entry overhead
+                }
+            }
+
+            return size;
+        }
+    }
+
     public async Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest request, CancellationToken cancellationToken = default)
     {
+        // Invalidate cache before storing
+        InvalidateCache(bucketName);
+
         if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return null;
@@ -84,11 +124,47 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
         };
 
         await SaveBucketMetadataAsync(bucket, cancellationToken);
+
+        // Cache the result
+        await CacheBucketAsync(bucket, cancellationToken);
+
         return bucket;
     }
 
     public async Task<Bucket?> GetBucketMetadataAsync(string bucketName, CancellationToken cancellationToken = default)
     {
+        var cacheKey = GetCacheKey(bucketName);
+
+        // Try to get from cache
+        if (_cache?.TryGetValue<CachedBucketMetadata>(cacheKey, out var cachedEntry) == true && cachedEntry != null)
+        {
+            // Validate staleness by checking if metadata JSON file has been modified
+            var metadataPath = GetBucketMetadataPath(bucketName);
+            if (File.Exists(metadataPath))
+            {
+                var currentMtime = File.GetLastWriteTimeUtc(metadataPath);
+                if (currentMtime <= cachedEntry.MetadataFileLastModified)
+                {
+                    // Fresh cache entry
+                    _logger.LogDebug("Cache hit for bucket {BucketName}", bucketName);
+                    return cachedEntry.Bucket;
+                }
+                // Stale - file modified, fall through
+                _logger.LogDebug("Stale cache entry detected for bucket {BucketName} (file mtime: {FileTime}, cache mtime: {CacheTime})",
+                    bucketName, currentMtime, cachedEntry.MetadataFileLastModified);
+                _cache.Remove(cacheKey);
+            }
+            else
+            {
+                // Metadata file no longer exists, remove from cache
+                _logger.LogDebug("Metadata file no longer exists for cached bucket {BucketName}, removing from cache", bucketName);
+                _cache.Remove(cacheKey);
+            }
+        }
+
+        // Cache miss or stale entry
+        _logger.LogDebug("Cache miss for bucket {BucketName}", bucketName);
+
         if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return null;
@@ -121,6 +197,9 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
             }
         }
 
+        // Cache the result
+        await CacheBucketAsync(bucket, cancellationToken);
+
         return bucket;
     }
 
@@ -143,6 +222,9 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
 
     public Task<bool> DeleteBucketMetadataAsync(string bucketName, CancellationToken cancellationToken = default)
     {
+        // Invalidate cache
+        InvalidateCache(bucketName);
+
         try
         {
             var metadataFile = GetBucketMetadataPath(bucketName);
@@ -162,6 +244,9 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
 
     public async Task<Bucket?> UpdateBucketTagsAsync(string bucketName, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
     {
+        // Invalidate cache before updating
+        InvalidateCache(bucketName);
+
         var bucket = await GetBucketMetadataAsync(bucketName, cancellationToken);
         if (bucket == null)
         {
@@ -170,6 +255,10 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
 
         bucket.Tags = tags ?? new Dictionary<string, string>();
         await SaveBucketMetadataAsync(bucket, cancellationToken);
+
+        // Cache the updated result
+        await CacheBucketAsync(bucket, cancellationToken);
+
         return bucket;
     }
 
@@ -206,5 +295,76 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
         {
             return Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_buckets", $"{bucketName}.json");
         }
+    }
+
+    private async Task CacheBucketAsync(Bucket bucket, CancellationToken cancellationToken)
+    {
+        if (_cache == null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Get current metadata file modification time for staleness tracking
+            var metadataPath = GetBucketMetadataPath(bucket.Name);
+            if (!File.Exists(metadataPath))
+            {
+                // Don't cache if metadata file doesn't exist
+                return;
+            }
+
+            var metadataFileLastModified = File.GetLastWriteTimeUtc(metadataPath);
+
+            var cachedEntry = new CachedBucketMetadata
+            {
+                Bucket = bucket,
+                MetadataFileLastModified = metadataFileLastModified
+            };
+
+            var cacheKey = GetCacheKey(bucket.Name);
+            var entrySize = cachedEntry.EstimateSize();
+
+            var cacheEntryOptions = new MemoryCacheEntryOptions()
+                .SetSize(entrySize);
+
+            // Set absolute expiration if configured
+            if (_cacheSettings.AbsoluteExpirationMinutes.HasValue)
+            {
+                cacheEntryOptions.SetAbsoluteExpiration(TimeSpan.FromMinutes(_cacheSettings.AbsoluteExpirationMinutes.Value));
+            }
+
+            // Set sliding expiration if configured
+            if (_cacheSettings.SlidingExpirationMinutes.HasValue)
+            {
+                cacheEntryOptions.SetSlidingExpiration(TimeSpan.FromMinutes(_cacheSettings.SlidingExpirationMinutes.Value));
+            }
+
+            _cache.Set(cacheKey, cachedEntry, cacheEntryOptions);
+            _logger.LogDebug("Cached bucket metadata for {BucketName} (size: {Size} bytes)", bucket.Name, entrySize);
+        }
+        catch (Exception ex)
+        {
+            // Don't fail the operation if caching fails
+            _logger.LogWarning(ex, "Failed to cache bucket metadata for {BucketName}", bucket.Name);
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private void InvalidateCache(string bucketName)
+    {
+        if (_cache == null)
+        {
+            return;
+        }
+
+        var cacheKey = GetCacheKey(bucketName);
+        _cache.Remove(cacheKey);
+    }
+
+    private static string GetCacheKey(string bucketName)
+    {
+        return $"bucket:{bucketName}";
     }
 }

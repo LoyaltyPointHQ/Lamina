@@ -294,6 +294,42 @@ Note: Authentication now uses the standard ASP.NET Core authentication framework
 }
 ```
 
+### Metadata Caching
+
+Lamina supports in-memory caching of object metadata to reduce disk/database reads:
+
+```json
+{
+  "MetadataCache": {
+    "Enabled": true,
+    "SizeLimit": 104857600,
+    "AbsoluteExpirationMinutes": 60,
+    "SlidingExpirationMinutes": 15
+  }
+}
+```
+
+**Configuration Options:**
+
+- `Enabled`: Enable/disable metadata caching (default: `true`)
+- `SizeLimit`: Maximum cache size in bytes (default: 100MB)
+- `AbsoluteExpirationMinutes`: Cache entries expire after this time regardless of access
+- `SlidingExpirationMinutes`: Cache entries expire if not accessed within this time
+
+**Staleness Detection:**
+The cache automatically validates freshness by comparing the cached data's modification time with the actual data file's modification time. If the data file has been modified after the cache entry was
+created, the cache entry is invalidated and fresh metadata is retrieved. This preserves the data-first architecture while providing performance benefits.
+
+**Cache Entry Size Estimation:**
+Each cache entry's size is estimated based on:
+
+- Fixed overhead: ~200 bytes (object structure, DateTime fields)
+- String fields: key, ETag, content type, owner info (UTF-16, 2 bytes per char)
+- Metadata dictionary: sum of all key-value pair lengths
+- Checksum strings: CRC32, CRC32C, CRC64NVME, SHA1, SHA256
+
+The cache respects the configured size limit and evicts entries as needed.
+
 ## S3 Implementation Notes
 
 ### Routing
