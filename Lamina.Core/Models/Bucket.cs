@@ -25,11 +25,6 @@ public class CreateBucketRequest
     public string? OwnerDisplayName { get; set; }
 }
 
-public class UpdateBucketRequest
-{
-    public Dictionary<string, string>? Tags { get; set; }
-}
-
 public class ListBucketsResponse
 {
     public List<Bucket> Buckets { get; set; } = new();

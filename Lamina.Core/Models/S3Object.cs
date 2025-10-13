@@ -77,13 +77,3 @@ public class PutObjectRequest
     public string? ChecksumSHA256 { get; set; }
     public string? ChecksumAlgorithm { get; set; }
 }
-
-public class GetObjectResponse
-{
-    public byte[] Data { get; set; } = Array.Empty<byte>();
-    public string ContentType { get; set; } = string.Empty;
-    public long ContentLength { get; set; }
-    public string ETag { get; set; } = string.Empty;
-    public DateTime LastModified { get; set; }
-    public Dictionary<string, string> Metadata { get; set; } = new();
-}

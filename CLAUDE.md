@@ -142,6 +142,7 @@ helm install lamina ./chart \
 The solution is organized into multiple projects for better separation of concerns:
 
 #### Main Projects
+
 - **Lamina**: Simple startup project and main entry point
 - **Lamina.Core**: Core models, interfaces, and shared types
 - **Lamina.Storage.Core**: Storage abstractions, facades, and helpers
@@ -151,6 +152,7 @@ The solution is organized into multiple projects for better separation of concer
 - **Lamina.WebApi**: ASP.NET Core Web API implementation and controllers
 
 #### Test Projects
+
 - **Lamina.Storage.Core.Tests**: Tests for storage abstractions and facades
 - **Lamina.Storage.Filesystem.Tests**: Tests for filesystem storage implementation
 - **Lamina.Storage.Sql.Tests**: Tests for SQL storage implementation
@@ -193,9 +195,13 @@ The solution is organized into multiple projects for better separation of concer
 
 Lamina uses standard ASP.NET Core authentication and authorization framework:
 
-- **S3AuthenticationHandler**: Validates AWS Signature V4 authentication
+- **S3AuthenticationHandler**: Validates AWS Signature V4 authentication (middleware-based)
+- **IAuthenticationService**: Legacy authentication service used by controllers for direct validation
+- **IStreamingAuthenticationService**: Handles streaming requests with chunked signature validation
 - **S3AuthorizationHandler**: Enforces bucket and object permissions
 - **S3AuthorizeAttribute**: Declarative authorization for controllers
+
+Note: The system currently maintains both the ASP.NET Core authentication handler and the legacy `IAuthenticationService` for backward compatibility and direct validation needs.
 
 ### S3 Operations
 
@@ -300,14 +306,15 @@ Note: Authentication now uses the standard ASP.NET Core authentication framework
 
 1. Initiate: `POST /{bucket}/{key}?uploads`
 2. Upload Part: `PUT /{bucket}/{key}?partNumber=N&uploadId=ID`
-   - Regular upload: Send data in request body
-   - Copy from existing object: Include `x-amz-copy-source` header
-   - Copy byte range: Include `x-amz-copy-source-range: bytes=start-end` header
+    - Regular upload: Send data in request body
+    - Copy from existing object: Include `x-amz-copy-source` header
+    - Copy byte range: Include `x-amz-copy-source-range: bytes=start-end` header
 3. Complete: `POST /{bucket}/{key}?uploadId=ID`
 
 #### UploadPartCopy Support
 
 Lamina supports S3 UploadPartCopy for server-side copying of data:
+
 - Copy entire objects or byte ranges to multipart upload parts
 - Enables efficient deduplication (e.g., Docker registry layer sharing)
 - Supports cross-bucket copying
@@ -329,6 +336,16 @@ Lamina supports S3 UploadPartCopy for server-side copying of data:
 - **Optimized metadata**: Only store non-default values
 
 ## Key Implementation Details
+
+### Checksum Support
+
+Lamina implements S3-compliant checksum validation for data integrity:
+
+- **Supported Algorithms**: CRC32, CRC32C, CRC64NVME, SHA1, SHA256
+- **Validation**: Automatic checksum validation on object upload when client provides checksums
+- **Storage**: Checksums stored with object metadata and returned in responses
+- **API Compliance**: Full support for `x-amz-checksum-*` headers and `x-amz-checksum-algorithm` parameter
+- **Performance**: Single-pass chunked checksum calculation to minimize memory usage
 
 ### ETag Handling
 
@@ -401,7 +418,8 @@ When user says "release vX.X.X", perform these steps:
 1. Check commits since last release with `git log --oneline $(git describe --tags --abbrev=0)..HEAD` to identify [Feature], [Enhancement], [Fix], [Refactor], and [Breaking] commits for release notes
 2. Create annotated git tag: `git tag -a vX.X.X -m "Release vX.X.X\n\n[organize commits by type with Features/Enhancements/Bug Fixes/Refactorings/Breaking Changes sections]"`
 3. Push tag: `git push origin vX.X.X`
-4. Create GitHub release: `gh release create vX.X.X --title "Release vX.X.X" --notes "[organize by sections: ## Features, ## Enhancements, ## Bug Fixes, ## Refactorings, ## Breaking Changes as applicable]"`
+4. Create GitHub release:
+   `gh release create vX.X.X --title "Release vX.X.X" --notes "[organize by sections: ## Features, ## Enhancements, ## Bug Fixes, ## Refactorings, ## Breaking Changes as applicable]"`
 
 ### Release Notes Convention
 
