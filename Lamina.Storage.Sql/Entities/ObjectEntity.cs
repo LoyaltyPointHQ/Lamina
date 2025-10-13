@@ -42,6 +42,21 @@ public class ObjectEntity
     [MaxLength(256)]
     public string? OwnerDisplayName { get; set; }
 
+    [MaxLength(64)]
+    public string? ChecksumCRC32 { get; set; }
+
+    [MaxLength(64)]
+    public string? ChecksumCRC32C { get; set; }
+
+    [MaxLength(64)]
+    public string? ChecksumCRC64NVME { get; set; }
+
+    [MaxLength(64)]
+    public string? ChecksumSHA1 { get; set; }
+
+    [MaxLength(64)]
+    public string? ChecksumSHA256 { get; set; }
+
     [NotMapped]
     public Dictionary<string, string> Metadata
     {
@@ -63,7 +78,12 @@ public class ObjectEntity
             ContentType = s3Object.ContentType,
             Metadata = s3Object.Metadata,
             OwnerId = s3Object.OwnerId,
-            OwnerDisplayName = s3Object.OwnerDisplayName
+            OwnerDisplayName = s3Object.OwnerDisplayName,
+            ChecksumCRC32 = s3Object.ChecksumCRC32,
+            ChecksumCRC32C = s3Object.ChecksumCRC32C,
+            ChecksumCRC64NVME = s3Object.ChecksumCRC64NVME,
+            ChecksumSHA1 = s3Object.ChecksumSHA1,
+            ChecksumSHA256 = s3Object.ChecksumSHA256
         };
     }
 
@@ -79,7 +99,12 @@ public class ObjectEntity
             ContentType = objectInfo.ContentType,
             Metadata = objectInfo.Metadata,
             OwnerId = objectInfo.OwnerId,
-            OwnerDisplayName = objectInfo.OwnerDisplayName
+            OwnerDisplayName = objectInfo.OwnerDisplayName,
+            ChecksumCRC32 = objectInfo.ChecksumCRC32,
+            ChecksumCRC32C = objectInfo.ChecksumCRC32C,
+            ChecksumCRC64NVME = objectInfo.ChecksumCRC64NVME,
+            ChecksumSHA1 = objectInfo.ChecksumSHA1,
+            ChecksumSHA256 = objectInfo.ChecksumSHA256
         };
     }
 
@@ -94,7 +119,12 @@ public class ObjectEntity
             ContentType = ContentType,
             Metadata = Metadata,
             OwnerId = OwnerId,
-            OwnerDisplayName = OwnerDisplayName
+            OwnerDisplayName = OwnerDisplayName,
+            ChecksumCRC32 = ChecksumCRC32,
+            ChecksumCRC32C = ChecksumCRC32C,
+            ChecksumCRC64NVME = ChecksumCRC64NVME,
+            ChecksumSHA1 = ChecksumSHA1,
+            ChecksumSHA256 = ChecksumSHA256
         };
     }
 }

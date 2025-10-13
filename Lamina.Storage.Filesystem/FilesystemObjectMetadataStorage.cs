@@ -68,7 +68,12 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             ContentType = request?.ContentType ?? "application/octet-stream",
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),
             OwnerId = request?.OwnerId,
-            OwnerDisplayName = request?.OwnerDisplayName
+            OwnerDisplayName = request?.OwnerDisplayName,
+            ChecksumCRC32 = request?.ChecksumCRC32,
+            ChecksumCRC32C = request?.ChecksumCRC32C,
+            ChecksumCRC64NVME = request?.ChecksumCRC64NVME,
+            ChecksumSHA1 = request?.ChecksumSHA1,
+            ChecksumSHA256 = request?.ChecksumSHA256
         };
 
         var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
@@ -89,7 +94,12 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             ContentType = metadata.ContentType,
             Metadata = metadata.Metadata,
             OwnerId = metadata.OwnerId,
-            OwnerDisplayName = metadata.OwnerDisplayName
+            OwnerDisplayName = metadata.OwnerDisplayName,
+            ChecksumCRC32 = metadata.ChecksumCRC32,
+            ChecksumCRC32C = metadata.ChecksumCRC32C,
+            ChecksumCRC64NVME = metadata.ChecksumCRC64NVME,
+            ChecksumSHA1 = metadata.ChecksumSHA1,
+            ChecksumSHA256 = metadata.ChecksumSHA256
         };
     }
 
@@ -136,7 +146,12 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             ContentType = metadata.ContentType,
             Metadata = metadata.Metadata,
             OwnerId = metadata.OwnerId,
-            OwnerDisplayName = metadata.OwnerDisplayName
+            OwnerDisplayName = metadata.OwnerDisplayName,
+            ChecksumCRC32 = metadata.ChecksumCRC32,
+            ChecksumCRC32C = metadata.ChecksumCRC32C,
+            ChecksumCRC64NVME = metadata.ChecksumCRC64NVME,
+            ChecksumSHA1 = metadata.ChecksumSHA1,
+            ChecksumSHA256 = metadata.ChecksumSHA256
         };
     }
 
@@ -366,5 +381,10 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         public Dictionary<string, string> Metadata { get; set; } = new();
         public string? OwnerId { get; set; }
         public string? OwnerDisplayName { get; set; }
+        public string? ChecksumCRC32 { get; set; }
+        public string? ChecksumCRC32C { get; set; }
+        public string? ChecksumCRC64NVME { get; set; }
+        public string? ChecksumSHA1 { get; set; }
+        public string? ChecksumSHA256 { get; set; }
     }
 }

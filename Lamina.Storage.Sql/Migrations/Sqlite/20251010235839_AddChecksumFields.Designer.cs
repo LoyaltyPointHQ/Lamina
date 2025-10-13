@@ -3,16 +3,19 @@ using System;
 using Lamina.Storage.Sql.Context;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
 
-namespace Lamina.Migrations.PostgreSql
+namespace Lamina.Storage.Sql.Migrations.Sqlite
 {
     [DbContext(typeof(LaminaDbContext))]
-    partial class LaminaDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251010235839_AddChecksumFields")]
+    partial class AddChecksumFields
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.9");

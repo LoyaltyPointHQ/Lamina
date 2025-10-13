@@ -161,13 +161,24 @@ public class S3MultipartController : S3ControllerBase
             return S3Error("InvalidObjectName", "Object key is forbidden", $"/{bucketName}/{key}", 400);
         }
 
+        // Parse checksum algorithm header
+        Request.Headers.TryGetValue("x-amz-checksum-algorithm", out var checksumAlgorithm);
+        var checksumAlgorithmValue = checksumAlgorithm.ToString();
+        
+        // Validate checksum algorithm if provided
+        if (!string.IsNullOrEmpty(checksumAlgorithmValue) && !ChecksumHelper.IsValidAlgorithm(checksumAlgorithmValue))
+        {
+            return S3Error("InvalidArgument", $"Invalid checksum algorithm: {checksumAlgorithmValue}. Valid values are: CRC32, CRC32C, SHA1, SHA256, CRC64NVME", $"/{bucketName}/{key}", 400);
+        }
+
         var request = new InitiateMultipartUploadRequest
         {
             Key = key,
             ContentType = Request.ContentType,
             Metadata = Request.Headers
                 .Where(h => h.Key.StartsWith("x-amz-meta-", StringComparison.OrdinalIgnoreCase))
-                .ToDictionary(h => h.Key.Substring(11), h => h.Value.ToString())
+                .ToDictionary(h => h.Key.Substring(11), h => h.Value.ToString()),
+            ChecksumAlgorithm = string.IsNullOrEmpty(checksumAlgorithmValue) ? null : checksumAlgorithmValue
         };
 
         try
@@ -258,6 +269,19 @@ public class S3MultipartController : S3ControllerBase
             }
 
             Response.Headers.Append("ETag", $"\"{part.ETag}\"");
+            
+            // Add checksum headers if present
+            if (!string.IsNullOrEmpty(part.ChecksumCRC32))
+                Response.Headers.Append("x-amz-checksum-crc32", part.ChecksumCRC32);
+            if (!string.IsNullOrEmpty(part.ChecksumCRC32C))
+                Response.Headers.Append("x-amz-checksum-crc32c", part.ChecksumCRC32C);
+            if (!string.IsNullOrEmpty(part.ChecksumSHA1))
+                Response.Headers.Append("x-amz-checksum-sha1", part.ChecksumSHA1);
+            if (!string.IsNullOrEmpty(part.ChecksumSHA256))
+                Response.Headers.Append("x-amz-checksum-sha256", part.ChecksumSHA256);
+            if (!string.IsNullOrEmpty(part.ChecksumCRC64NVME))
+                Response.Headers.Append("x-amz-checksum-crc64nvme", part.ChecksumCRC64NVME);
+            
             return Ok();
         }
         catch (InvalidOperationException ex)
@@ -362,7 +386,12 @@ public class S3MultipartController : S3ControllerBase
             var copyPartResult = new CopyPartResult
             {
                 LastModified = uploadPart.LastModified.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
-                ETag = $"\"{uploadPart.ETag}\""
+                ETag = $"\"{uploadPart.ETag}\"",
+                ChecksumCRC32 = uploadPart.ChecksumCRC32,
+                ChecksumCRC32C = uploadPart.ChecksumCRC32C,
+                ChecksumCRC64NVME = uploadPart.ChecksumCRC64NVME,
+                ChecksumSHA1 = uploadPart.ChecksumSHA1,
+                ChecksumSHA256 = uploadPart.ChecksumSHA256
             };
 
             Response.ContentType = "application/xml";
@@ -455,24 +484,31 @@ public class S3MultipartController : S3ControllerBase
 
             var completeResponse = storageResult.Value!;
 
+            // Add checksum fields if any were provided in the request parts
+            var firstPartWithChecksum = parts.FirstOrDefault(p =>
+                !string.IsNullOrEmpty(p.ChecksumCRC32) ||
+                !string.IsNullOrEmpty(p.ChecksumCRC32C) ||
+                !string.IsNullOrEmpty(p.ChecksumSHA1) ||
+                !string.IsNullOrEmpty(p.ChecksumSHA256) ||
+                !string.IsNullOrEmpty(p.ChecksumCRC64NVME));
+
             var result = new CompleteMultipartUploadResult
             {
                 Location = $"http://{Request.Host}/{bucketName}/{key}",
                 Bucket = bucketName,
                 Key = key,
-                ETag = $"\"{completeResponse.ETag}\""
+                ETag = $"\"{completeResponse.ETag}\"",
+                ChecksumCRC32 = firstPartWithChecksum?.ChecksumCRC32,
+                ChecksumCRC32C = firstPartWithChecksum?.ChecksumCRC32C,
+                ChecksumCRC64NVME = firstPartWithChecksum?.ChecksumCRC64NVME,
+                ChecksumSHA1 = firstPartWithChecksum?.ChecksumSHA1,
+                ChecksumSHA256 = firstPartWithChecksum?.ChecksumSHA256
             };
 
             // Add S3-compliant response headers
             Response.Headers.Append("x-amz-version-id", "null");
 
-            // Add checksum headers if any were provided in the request parts
-            var firstPartWithChecksum = parts.FirstOrDefault(p =>
-                !string.IsNullOrEmpty(p.ChecksumCRC32) ||
-                !string.IsNullOrEmpty(p.ChecksumCRC32C) ||
-                !string.IsNullOrEmpty(p.ChecksumSHA1) ||
-                !string.IsNullOrEmpty(p.ChecksumSHA256));
-
+            // Add checksum headers if any were provided
             if (firstPartWithChecksum != null)
             {
                 if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumCRC32))
@@ -483,6 +519,8 @@ public class S3MultipartController : S3ControllerBase
                     Response.Headers.Append("x-amz-checksum-sha1", firstPartWithChecksum.ChecksumSHA1);
                 if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumSHA256))
                     Response.Headers.Append("x-amz-checksum-sha256", firstPartWithChecksum.ChecksumSHA256);
+                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumCRC64NVME))
+                    Response.Headers.Append("x-amz-checksum-crc64nvme", firstPartWithChecksum.ChecksumCRC64NVME);
             }
 
             Response.ContentType = "application/xml";

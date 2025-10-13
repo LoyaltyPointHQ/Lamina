@@ -12,6 +12,11 @@ public class S3Object
     public byte[] Data { get; set; } = Array.Empty<byte>();
     public string? OwnerId { get; set; }
     public string? OwnerDisplayName { get; set; }
+    public string? ChecksumCRC32 { get; set; }
+    public string? ChecksumCRC32C { get; set; }
+    public string? ChecksumCRC64NVME { get; set; }
+    public string? ChecksumSHA1 { get; set; }
+    public string? ChecksumSHA256 { get; set; }
 }
 
 public class ListObjectsRequest
@@ -51,6 +56,11 @@ public class S3ObjectInfo
     public Dictionary<string, string> Metadata { get; set; } = new();
     public string? OwnerId { get; set; }
     public string? OwnerDisplayName { get; set; }
+    public string? ChecksumCRC32 { get; set; }
+    public string? ChecksumCRC32C { get; set; }
+    public string? ChecksumCRC64NVME { get; set; }
+    public string? ChecksumSHA1 { get; set; }
+    public string? ChecksumSHA256 { get; set; }
 }
 
 public class PutObjectRequest
@@ -60,6 +70,12 @@ public class PutObjectRequest
     public Dictionary<string, string>? Metadata { get; set; }
     public string? OwnerId { get; set; }
     public string? OwnerDisplayName { get; set; }
+    public string? ChecksumCRC32 { get; set; }
+    public string? ChecksumCRC32C { get; set; }
+    public string? ChecksumCRC64NVME { get; set; }
+    public string? ChecksumSHA1 { get; set; }
+    public string? ChecksumSHA256 { get; set; }
+    public string? ChecksumAlgorithm { get; set; }
 }
 
 public class GetObjectResponse

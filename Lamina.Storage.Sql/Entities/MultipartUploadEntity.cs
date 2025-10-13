@@ -26,6 +26,9 @@ public class MultipartUploadEntity
     [MaxLength(256)]
     public string? ContentType { get; set; }
 
+    [MaxLength(20)]
+    public string? ChecksumAlgorithm { get; set; }
+
     [Column(TypeName = "TEXT")]
     public string MetadataJson { get; set; } = "{}";
 
@@ -47,7 +50,8 @@ public class MultipartUploadEntity
             Key = upload.Key,
             Initiated = upload.Initiated,
             ContentType = upload.ContentType,
-            Metadata = upload.Metadata
+            Metadata = upload.Metadata,
+            ChecksumAlgorithm = upload.ChecksumAlgorithm
         };
     }
 
@@ -60,7 +64,8 @@ public class MultipartUploadEntity
             Key = Key,
             Initiated = Initiated,
             ContentType = ContentType,
-            Metadata = Metadata
+            Metadata = Metadata,
+            ChecksumAlgorithm = ChecksumAlgorithm
         };
     }
 }
@@ -88,6 +93,21 @@ public class UploadPartEntity
     [Required]
     public DateTime LastModified { get; set; }
 
+    [MaxLength(64)]
+    public string? ChecksumCRC32 { get; set; }
+
+    [MaxLength(64)]
+    public string? ChecksumCRC32C { get; set; }
+
+    [MaxLength(64)]
+    public string? ChecksumCRC64NVME { get; set; }
+
+    [MaxLength(64)]
+    public string? ChecksumSHA1 { get; set; }
+
+    [MaxLength(64)]
+    public string? ChecksumSHA256 { get; set; }
+
     [ForeignKey(nameof(UploadId))]
     public virtual MultipartUploadEntity? Upload { get; set; }
 
@@ -99,7 +119,12 @@ public class UploadPartEntity
             PartNumber = part.PartNumber,
             ETag = part.ETag,
             Size = part.Size,
-            LastModified = part.LastModified
+            LastModified = part.LastModified,
+            ChecksumCRC32 = part.ChecksumCRC32,
+            ChecksumCRC32C = part.ChecksumCRC32C,
+            ChecksumCRC64NVME = part.ChecksumCRC64NVME,
+            ChecksumSHA1 = part.ChecksumSHA1,
+            ChecksumSHA256 = part.ChecksumSHA256
         };
     }
 
@@ -111,7 +136,12 @@ public class UploadPartEntity
             ETag = ETag,
             Size = Size,
             LastModified = LastModified,
-            Data = Array.Empty<byte>() // SQL storage doesn't store part data directly
+            Data = Array.Empty<byte>(), // SQL storage doesn't store part data directly
+            ChecksumCRC32 = ChecksumCRC32,
+            ChecksumCRC32C = ChecksumCRC32C,
+            ChecksumCRC64NVME = ChecksumCRC64NVME,
+            ChecksumSHA1 = ChecksumSHA1,
+            ChecksumSHA256 = ChecksumSHA256
         };
     }
 }

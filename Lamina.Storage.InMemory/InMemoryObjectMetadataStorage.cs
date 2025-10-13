@@ -55,7 +55,12 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
                 ContentType = s3Object.ContentType,
                 Metadata = s3Object.Metadata,
                 OwnerId = s3Object.OwnerId,
-                OwnerDisplayName = s3Object.OwnerDisplayName
+                OwnerDisplayName = s3Object.OwnerDisplayName,
+                ChecksumCRC32 = s3Object.ChecksumCRC32,
+                ChecksumCRC32C = s3Object.ChecksumCRC32C,
+                ChecksumCRC64NVME = s3Object.ChecksumCRC64NVME,
+                ChecksumSHA1 = s3Object.ChecksumSHA1,
+                ChecksumSHA256 = s3Object.ChecksumSHA256
             });
         }
         return Task.FromResult<S3ObjectInfo?>(null);
