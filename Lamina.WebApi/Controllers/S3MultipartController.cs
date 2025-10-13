@@ -385,7 +385,7 @@ public class S3MultipartController : S3ControllerBase
             // Return CopyPartResult XML response
             var copyPartResult = new CopyPartResult
             {
-                LastModified = uploadPart.LastModified.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+                LastModified = uploadPart.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
                 ETag = $"\"{uploadPart.ETag}\"",
                 ChecksumCRC32 = uploadPart.ChecksumCRC32,
                 ChecksumCRC32C = uploadPart.ChecksumCRC32C,
@@ -394,7 +394,7 @@ public class S3MultipartController : S3ControllerBase
                 ChecksumSHA256 = uploadPart.ChecksumSHA256
             };
 
-            Response.ContentType = "application/xml";
+            // Serialize to XML and return - Content() method handles ContentType
             var xmlSerializer = new XmlSerializer(typeof(CopyPartResult));
             await using var stringWriter = new StringWriter();
             xmlSerializer.Serialize(stringWriter, copyPartResult);

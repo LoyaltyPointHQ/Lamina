@@ -600,4 +600,63 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         // Verify the raw XML also contains quoted ETag
         Assert.Matches(@"<ETag>""[a-f0-9]+""</ETag>", copyXml);
     }
+
+    [Fact]
+    public async Task UploadPartCopy_LastModifiedFormat_MatchesS3ISO8601Specification()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create source object
+        var sourceContent = "Test content for ISO8601 timestamp validation";
+        await Client.PutAsync($"/{bucketName}/source.txt",
+            new StringContent(sourceContent, Encoding.UTF8));
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/dest.txt?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Upload part using UploadPartCopy
+        var copyRequest = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/dest.txt?partNumber=1&uploadId={initResult.UploadId}");
+        copyRequest.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.txt");
+        var copyResponse = await Client.SendAsync(copyRequest);
+
+        Assert.Equal(HttpStatusCode.OK, copyResponse.StatusCode);
+
+        // Get XML response
+        var copyXml = await copyResponse.Content.ReadAsStringAsync();
+
+        // Deserialize to verify structure
+        var copySerializer = new XmlSerializer(typeof(CopyPartResult));
+        using var copyReader = new StringReader(copyXml);
+        var copyResult = (CopyPartResult?)copySerializer.Deserialize(copyReader);
+        Assert.NotNull(copyResult);
+        Assert.NotNull(copyResult.LastModified);
+
+        // Verify LastModified follows S3 ISO8601 format: YYYY-MM-DDTHH:mm:ss.fffZ
+        // Example from AWS docs: 2011-04-11T20:34:56.000Z
+        var iso8601Pattern = @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$";
+        Assert.Matches(iso8601Pattern, copyResult.LastModified);
+
+        // Verify the timestamp can be parsed as valid DateTime
+        var parseSuccess = DateTime.TryParseExact(
+            copyResult.LastModified,
+            "yyyy-MM-dd'T'HH:mm:ss.fff'Z'",
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+            out var parsedDate);
+        Assert.True(parseSuccess, $"Failed to parse LastModified: '{copyResult.LastModified}'");
+
+        // Verify the parsed date is reasonable (not default, and within last few seconds)
+        Assert.NotEqual(DateTime.MinValue, parsedDate);
+        Assert.True(parsedDate <= DateTime.UtcNow, $"Parsed date {parsedDate:O} is after current UTC");
+        Assert.True(parsedDate >= DateTime.UtcNow.AddMinutes(-1), $"Parsed date {parsedDate:O} is more than 1 minute old"); // Should be very recent
+
+        // Verify the raw XML contains properly formatted timestamp with 'T' separator, 'Z' suffix, and exactly 3 decimal places for milliseconds
+        Assert.Matches(@"<LastModified>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z</LastModified>", copyXml);
+    }
 }
