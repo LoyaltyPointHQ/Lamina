@@ -189,6 +189,13 @@ public class CompleteMultipartUploadResult
 
     [XmlElement("ChecksumSHA256")]
     public string? ChecksumSHA256 { get; set; }
+
+    // Conditionally serialize checksum fields only when they have values
+    public bool ShouldSerializeChecksumCRC32() => !string.IsNullOrEmpty(ChecksumCRC32);
+    public bool ShouldSerializeChecksumCRC32C() => !string.IsNullOrEmpty(ChecksumCRC32C);
+    public bool ShouldSerializeChecksumCRC64NVME() => !string.IsNullOrEmpty(ChecksumCRC64NVME);
+    public bool ShouldSerializeChecksumSHA1() => !string.IsNullOrEmpty(ChecksumSHA1);
+    public bool ShouldSerializeChecksumSHA256() => !string.IsNullOrEmpty(ChecksumSHA256);
 }
 
 [XmlRoot("CopyObjectResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
@@ -214,6 +221,13 @@ public class CopyObjectResult
 
     [XmlElement("ChecksumSHA256")]
     public string? ChecksumSHA256 { get; set; }
+
+    // Conditionally serialize checksum fields only when they have values
+    public bool ShouldSerializeChecksumCRC32() => !string.IsNullOrEmpty(ChecksumCRC32);
+    public bool ShouldSerializeChecksumCRC32C() => !string.IsNullOrEmpty(ChecksumCRC32C);
+    public bool ShouldSerializeChecksumCRC64NVME() => !string.IsNullOrEmpty(ChecksumCRC64NVME);
+    public bool ShouldSerializeChecksumSHA1() => !string.IsNullOrEmpty(ChecksumSHA1);
+    public bool ShouldSerializeChecksumSHA256() => !string.IsNullOrEmpty(ChecksumSHA256);
 }
 
 [XmlRoot("CopyPartResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
@@ -239,6 +253,13 @@ public class CopyPartResult
 
     [XmlElement("ChecksumSHA256")]
     public string? ChecksumSHA256 { get; set; }
+
+    // Conditionally serialize checksum fields only when they have values
+    public bool ShouldSerializeChecksumCRC32() => !string.IsNullOrEmpty(ChecksumCRC32);
+    public bool ShouldSerializeChecksumCRC32C() => !string.IsNullOrEmpty(ChecksumCRC32C);
+    public bool ShouldSerializeChecksumCRC64NVME() => !string.IsNullOrEmpty(ChecksumCRC64NVME);
+    public bool ShouldSerializeChecksumSHA1() => !string.IsNullOrEmpty(ChecksumSHA1);
+    public bool ShouldSerializeChecksumSHA256() => !string.IsNullOrEmpty(ChecksumSHA256);
 }
 
 [XmlRoot("ListPartsResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
@@ -409,6 +430,13 @@ public class CompletedPartXml
 
     [XmlElement("ChecksumSHA256")]
     public string? ChecksumSHA256 { get; set; }
+
+    // Conditionally serialize checksum fields only when they have values
+    public bool ShouldSerializeChecksumCRC32() => !string.IsNullOrEmpty(ChecksumCRC32);
+    public bool ShouldSerializeChecksumCRC32C() => !string.IsNullOrEmpty(ChecksumCRC32C);
+    public bool ShouldSerializeChecksumCRC64NVME() => !string.IsNullOrEmpty(ChecksumCRC64NVME);
+    public bool ShouldSerializeChecksumSHA1() => !string.IsNullOrEmpty(ChecksumSHA1);
+    public bool ShouldSerializeChecksumSHA256() => !string.IsNullOrEmpty(ChecksumSHA256);
 }
 
 [XmlRoot("Part")]
@@ -434,6 +462,13 @@ public class CompletedPartXmlNoNamespace
 
     [XmlElement("ChecksumSHA256")]
     public string? ChecksumSHA256 { get; set; }
+
+    // Conditionally serialize checksum fields only when they have values
+    public bool ShouldSerializeChecksumCRC32() => !string.IsNullOrEmpty(ChecksumCRC32);
+    public bool ShouldSerializeChecksumCRC32C() => !string.IsNullOrEmpty(ChecksumCRC32C);
+    public bool ShouldSerializeChecksumCRC64NVME() => !string.IsNullOrEmpty(ChecksumCRC64NVME);
+    public bool ShouldSerializeChecksumSHA1() => !string.IsNullOrEmpty(ChecksumSHA1);
+    public bool ShouldSerializeChecksumSHA256() => !string.IsNullOrEmpty(ChecksumSHA256);
 }
 
 [XmlRoot("LocationConstraint", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
