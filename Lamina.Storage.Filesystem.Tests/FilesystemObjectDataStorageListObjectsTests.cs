@@ -46,7 +46,7 @@ public class FilesystemObjectDataStorageListObjectsTests : IAsyncLifetime
             var filePipe = new Pipe();
             await filePipe.Writer.WriteAsync(_testContent);
             await filePipe.Writer.CompleteAsync();
-            var result = await _storage.StoreDataAsync(BucketName, key, filePipe.Reader, null);
+            var result = await _storage.StoreDataAsync(BucketName, key, filePipe.Reader, null, null);
             if (!result.IsSuccess)
             {
                 throw new InvalidOperationException($"Failed to store test data for key '{key}': {result.ErrorMessage}");

@@ -1,6 +1,7 @@
 # Lamina
 
-**Lamina** is a lightweight, high-performance S3-compatible storage gateway that exposes filesystem directories as S3 buckets. Built with .NET 9.0, Lamina provides a standards-compliant Amazon S3 REST API interface while storing data directly on your local filesystem or network storage.
+**Lamina** is a lightweight, high-performance S3-compatible storage gateway that exposes filesystem directories as S3 buckets. Built with .NET 9.0, Lamina provides a standards-compliant Amazon S3 REST
+API interface while storing data directly on your local filesystem or network storage.
 
 [![Docker Image](https://img.shields.io/badge/docker-ghcr.io%2Floyaltypointhq%2Flamina-blue)](https://github.com/LoyaltyPointHQ/Lamina/pkgs/container/lamina)
 [![GitHub Repository](https://img.shields.io/badge/github-LoyaltyPointHQ%2FLamina-blue)](https://github.com/LoyaltyPointHQ/Lamina)
@@ -66,6 +67,7 @@ helm install lamina oci://ghcr.io/loyaltypointhq/lamina/lamina \
 ```
 
 **Platform-Specific Features:**
+
 - **Kubernetes**: Automatic Ingress configuration for external access
 - **OpenShift**: Route creation with TLS termination and ImageStream support
 - **Auto-Detection**: Automatically detects platform and configures appropriate resources (i.e. Route instead of Ingress)
@@ -75,6 +77,7 @@ For detailed Helm chart configuration, see [`chart/README.md`](chart/README.md).
 ## 🏗️ Architecture
 
 Lamina uses a **data-first architecture** where:
+
 - **Data is the source of truth** - object existence is determined by data presence
 - **Metadata is optional** - automatically generated when missing
 - **Content-Type detection** - intelligent MIME type detection based on file extensions
@@ -86,10 +89,12 @@ Lamina uses a **data-first architecture** where:
 Lamina supports multiple storage backends for both data and metadata:
 
 #### Data Storage
+
 - **In-Memory**: Fast, ephemeral storage for development and testing
 - **Filesystem**: Production-ready local or network filesystem storage (CIFS, NFS)
 
 #### Metadata Storage
+
 - **In-Memory**: Ephemeral metadata storage for development and testing
 - **Filesystem**: Multiple modes for persistent metadata
 - **SQL Database**: SQLite or PostgreSQL for scalable metadata management
@@ -97,18 +102,21 @@ Lamina supports multiple storage backends for both data and metadata:
 #### Filesystem Metadata Modes
 
 **1. Separate Directory Mode** (default)
+
 ```
 /data/bucket/object.txt          # Object data
 /metadata/bucket/object.txt.json # Object metadata
 ```
 
 **2. Inline Mode**
+
 ```
 /data/bucket/object.txt                    # Object data
 /data/bucket/.lamina-meta/object.txt.json  # Object metadata
 ```
 
 **3. Extended Attributes Mode** (Linux/macOS)
+
 ```
 /data/bucket/object.txt  # Object data + metadata as xattrs
 ```
@@ -117,46 +125,54 @@ Lamina supports multiple storage backends for both data and metadata:
 
 Lamina implements comprehensive S3 API compatibility. Here's how it compares to other S3-compatible storage solutions:
 
-| Feature | Lamina | MinIO | SeaweedFS | Garage |
-|---------|--------|-------|-----------|--------|
+| Feature                    | Lamina | MinIO | SeaweedFS | Garage |
+|----------------------------|--------|-------|-----------|--------|
 | **Core Object Operations** |
-| GetObject | ✅ | ✅ | ✅ | ✅ |
-| PutObject | ✅ | ✅ | ✅ | ✅ |
-| DeleteObject | ✅ | ✅ | ✅ | ✅ |
-| HeadObject | ✅ | ✅ | ✅ | ✅ |
-| ListObjects | ✅ | ✅ | ✅ | ✅ |
-| ListObjectsV2 | ✅ | ✅ | ✅ | ✅ |
-| **Bucket Operations** |
-| CreateBucket | ✅ | ✅ | ✅ | ✅ |
-| DeleteBucket | ✅ | ✅ | ✅ | ✅ |
-| HeadBucket | ✅ | ✅ | ✅ | ✅ |
-| ListBuckets | ✅ | ✅ | ✅ | ✅ |
-| **Multipart Uploads** |
-| CreateMultipartUpload | ✅ | ✅ | ✅ | ✅ |
-| UploadPart | ✅ | ✅ | ✅ | ✅ |
-| CompleteMultipartUpload | ✅ | ✅ | ✅ | ✅ |
-| AbortMultipartUpload | ✅ | ✅ | ✅ | ✅ |
-| ListParts | ✅ | ✅ | ✅ | ✅ |
-| ListMultipartUploads | ✅ | ✅ | ✅ | ✅ |
-| **Authentication** |
-| AWS Signature V4 | ✅ | ✅ | ✅ | ✅ |
-| AWS Signature V2 | ❌ | ✅ | ❌ | ❌ |
-| Streaming Auth | ✅ | ✅ | ❌ | ❌ |
-| **Advanced Features** |
-| Server-Side Encryption | ❌ | ✅ | ✅ | ✅ |
-| Versioning | ❌ | ✅ | ❌ | ❌ |
-| Object Locking | ❌ | ✅ | ❌ | ❌ |
-| Lifecycle Management | ❌ | ✅ | ❌ | ❌ |
-| **Storage Focus** |
-| Filesystem Gateway | ✅ | ❌ | ⚠️ | ❌ |
-| Distributed Storage | ❌ | ✅ | ✅ | ✅ |
-| Cloud-Native | ❌ | ✅ | ✅ | ✅ |
+| GetObject                  | ✅      | ✅     | ✅         | ✅      |
+| PutObject                  | ✅      | ✅     | ✅         | ✅      |
+| DeleteObject               | ✅      | ✅     | ✅         | ✅      |
+| HeadObject                 | ✅      | ✅     | ✅         | ✅      |
+| ListObjects                | ✅      | ✅     | ✅         | ✅      |
+| ListObjectsV2              | ✅      | ✅     | ✅         | ✅      |
+| **Bucket Operations**      |
+| CreateBucket               | ✅      | ✅     | ✅         | ✅      |
+| DeleteBucket               | ✅      | ✅     | ✅         | ✅      |
+| HeadBucket                 | ✅      | ✅     | ✅         | ✅      |
+| ListBuckets                | ✅      | ✅     | ✅         | ✅      |
+| **Multipart Uploads**      |
+| CreateMultipartUpload      | ✅      | ✅     | ✅         | ✅      |
+| UploadPart                 | ✅      | ✅     | ✅         | ✅      |
+| UploadPartCopy             | ✅      | ✅     | ✅         | ❌      |
+| CompleteMultipartUpload    | ✅      | ✅     | ✅         | ✅      |
+| AbortMultipartUpload       | ✅      | ✅     | ✅         | ✅      |
+| ListParts                  | ✅      | ✅     | ✅         | ✅      |
+| ListMultipartUploads       | ✅      | ✅     | ✅         | ✅      |
+| **Data Integrity**         |
+| Checksums (CRC32)          | ✅      | ✅     | ❌         | ❌      |
+| Checksums (CRC32C)         | ✅      | ✅     | ❌         | ❌      |
+| Checksums (SHA1)           | ✅      | ✅     | ❌         | ❌      |
+| Checksums (SHA256)         | ✅      | ✅     | ❌         | ❌      |
+| Checksums (CRC64NVME)      | ⚠️     | ✅     | ❌         | ❌      |
+| **Authentication**         |
+| AWS Signature V4           | ✅      | ✅     | ✅         | ✅      |
+| AWS Signature V2           | ❌      | ✅     | ❌         | ❌      |
+| Streaming Auth             | ✅      | ✅     | ❌         | ❌      |
+| **Advanced Features**      |
+| Server-Side Encryption     | ❌      | ✅     | ✅         | ✅      |
+| Versioning                 | ❌      | ✅     | ❌         | ❌      |
+| Object Locking             | ❌      | ✅     | ❌         | ❌      |
+| Lifecycle Management       | ❌      | ✅     | ❌         | ❌      |
+| **Storage Focus**          |
+| Filesystem Gateway         | ✅      | ❌     | ⚠️        | ❌      |
+| Distributed Storage        | ❌      | ✅     | ✅         | ✅      |
+| Cloud-Native               | ❌      | ✅     | ✅         | ✅      |
 
 **Legend**: ✅ Supported | ❌ Not supported | ⚠️ Partial support
 
 ### Known S3 API Limitations
 
 #### Region Support
+
 Lamina operates as a **single-region storage system** and does not implement AWS region-specific functionality:
 
 - ❌ **Bucket regions**: All buckets exist in a virtual single region
@@ -182,6 +198,7 @@ Lamina operates as a **single-region storage system** and does not implement AWS
 Configure storage backend in `appsettings.json`:
 
 #### Filesystem Storage
+
 ```json
 {
   "StorageType": "Filesystem",
@@ -200,6 +217,7 @@ Configure storage backend in `appsettings.json`:
 #### SQL Metadata Storage
 
 For SQLite metadata storage (recommended for single-instance deployments):
+
 ```json
 {
   "StorageType": "Filesystem",
@@ -218,6 +236,7 @@ For SQLite metadata storage (recommended for single-instance deployments):
 ```
 
 For PostgreSQL metadata storage (recommended for multi-instance deployments):
+
 ```json
 {
   "StorageType": "Filesystem",
@@ -257,6 +276,7 @@ For multi-instance deployments, enable Redis-based distributed locking to ensure
 #### Docker Compose Examples
 
 **Multi-Instance with Redis Locking:**
+
 ```yaml
 version: '3.8'
 services:
@@ -298,6 +318,7 @@ services:
 ```
 
 **Filesystem Storage with PostgreSQL Metadata:**
+
 ```yaml
 version: '3.8'
 services:
@@ -337,14 +358,15 @@ volumes:
 - **Single Instance**: Use default `InMemory` lock manager (no Redis needed)
 - **SQL Metadata Storage**: No Redis needed regardless of instance count (database handles locking)
 - **Multi-Instance with File-Based Metadata**: Use `Redis` lock manager for:
-  - Load balancing across multiple Lamina instances
-  - High availability deployments
-  - Shared storage (NFS, CIFS, cloud volumes)
-  - Kubernetes deployments with multiple replicas
+    - Load balancing across multiple Lamina instances
+    - High availability deployments
+    - Shared storage (NFS, CIFS, cloud volumes)
+    - Kubernetes deployments with multiple replicas
 
 #### Metadata Modes
 
 **Separate Directory** - Metadata stored in separate directory tree:
+
 ```json
 {
   "MetadataMode": "SeparateDirectory",
@@ -353,6 +375,7 @@ volumes:
 ```
 
 **Inline** - Metadata stored alongside data:
+
 ```json
 {
   "MetadataMode": "Inline",
@@ -361,6 +384,7 @@ volumes:
 ```
 
 **Extended Attributes** - Metadata stored as POSIX xattrs (Linux/macOS):
+
 ```json
 {
   "MetadataMode": "Xattr",
@@ -382,7 +406,9 @@ volumes:
         "BucketPermissions": [
           {
             "BucketName": "*",
-            "Permissions": ["*"]
+            "Permissions": [
+              "*"
+            ]
           }
         ]
       }
@@ -424,6 +450,7 @@ volumes:
 ## 📚 Use Cases
 
 ### Production Scenarios
+
 - **Filesystem Bridge**: Expose existing filesystem data via S3 API with exceptional listing performance
 - **Edge Computing**: S3 API at edge locations with local storage and fast directory navigation
 - **Backup Solutions**: S3-compatible interface for backup applications with optimized browsing of time-based structures
@@ -431,6 +458,7 @@ volumes:
 - **Document Management**: High-performance S3 interface for organized document hierarchies
 
 ### Network Storage Integration
+
 - **NAS Exposure**: Make NAS devices accessible via S3 API
 - **CIFS/SMB Gateway**: S3 interface for Windows file shares
 - **NFS Gateway**: S3 API for Unix network filesystems

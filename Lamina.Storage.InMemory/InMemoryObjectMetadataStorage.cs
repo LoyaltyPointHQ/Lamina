@@ -15,7 +15,7 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
         _bucketStorage = bucketStorage;
     }
 
-    public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
+    public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, CancellationToken cancellationToken = default)
     {
         if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
@@ -36,6 +36,21 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
             OwnerId = request?.OwnerId,
             OwnerDisplayName = request?.OwnerDisplayName
         };
+
+        // Populate checksum fields from calculated checksums (these take precedence)
+        if (calculatedChecksums != null)
+        {
+            if (calculatedChecksums.TryGetValue("CRC32", out var crc32))
+                s3Object.ChecksumCRC32 = crc32;
+            if (calculatedChecksums.TryGetValue("CRC32C", out var crc32c))
+                s3Object.ChecksumCRC32C = crc32c;
+            if (calculatedChecksums.TryGetValue("CRC64NVME", out var crc64nvme))
+                s3Object.ChecksumCRC64NVME = crc64nvme;
+            if (calculatedChecksums.TryGetValue("SHA1", out var sha1))
+                s3Object.ChecksumSHA1 = sha1;
+            if (calculatedChecksums.TryGetValue("SHA256", out var sha256))
+                s3Object.ChecksumSHA256 = sha256;
+        }
 
         bucketMetadata[key] = s3Object;
         return s3Object;

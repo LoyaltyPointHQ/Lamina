@@ -41,6 +41,18 @@ public class MultipartUploadEntity
         set => MetadataJson = JsonSerializer.Serialize(value);
     }
 
+    [Column(TypeName = "TEXT")]
+    public string? PartsMetadataJson { get; set; }
+
+    [NotMapped]
+    public Dictionary<int, PartMetadata> Parts
+    {
+        get => string.IsNullOrEmpty(PartsMetadataJson)
+            ? new Dictionary<int, PartMetadata>()
+            : JsonSerializer.Deserialize<Dictionary<int, PartMetadata>>(PartsMetadataJson) ?? new Dictionary<int, PartMetadata>();
+        set => PartsMetadataJson = value.Count > 0 ? JsonSerializer.Serialize(value) : null;
+    }
+
     public static MultipartUploadEntity FromMultipartUpload(MultipartUpload upload)
     {
         return new MultipartUploadEntity
@@ -51,7 +63,8 @@ public class MultipartUploadEntity
             Initiated = upload.Initiated,
             ContentType = upload.ContentType,
             Metadata = upload.Metadata,
-            ChecksumAlgorithm = upload.ChecksumAlgorithm
+            ChecksumAlgorithm = upload.ChecksumAlgorithm,
+            Parts = upload.Parts
         };
     }
 
@@ -65,8 +78,18 @@ public class MultipartUploadEntity
             Initiated = Initiated,
             ContentType = ContentType,
             Metadata = Metadata,
-            ChecksumAlgorithm = ChecksumAlgorithm
+            ChecksumAlgorithm = ChecksumAlgorithm,
+            Parts = Parts
         };
+    }
+
+    public void UpdateFromMultipartUpload(MultipartUpload upload)
+    {
+        // Update mutable fields
+        ContentType = upload.ContentType;
+        Metadata = upload.Metadata;
+        ChecksumAlgorithm = upload.ChecksumAlgorithm;
+        Parts = upload.Parts;
     }
 }
 

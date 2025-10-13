@@ -20,11 +20,12 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
 
 
 
-    public async Task<StorageResult<(long size, string etag)>> StoreDataAsync(
+    public async Task<StorageResult<(long size, string etag, Dictionary<string, string> checksums)>> StoreDataAsync(
         string bucketName,
         string key,
         PipeReader dataReader,
         IChunkSignatureValidator? chunkValidator,
+        ChecksumRequest? checksumRequest,
         CancellationToken cancellationToken = default
     )
     {
@@ -44,7 +45,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
             if (!parseResult.Success)
             {
                 // Invalid chunk signature
-                return StorageResult<(long size, string etag)>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
+                return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
             }
 
             combinedData = memoryStream.ToArray();
@@ -60,7 +61,28 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         var etag = ETagHelper.ComputeETag(combinedData);
         bucketData[key] = combinedData;
 
-        return StorageResult<(long size, string etag)>.Success((bytesWritten, etag));
+        // Calculate checksums if requested
+        var checksums = new Dictionary<string, string>();
+        if (checksumRequest != null)
+        {
+            using var calculator = new StreamingChecksumCalculator(checksumRequest.Algorithm, checksumRequest.ProvidedChecksums);
+            if (calculator.HasChecksums)
+            {
+                calculator.Append(combinedData);
+                var result = calculator.Finish();
+
+                if (!result.IsValid)
+                {
+                    // Checksum validation failed - clean up and return error
+                    bucketData.TryRemove(key, out _);
+                    return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
+                }
+
+                checksums = result.CalculatedChecksums;
+            }
+        }
+
+        return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Success((bytesWritten, etag, checksums));
     }
 
     public async Task<(long size, string etag)> StoreMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)

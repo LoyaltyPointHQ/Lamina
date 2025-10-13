@@ -106,7 +106,7 @@ public class XattrObjectMetadataStorageTests : IDisposable
         };
 
         // Act
-        var result = await _storage.StoreMetadataAsync(bucketName, key, etag, size, request);
+        var result = await _storage.StoreMetadataAsync(bucketName, key, etag, size, request, null);
 
         // Assert
         Assert.NotNull(result);
@@ -148,7 +148,7 @@ public class XattrObjectMetadataStorageTests : IDisposable
             Metadata = new Dictionary<string, string> { { "author", "test-user" } }
         };
 
-        await _storage.StoreMetadataAsync(bucketName, key, etag, size, request);
+        await _storage.StoreMetadataAsync(bucketName, key, etag, size, request, null);
 
         // Act
         var result = await _storage.GetMetadataAsync(bucketName, key);
@@ -211,7 +211,7 @@ public class XattrObjectMetadataStorageTests : IDisposable
         await File.WriteAllTextAsync(dataPath, "test data");
 
         var request = new PutObjectRequest { Key = key, ContentType = "text/plain" };
-        await _storage.StoreMetadataAsync(bucketName, key, etag, size, request);
+        await _storage.StoreMetadataAsync(bucketName, key, etag, size, request, null);
 
         // Act
         var result = await _storage.DeleteMetadataAsync(bucketName, key);
@@ -246,7 +246,7 @@ public class XattrObjectMetadataStorageTests : IDisposable
         await File.WriteAllTextAsync(dataPath, "test data");
 
         var request = new PutObjectRequest { Key = key };
-        await _storage.StoreMetadataAsync(bucketName, key, etag, size, request);
+        await _storage.StoreMetadataAsync(bucketName, key, etag, size, request, null);
 
         // Act
         var result = await _storage.MetadataExistsAsync(bucketName, key);

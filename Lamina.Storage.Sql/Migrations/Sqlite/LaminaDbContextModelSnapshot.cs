@@ -65,6 +65,10 @@ namespace Lamina.Migrations.Sqlite
                         .HasMaxLength(63)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ChecksumAlgorithm")
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ContentType")
                         .HasMaxLength(256)
                         .HasColumnType("TEXT");
@@ -79,6 +83,9 @@ namespace Lamina.Migrations.Sqlite
 
                     b.Property<string>("MetadataJson")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PartsMetadataJson")
                         .HasColumnType("TEXT");
 
                     b.HasKey("UploadId");
@@ -101,6 +108,26 @@ namespace Lamina.Migrations.Sqlite
                     b.Property<string>("BucketName")
                         .IsRequired()
                         .HasMaxLength(63)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecksumCRC32")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecksumCRC32C")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecksumCRC64NVME")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecksumSHA1")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecksumSHA256")
+                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("ContentType")
@@ -156,6 +183,26 @@ namespace Lamina.Migrations.Sqlite
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("ChecksumCRC32")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecksumCRC32C")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecksumCRC64NVME")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecksumSHA1")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecksumSHA256")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ETag")
                         .IsRequired()
                         .HasMaxLength(34)
@@ -181,6 +228,17 @@ namespace Lamina.Migrations.Sqlite
                         .IsUnique();
 
                     b.ToTable("UploadParts");
+                });
+
+            modelBuilder.Entity("Lamina.Storage.Sql.Entities.UploadPartEntity", b =>
+                {
+                    b.HasOne("Lamina.Storage.Sql.Entities.MultipartUploadEntity", "Upload")
+                        .WithMany()
+                        .HasForeignKey("UploadId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Upload");
                 });
 #pragma warning restore 612, 618
         }

@@ -37,7 +37,7 @@ public class SqlObjectMetadataStorageTests : IDisposable
         };
 
         // Act
-        var result = await _storage.StoreMetadataAsync(bucketName, key, etag, size, request);
+        var result = await _storage.StoreMetadataAsync(bucketName, key, etag, size, request, null);
 
         // Assert
         Assert.NotNull(result);
@@ -62,10 +62,10 @@ public class SqlObjectMetadataStorageTests : IDisposable
         var size2 = 2048L;
 
         // Create initial object
-        await _storage.StoreMetadataAsync(bucketName, key, etag1, size1);
+        await _storage.StoreMetadataAsync(bucketName, key, etag1, size1, null, null);
 
         // Act
-        var result = await _storage.StoreMetadataAsync(bucketName, key, etag2, size2);
+        var result = await _storage.StoreMetadataAsync(bucketName, key, etag2, size2, null, null);
 
         // Assert
         Assert.NotNull(result);
@@ -87,7 +87,7 @@ public class SqlObjectMetadataStorageTests : IDisposable
         var key = "test-key";
         var etag = "test-etag";
         var size = 1024L;
-        await _storage.StoreMetadataAsync(bucketName, key, etag, size);
+        await _storage.StoreMetadataAsync(bucketName, key, etag, size, null, null);
 
         // Act
         var result = await _storage.GetMetadataAsync(bucketName, key);
@@ -115,7 +115,7 @@ public class SqlObjectMetadataStorageTests : IDisposable
         // Arrange
         var bucketName = "test-bucket";
         var key = "test-key";
-        await _storage.StoreMetadataAsync(bucketName, key, "etag", 1024L);
+        await _storage.StoreMetadataAsync(bucketName, key, "etag", 1024L, null, null);
 
         // Act
         var result = await _storage.DeleteMetadataAsync(bucketName, key);
@@ -144,7 +144,7 @@ public class SqlObjectMetadataStorageTests : IDisposable
         // Arrange
         var bucketName = "test-bucket";
         var key = "test-key";
-        await _storage.StoreMetadataAsync(bucketName, key, "etag", 1024L);
+        await _storage.StoreMetadataAsync(bucketName, key, "etag", 1024L, null, null);
 
         // Act
         var result = await _storage.MetadataExistsAsync(bucketName, key);
@@ -176,7 +176,7 @@ public class SqlObjectMetadataStorageTests : IDisposable
 
         foreach (var obj in objects)
         {
-            await _storage.StoreMetadataAsync(obj.Bucket, obj.Key, "etag", 1024L);
+            await _storage.StoreMetadataAsync(obj.Bucket, obj.Key, "etag", 1024L, null, null);
         }
 
         // Act

@@ -9,6 +9,21 @@ public class MultipartUpload
     public Dictionary<string, string> Metadata { get; set; } = new();
     public string? ContentType { get; set; }
     public string? ChecksumAlgorithm { get; set; }
+
+    /// <summary>
+    /// Dictionary of part metadata keyed by part number.
+    /// Used to store checksums for each uploaded part.
+    /// </summary>
+    public Dictionary<int, PartMetadata> Parts { get; set; } = new();
+}
+
+public class PartMetadata
+{
+    public string? ChecksumCRC32 { get; set; }
+    public string? ChecksumCRC32C { get; set; }
+    public string? ChecksumCRC64NVME { get; set; }
+    public string? ChecksumSHA1 { get; set; }
+    public string? ChecksumSHA256 { get; set; }
 }
 
 public class UploadPart

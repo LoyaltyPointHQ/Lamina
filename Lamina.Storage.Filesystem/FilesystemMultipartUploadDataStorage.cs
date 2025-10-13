@@ -40,7 +40,7 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
         }
     }
 
-    public async Task<UploadPart> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
     {
         var partPath = GetPartPath(uploadId, partNumber);
         var partDir = Path.GetDirectoryName(partPath)!;
@@ -48,52 +48,112 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
 
         long bytesWritten = 0;
 
-        // Write the data to file, ensuring proper disposal before computing ETag
+        // Initialize checksum calculator if needed
+        StreamingChecksumCalculator? checksumCalculator = null;
+        if (checksumRequest != null)
         {
-            await using var fileStream = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
+            checksumCalculator = new StreamingChecksumCalculator(checksumRequest.Algorithm, checksumRequest.ProvidedChecksums);
+        }
 
-            while (!cancellationToken.IsCancellationRequested)
+        try
+        {
+            // Write the data to file, ensuring proper disposal before computing ETag
             {
-                var result = await dataReader.ReadAsync(cancellationToken);
-                var buffer = result.Buffer;
+                await using var fileStream = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
-                if (buffer.IsEmpty && result.IsCompleted)
+                while (!cancellationToken.IsCancellationRequested)
                 {
-                    break;
+                    var result = await dataReader.ReadAsync(cancellationToken);
+                    var buffer = result.Buffer;
+
+                    if (buffer.IsEmpty && result.IsCompleted)
+                    {
+                        break;
+                    }
+
+                    foreach (var segment in buffer)
+                    {
+                        // Calculate checksum if needed
+                        if (checksumCalculator?.HasChecksums == true)
+                        {
+                            checksumCalculator.Append(segment.Span);
+                        }
+
+                        await fileStream.WriteAsync(segment, cancellationToken);
+                        bytesWritten += segment.Length;
+                    }
+
+                    dataReader.AdvanceTo(buffer.End);
+
+                    if (result.IsCompleted)
+                    {
+                        break;
+                    }
                 }
 
-                foreach (var segment in buffer)
+                await fileStream.FlushAsync(cancellationToken);
+            } // FileStream is fully disposed here
+
+            // Validate and finalize checksums if requested
+            if (checksumCalculator?.HasChecksums == true)
+            {
+                var result = checksumCalculator.Finish();
+
+                if (!result.IsValid)
                 {
-                    await fileStream.WriteAsync(segment, cancellationToken);
-                    bytesWritten += segment.Length;
+                    // Checksum validation failed - clean up and return null
+                    if (File.Exists(partPath))
+                    {
+                        File.Delete(partPath);
+                    }
+                    return StorageResult<UploadPart>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
                 }
 
-                dataReader.AdvanceTo(buffer.End);
-
-                if (result.IsCompleted)
+                // Populate checksum fields
+                var part = new UploadPart
                 {
-                    break;
-                }
+                    PartNumber = partNumber,
+                    ETag = await ETagHelper.ComputeETagFromFileAsync(partPath),
+                    Size = bytesWritten,
+                    LastModified = DateTime.UtcNow
+                };
+
+                if (result.CalculatedChecksums.TryGetValue("CRC32", out var crc32))
+                    part.ChecksumCRC32 = crc32;
+                if (result.CalculatedChecksums.TryGetValue("CRC32C", out var crc32c))
+                    part.ChecksumCRC32C = crc32c;
+                if (result.CalculatedChecksums.TryGetValue("CRC64NVME", out var crc64))
+                    part.ChecksumCRC64NVME = crc64;
+                if (result.CalculatedChecksums.TryGetValue("SHA1", out var sha1))
+                    part.ChecksumSHA1 = sha1;
+                if (result.CalculatedChecksums.TryGetValue("SHA256", out var sha256))
+                    part.ChecksumSHA256 = sha256;
+
+                return StorageResult<UploadPart>.Success(part);
             }
+            else
+            {
+                // No checksums requested
+                var etag = await ETagHelper.ComputeETagFromFileAsync(partPath);
 
-            await fileStream.FlushAsync(cancellationToken);
-        } // FileStream is fully disposed here
+                var part = new UploadPart
+                {
+                    PartNumber = partNumber,
+                    ETag = etag,
+                    Size = bytesWritten,
+                    LastModified = DateTime.UtcNow
+                };
 
-        // Now compute ETag from the file on disk with a new file handle
-        var etag = await ETagHelper.ComputeETagFromFileAsync(partPath);
-
-        var part = new UploadPart
+                return StorageResult<UploadPart>.Success(part);
+            }
+        }
+        finally
         {
-            PartNumber = partNumber,
-            ETag = etag,
-            Size = bytesWritten,
-            LastModified = DateTime.UtcNow
-        };
-
-        return part;
+            checksumCalculator?.Dispose();
+        }
     }
 
-    public async Task<UploadPart?> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkedDataParser chunkedDataParser, IChunkSignatureValidator chunkValidator, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkedDataParser chunkedDataParser, IChunkSignatureValidator chunkValidator, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
     {
         var partPath = GetPartPath(uploadId, partNumber);
         var partDir = Path.GetDirectoryName(partPath)!;
@@ -101,6 +161,13 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
 
         // Create a temporary file for validated data
         var tempPath = Path.Combine(partDir, $".lamina-tmp-{Guid.NewGuid():N}");
+
+        // Initialize checksum calculator if needed
+        StreamingChecksumCalculator? checksumCalculator = null;
+        if (checksumRequest != null)
+        {
+            checksumCalculator = new StreamingChecksumCalculator(checksumRequest.Algorithm, checksumRequest.ProvidedChecksums);
+        }
 
         try
         {
@@ -131,24 +198,88 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
                     }
                 }
 
-                return null;
+                return StorageResult<UploadPart>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
             }
 
-            // Compute ETag from the temp file
-            var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
-
-            // Atomically move temp file to final location
-            File.Move(tempPath, partPath, overwrite: true);
-
-            var part = new UploadPart
+            // Calculate checksums from the temp file if requested
+            if (checksumCalculator?.HasChecksums == true)
             {
-                PartNumber = partNumber,
-                ETag = etag,
-                Size = parseResult.TotalBytesWritten,
-                LastModified = DateTime.UtcNow
-            };
+                await using var fileStream = File.OpenRead(tempPath);
+                var buffer = new byte[8192];
+                int read;
+                while ((read = await fileStream.ReadAsync(buffer, cancellationToken)) > 0)
+                {
+                    checksumCalculator.Append(buffer.AsSpan(0, read));
+                }
 
-            return part;
+                var result = checksumCalculator.Finish();
+
+                if (!result.IsValid)
+                {
+                    // Checksum validation failed - clean up temp file and return null
+                    _logger.LogWarning("Checksum validation failed for part {PartNumber} of upload {UploadId}: {Error}", partNumber, uploadId, result.ErrorMessage);
+
+                    if (File.Exists(tempPath))
+                    {
+                        try
+                        {
+                            File.Delete(tempPath);
+                        }
+                        catch (Exception cleanupEx)
+                        {
+                            _logger.LogWarning(cleanupEx, "Failed to clean up temporary file: {TempPath}", tempPath);
+                        }
+                    }
+
+                    return StorageResult<UploadPart>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
+                }
+
+                // Compute ETag from the temp file
+                var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
+
+                // Atomically move temp file to final location
+                File.Move(tempPath, partPath, overwrite: true);
+
+                var part = new UploadPart
+                {
+                    PartNumber = partNumber,
+                    ETag = etag,
+                    Size = parseResult.TotalBytesWritten,
+                    LastModified = DateTime.UtcNow
+                };
+
+                // Populate checksum fields
+                if (result.CalculatedChecksums.TryGetValue("CRC32", out var crc32))
+                    part.ChecksumCRC32 = crc32;
+                if (result.CalculatedChecksums.TryGetValue("CRC32C", out var crc32c))
+                    part.ChecksumCRC32C = crc32c;
+                if (result.CalculatedChecksums.TryGetValue("CRC64NVME", out var crc64))
+                    part.ChecksumCRC64NVME = crc64;
+                if (result.CalculatedChecksums.TryGetValue("SHA1", out var sha1))
+                    part.ChecksumSHA1 = sha1;
+                if (result.CalculatedChecksums.TryGetValue("SHA256", out var sha256))
+                    part.ChecksumSHA256 = sha256;
+
+                return StorageResult<UploadPart>.Success(part);
+            }
+            else
+            {
+                // No checksums requested
+                var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
+
+                // Atomically move temp file to final location
+                File.Move(tempPath, partPath, overwrite: true);
+
+                var part = new UploadPart
+                {
+                    PartNumber = partNumber,
+                    ETag = etag,
+                    Size = parseResult.TotalBytesWritten,
+                    LastModified = DateTime.UtcNow
+                };
+
+                return StorageResult<UploadPart>.Success(part);
+            }
         }
         catch
         {
@@ -166,6 +297,10 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
             }
 
             throw;
+        }
+        finally
+        {
+            checksumCalculator?.Dispose();
         }
     }
 

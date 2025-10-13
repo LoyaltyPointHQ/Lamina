@@ -316,6 +316,28 @@ public class Part
 
     [XmlElement("Size")]
     public long Size { get; set; }
+
+    [XmlElement("ChecksumCRC32")]
+    public string? ChecksumCRC32 { get; set; }
+
+    [XmlElement("ChecksumCRC32C")]
+    public string? ChecksumCRC32C { get; set; }
+
+    [XmlElement("ChecksumCRC64NVME")]
+    public string? ChecksumCRC64NVME { get; set; }
+
+    [XmlElement("ChecksumSHA1")]
+    public string? ChecksumSHA1 { get; set; }
+
+    [XmlElement("ChecksumSHA256")]
+    public string? ChecksumSHA256 { get; set; }
+
+    // Conditionally serialize checksum fields only when they have values
+    public bool ShouldSerializeChecksumCRC32() => !string.IsNullOrEmpty(ChecksumCRC32);
+    public bool ShouldSerializeChecksumCRC32C() => !string.IsNullOrEmpty(ChecksumCRC32C);
+    public bool ShouldSerializeChecksumCRC64NVME() => !string.IsNullOrEmpty(ChecksumCRC64NVME);
+    public bool ShouldSerializeChecksumSHA1() => !string.IsNullOrEmpty(ChecksumSHA1);
+    public bool ShouldSerializeChecksumSHA256() => !string.IsNullOrEmpty(ChecksumSHA256);
 }
 
 [XmlRoot("ListMultipartUploadsResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]

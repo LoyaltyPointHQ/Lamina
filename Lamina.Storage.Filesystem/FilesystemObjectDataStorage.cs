@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO.Pipelines;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
@@ -41,11 +42,12 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
 
 
-    public async Task<StorageResult<(long size, string etag)>> StoreDataAsync(
+    public async Task<StorageResult<(long size, string etag, Dictionary<string, string> checksums)>> StoreDataAsync(
         string bucketName,
         string key,
         PipeReader dataReader,
         IChunkSignatureValidator? chunkValidator,
+        ChecksumRequest? checksumRequest,
         CancellationToken cancellationToken = default
     )
     {
@@ -62,10 +64,18 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
         // Create a temporary file in the same directory to ensure atomic move
         var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
+
+        // Initialize checksum calculator if needed
+        StreamingChecksumCalculator? checksumCalculator = null;
+        if (checksumRequest != null)
+        {
+            checksumCalculator = new StreamingChecksumCalculator(checksumRequest.Algorithm, checksumRequest.ProvidedChecksums);
+        }
+
         try
         {
             long bytesWritten;
-            
+
             // Handle chunked data with validation if validator is provided
             if (chunkValidator != null)
             {
@@ -81,7 +91,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                     await fileStream.FlushAsync(cancellationToken);
                     fileStream.Close();
                     File.Delete(tempPath);
-                    return StorageResult<(long size, string etag)>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
+                    return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
                 }
 
                 bytesWritten = parseResult.TotalBytesWritten;
@@ -91,8 +101,73 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             {
                 // Standard write without chunked encoding
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
-                bytesWritten = await PipeReaderHelper.CopyToAsync(dataReader, fileStream, false, cancellationToken);
+
+                // If we need checksums, we need to calculate while writing
+                if (checksumCalculator?.HasChecksums == true)
+                {
+                    bytesWritten = 0;
+                    ReadResult readResult;
+                    do
+                    {
+                        readResult = await dataReader.ReadAsync(cancellationToken);
+                        var buffer = readResult.Buffer;
+
+                        foreach (var segment in buffer)
+                        {
+                            // Update checksum calculator
+                            checksumCalculator.Append(segment.Span);
+
+                            // Write to file
+                            await fileStream.WriteAsync(segment, cancellationToken);
+                            bytesWritten += segment.Length;
+                        }
+
+                        dataReader.AdvanceTo(buffer.End);
+                    } while (!readResult.IsCompleted);
+
+                    await dataReader.CompleteAsync();
+                }
+                else
+                {
+                    bytesWritten = await PipeReaderHelper.CopyToAsync(dataReader, fileStream, false, cancellationToken);
+                }
+
                 await fileStream.FlushAsync(cancellationToken);
+            }
+
+            // Calculate checksums from the file if needed but not yet calculated
+            var checksums = new Dictionary<string, string>();
+            if (checksumCalculator?.HasChecksums == true)
+            {
+                // If we didn't calculate during write (chunked path), read file now
+                if (chunkValidator != null)
+                {
+                    await using var fileStream = File.OpenRead(tempPath);
+                    var buffer = ArrayPool<byte>.Shared.Rent(8192);
+                    try
+                    {
+                        int read;
+                        while ((read = await fileStream.ReadAsync(buffer, cancellationToken)) > 0)
+                        {
+                            checksumCalculator.Append(buffer.AsSpan(0, read));
+                        }
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(buffer);
+                    }
+                }
+
+                var result = checksumCalculator.Finish();
+
+                if (!result.IsValid)
+                {
+                    // Checksum validation failed - clean up and return error
+                    File.Delete(tempPath);
+                    return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
+                }
+
+                checksums = result.CalculatedChecksums;
             }
 
             // Now compute ETag from the temp file on disk with a new file handle
@@ -101,7 +176,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             // Atomically move the temp file to the final location
             await _networkHelper.AtomicMoveAsync(tempPath, dataPath, overwrite: true);
 
-            return StorageResult<(long size, string etag)>.Success((bytesWritten, etag));
+            return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Success((bytesWritten, etag, checksums));
         }
         catch
         {
@@ -119,6 +194,10 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             }
 
             throw;
+        }
+        finally
+        {
+            checksumCalculator?.Dispose();
         }
     }
 

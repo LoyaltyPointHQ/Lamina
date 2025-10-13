@@ -81,4 +81,22 @@ public class SqlMultipartUploadMetadataStorage : IMultipartUploadMetadataStorage
 
         return entities.Select(e => e.ToMultipartUpload()).ToList();
     }
+
+    public async Task UpdateUploadMetadataAsync(string bucketName, string key, string uploadId, MultipartUpload upload, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(bucketName);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        ArgumentException.ThrowIfNullOrEmpty(uploadId);
+        ArgumentNullException.ThrowIfNull(upload);
+
+        var entity = await _context.MultipartUploads
+            .FirstOrDefaultAsync(u => u.BucketName == bucketName && u.Key == key && u.UploadId == uploadId, cancellationToken);
+
+        if (entity != null)
+        {
+            // Update the entity from the upload model
+            entity.UpdateFromMultipartUpload(upload);
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+    }
 }

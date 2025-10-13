@@ -232,7 +232,7 @@ public class S3ObjectsController : S3ControllerBase
         var checksumAlgorithmValue = checksumAlgorithm.ToString();
         
         // Validate checksum algorithm if provided
-        if (!string.IsNullOrEmpty(checksumAlgorithmValue) && !ChecksumHelper.IsValidAlgorithm(checksumAlgorithmValue))
+        if (!string.IsNullOrEmpty(checksumAlgorithmValue) && !StreamingChecksumCalculator.IsValidAlgorithm(checksumAlgorithmValue))
         {
             return S3Error("InvalidArgument", $"Invalid checksum algorithm: {checksumAlgorithmValue}. Valid values are: CRC32, CRC32C, SHA1, SHA256, CRC64NVME", $"/{bucketName}/{key}", 400);
         }
@@ -262,11 +262,20 @@ public class S3ObjectsController : S3ControllerBase
         // Check if there's a chunk validator from the authentication middleware
         var chunkValidator = HttpContext.Items["ChunkValidator"] as IChunkSignatureValidator;
 
-        var s3Object = chunkValidator != null
+        var storeResult = chunkValidator != null
             ? await _objectStorage.PutObjectAsync(bucketName, key, reader, chunkValidator, putRequest, cancellationToken)
             : await _objectStorage.PutObjectAsync(bucketName, key, reader, putRequest, cancellationToken);
-        if (s3Object == null)
+
+        if (!storeResult.IsSuccess)
         {
+            // Handle specific error cases
+            if (storeResult.ErrorCode == "InvalidChecksum")
+            {
+                _logger.LogWarning("Checksum validation failed for object {Key} in bucket {BucketName}: {ErrorMessage}",
+                    key, bucketName, storeResult.ErrorMessage);
+                return S3Error("InvalidChecksum", storeResult.ErrorMessage!, $"/{bucketName}/{key}", 400);
+            }
+
             // If we had a chunk validator and the operation failed, it's likely due to invalid signature
             if (chunkValidator != null)
             {
@@ -274,9 +283,12 @@ public class S3ObjectsController : S3ControllerBase
                 return S3Error("SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", $"/{bucketName}/{key}", 403);
             }
 
-            _logger.LogError("Failed to put object {Key} in bucket {BucketName}", key, bucketName);
+            _logger.LogError("Failed to put object {Key} in bucket {BucketName}: {ErrorCode} - {ErrorMessage}",
+                key, bucketName, storeResult.ErrorCode, storeResult.ErrorMessage);
             return StatusCode(500);
         }
+
+        var s3Object = storeResult.Value!;
 
         _logger.LogInformation("Object {Key} stored successfully in bucket {BucketName}, ETag: {ETag}, Size: {Size}", key, bucketName, s3Object.ETag, s3Object.Size);
         Response.Headers.Append("ETag", $"\"{s3Object.ETag}\"");

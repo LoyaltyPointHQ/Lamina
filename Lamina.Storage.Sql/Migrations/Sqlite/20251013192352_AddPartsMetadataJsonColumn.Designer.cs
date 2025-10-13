@@ -3,52 +3,50 @@ using System;
 using Lamina.Storage.Sql.Context;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
 #nullable disable
 
-namespace Lamina.Migrations.PostgreSql
+namespace Lamina.Storage.Sql.Migrations.Sqlite
 {
     [DbContext(typeof(LaminaDbContext))]
-    partial class LaminaDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251013192352_AddPartsMetadataJsonColumn")]
+    partial class AddPartsMetadataJsonColumn
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.9")
-                .HasAnnotation("Relational:MaxIdentifierLength", 63);
-
-            NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+            modelBuilder.HasAnnotation("ProductVersion", "9.0.9");
 
             modelBuilder.Entity("Lamina.Storage.Sql.Entities.BucketEntity", b =>
                 {
                     b.Property<string>("Name")
                         .HasMaxLength(63)
-                        .HasColumnType("character varying(63)");
+                        .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreationDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("OwnerDisplayName")
                         .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("OwnerId")
                         .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("StorageClass")
                         .HasMaxLength(50)
-                        .HasColumnType("character varying(50)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("TagsJson")
                         .IsRequired()
-                        .HasColumnType("jsonb");
+                        .HasColumnType("TEXT");
 
                     b.Property<int>("Type")
-                        .HasColumnType("integer");
+                        .HasColumnType("INTEGER");
 
                     b.HasKey("Name");
 
@@ -63,35 +61,35 @@ namespace Lamina.Migrations.PostgreSql
                 {
                     b.Property<string>("UploadId")
                         .HasMaxLength(36)
-                        .HasColumnType("character varying(36)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("BucketName")
                         .IsRequired()
                         .HasMaxLength(63)
-                        .HasColumnType("character varying(63)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ChecksumAlgorithm")
                         .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ContentType")
                         .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
+                        .HasColumnType("TEXT");
 
                     b.Property<DateTime>("Initiated")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasMaxLength(1024)
-                        .HasColumnType("character varying(1024)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("MetadataJson")
                         .IsRequired()
-                        .HasColumnType("jsonb");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("PartsMetadataJson")
-                        .HasColumnType("text");
+                        .HasColumnType("TEXT");
 
                     b.HasKey("UploadId");
 
@@ -108,67 +106,65 @@ namespace Lamina.Migrations.PostgreSql
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("BucketName")
                         .IsRequired()
                         .HasMaxLength(63)
-                        .HasColumnType("character varying(63)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ChecksumCRC32")
                         .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ChecksumCRC32C")
                         .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ChecksumCRC64NVME")
                         .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ChecksumSHA1")
                         .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ChecksumSHA256")
                         .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ContentType")
                         .IsRequired()
                         .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ETag")
                         .IsRequired()
                         .HasMaxLength(34)
-                        .HasColumnType("character varying(34)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasMaxLength(1024)
-                        .HasColumnType("character varying(1024)");
+                        .HasColumnType("TEXT");
 
                     b.Property<DateTime>("LastModified")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("MetadataJson")
                         .IsRequired()
-                        .HasColumnType("jsonb");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("OwnerDisplayName")
                         .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("OwnerId")
                         .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
+                        .HasColumnType("TEXT");
 
                     b.Property<long>("Size")
-                        .HasColumnType("bigint");
+                        .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 
@@ -188,48 +184,46 @@ namespace Lamina.Migrations.PostgreSql
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("ChecksumCRC32")
                         .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ChecksumCRC32C")
                         .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ChecksumCRC64NVME")
                         .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ChecksumSHA1")
                         .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ChecksumSHA256")
                         .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ETag")
                         .IsRequired()
                         .HasMaxLength(34)
-                        .HasColumnType("character varying(34)");
+                        .HasColumnType("TEXT");
 
                     b.Property<DateTime>("LastModified")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("TEXT");
 
                     b.Property<int>("PartNumber")
-                        .HasColumnType("integer");
+                        .HasColumnType("INTEGER");
 
                     b.Property<long>("Size")
-                        .HasColumnType("bigint");
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("UploadId")
                         .IsRequired()
                         .HasMaxLength(36)
-                        .HasColumnType("character varying(36)");
+                        .HasColumnType("TEXT");
 
                     b.HasKey("Id");
 

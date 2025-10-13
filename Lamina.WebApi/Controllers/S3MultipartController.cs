@@ -166,7 +166,7 @@ public class S3MultipartController : S3ControllerBase
         var checksumAlgorithmValue = checksumAlgorithm.ToString();
         
         // Validate checksum algorithm if provided
-        if (!string.IsNullOrEmpty(checksumAlgorithmValue) && !ChecksumHelper.IsValidAlgorithm(checksumAlgorithmValue))
+        if (!string.IsNullOrEmpty(checksumAlgorithmValue) && !StreamingChecksumCalculator.IsValidAlgorithm(checksumAlgorithmValue))
         {
             return S3Error("InvalidArgument", $"Invalid checksum algorithm: {checksumAlgorithmValue}. Valid values are: CRC32, CRC32C, SHA1, SHA256, CRC64NVME", $"/{bucketName}/{key}", 400);
         }
@@ -243,6 +243,49 @@ public class S3MultipartController : S3ControllerBase
             return contentSha256Error;
         }
 
+        // Parse checksum headers
+        Request.Headers.TryGetValue("x-amz-checksum-algorithm", out var checksumAlgorithm);
+        Request.Headers.TryGetValue("x-amz-checksum-crc32", out var checksumCrc32);
+        Request.Headers.TryGetValue("x-amz-checksum-crc32c", out var checksumCrc32c);
+        Request.Headers.TryGetValue("x-amz-checksum-sha1", out var checksumSha1);
+        Request.Headers.TryGetValue("x-amz-checksum-sha256", out var checksumSha256);
+        Request.Headers.TryGetValue("x-amz-checksum-crc64nvme", out var checksumCrc64nvme);
+        
+        var checksumAlgorithmValue = checksumAlgorithm.ToString();
+        
+        // Validate checksum algorithm if provided
+        if (!string.IsNullOrEmpty(checksumAlgorithmValue) && !StreamingChecksumCalculator.IsValidAlgorithm(checksumAlgorithmValue))
+        {
+            return S3Error("InvalidArgument", $"Invalid checksum algorithm: {checksumAlgorithmValue}. Valid values are: CRC32, CRC32C, SHA1, SHA256, CRC64NVME", $"/{bucketName}/{key}", 400);
+        }
+
+        // Build checksum request if any checksums were provided
+        ChecksumRequest? checksumRequest = null;
+        if (!string.IsNullOrEmpty(checksumAlgorithmValue) || 
+            !string.IsNullOrEmpty(checksumCrc32.ToString()) ||
+            !string.IsNullOrEmpty(checksumCrc32c.ToString()) ||
+            !string.IsNullOrEmpty(checksumSha1.ToString()) ||
+            !string.IsNullOrEmpty(checksumSha256.ToString()) ||
+            !string.IsNullOrEmpty(checksumCrc64nvme.ToString()))
+        {
+            checksumRequest = new ChecksumRequest
+            {
+                Algorithm = string.IsNullOrEmpty(checksumAlgorithmValue) ? null : checksumAlgorithmValue,
+                ProvidedChecksums = new Dictionary<string, string>()
+            };
+            
+            if (!string.IsNullOrEmpty(checksumCrc32.ToString()))
+                checksumRequest.ProvidedChecksums["CRC32"] = checksumCrc32.ToString();
+            if (!string.IsNullOrEmpty(checksumCrc32c.ToString()))
+                checksumRequest.ProvidedChecksums["CRC32C"] = checksumCrc32c.ToString();
+            if (!string.IsNullOrEmpty(checksumSha1.ToString()))
+                checksumRequest.ProvidedChecksums["SHA1"] = checksumSha1.ToString();
+            if (!string.IsNullOrEmpty(checksumSha256.ToString()))
+                checksumRequest.ProvidedChecksums["SHA256"] = checksumSha256.ToString();
+            if (!string.IsNullOrEmpty(checksumCrc64nvme.ToString()))
+                checksumRequest.ProvidedChecksums["CRC64NVME"] = checksumCrc64nvme.ToString();
+        }
+
         try
         {
             // Use PipeReader from the request body
@@ -251,23 +294,34 @@ public class S3MultipartController : S3ControllerBase
             // Check if there's a chunk validator from the authentication middleware (for streaming uploads)
             var chunkValidator = HttpContext.Items["ChunkValidator"] as IChunkSignatureValidator;
 
-            var part = chunkValidator != null
-                ? await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, chunkValidator, cancellationToken)
-                : await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, cancellationToken);
+            var partResult = chunkValidator != null
+                ? await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, chunkValidator, checksumRequest, cancellationToken)
+                : await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, checksumRequest, cancellationToken);
 
-            if (part == null)
+            if (!partResult.IsSuccess)
             {
+                // Handle specific error cases
+                if (partResult.ErrorCode == "InvalidChecksum")
+                {
+                    _logger.LogWarning("Checksum validation failed for part {PartNumber} of upload {UploadId}: {ErrorMessage}",
+                        partNumber, uploadId, partResult.ErrorMessage);
+                    return S3Error("InvalidChecksum", partResult.ErrorMessage!, $"/{bucketName}/{key}", 400);
+                }
+
                 // If we had a chunk validator and the operation failed, it's likely due to invalid signature
-                if (chunkValidator != null)
+                if (chunkValidator != null || partResult.ErrorCode == "SignatureDoesNotMatch")
                 {
                     _logger.LogWarning("Chunk signature validation failed for part {PartNumber} of upload {UploadId}", partNumber, uploadId);
                     return S3Error("SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", $"/{bucketName}/{key}", 403);
                 }
 
                 // Otherwise, generic error
+                _logger.LogError("Failed to upload part {PartNumber} of upload {UploadId}: {ErrorCode} - {ErrorMessage}",
+                    partNumber, uploadId, partResult.ErrorCode, partResult.ErrorMessage);
                 return StatusCode(500);
             }
 
+            var part = partResult.Value!;
             Response.Headers.Append("ETag", $"\"{part.ETag}\"");
             
             // Add checksum headers if present
@@ -579,7 +633,12 @@ public class S3MultipartController : S3ControllerBase
                 PartNumber = p.PartNumber,
                 LastModified = p.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
                 ETag = $"\"{p.ETag}\"",
-                Size = p.Size
+                Size = p.Size,
+                ChecksumCRC32 = p.ChecksumCRC32,
+                ChecksumCRC32C = p.ChecksumCRC32C,
+                ChecksumCRC64NVME = p.ChecksumCRC64NVME,
+                ChecksumSHA1 = p.ChecksumSHA1,
+                ChecksumSHA256 = p.ChecksumSHA256
             }).ToList()
         };
 

@@ -50,7 +50,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         }
     }
 
-    public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
+    public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, CancellationToken cancellationToken = default)
     {
         if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
@@ -68,13 +68,32 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             ContentType = request?.ContentType ?? "application/octet-stream",
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),
             OwnerId = request?.OwnerId,
-            OwnerDisplayName = request?.OwnerDisplayName,
-            ChecksumCRC32 = request?.ChecksumCRC32,
-            ChecksumCRC32C = request?.ChecksumCRC32C,
-            ChecksumCRC64NVME = request?.ChecksumCRC64NVME,
-            ChecksumSHA1 = request?.ChecksumSHA1,
-            ChecksumSHA256 = request?.ChecksumSHA256
+            OwnerDisplayName = request?.OwnerDisplayName
         };
+
+        // Populate checksum fields from calculated checksums (these take precedence over request checksums)
+        if (calculatedChecksums != null)
+        {
+            if (calculatedChecksums.TryGetValue("CRC32", out var crc32))
+                metadata.ChecksumCRC32 = crc32;
+            if (calculatedChecksums.TryGetValue("CRC32C", out var crc32c))
+                metadata.ChecksumCRC32C = crc32c;
+            if (calculatedChecksums.TryGetValue("CRC64NVME", out var crc64nvme))
+                metadata.ChecksumCRC64NVME = crc64nvme;
+            if (calculatedChecksums.TryGetValue("SHA1", out var sha1))
+                metadata.ChecksumSHA1 = sha1;
+            if (calculatedChecksums.TryGetValue("SHA256", out var sha256))
+                metadata.ChecksumSHA256 = sha256;
+        }
+        else
+        {
+            // Fall back to request checksums if no calculated checksums provided
+            metadata.ChecksumCRC32 = request?.ChecksumCRC32;
+            metadata.ChecksumCRC32C = request?.ChecksumCRC32C;
+            metadata.ChecksumCRC64NVME = request?.ChecksumCRC64NVME;
+            metadata.ChecksumSHA1 = request?.ChecksumSHA1;
+            metadata.ChecksumSHA256 = request?.ChecksumSHA256;
+        }
 
         var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
 

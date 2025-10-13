@@ -52,4 +52,11 @@ public class InMemoryMultipartUploadMetadataStorage : IMultipartUploadMetadataSt
 
         return Task.FromResult(bucketUploads);
     }
+
+    public Task UpdateUploadMetadataAsync(string bucketName, string key, string uploadId, MultipartUpload upload, CancellationToken cancellationToken = default)
+    {
+        var uploadKey = $"{bucketName}/{key}/{uploadId}";
+        _uploads[uploadKey] = upload;
+        return Task.CompletedTask;
+    }
 }

@@ -37,14 +37,14 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         return await _metadataStorage.InitiateUploadAsync(bucketName, key, request, cancellationToken);
     }
 
-    public async Task<UploadPart> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, CancellationToken cancellationToken = default)
     {
         // Data-first approach: Store the part data without checking metadata
         // This allows parts to be uploaded even if metadata was lost or corrupted
-        return await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, cancellationToken);
+        return await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, null, cancellationToken);
     }
 
-    public async Task<UploadPart?> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, CancellationToken cancellationToken = default)
     {
         // If no chunk validator, use the non-validating version
         if (chunkValidator == null)
@@ -54,7 +54,76 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
 
         // Data-first approach: Don't check metadata, just validate and store the part
         // Use the specialized overload that handles validation and storage in a single pass
-        return await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, _chunkedDataParser, chunkValidator, cancellationToken);
+        return await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, _chunkedDataParser, chunkValidator, null, cancellationToken);
+    }
+
+    public async Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
+    {
+        // Data-first approach: Store the part data without checking metadata
+        // This allows parts to be uploaded even if metadata was lost or corrupted
+        var result = await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, checksumRequest, cancellationToken);
+
+        // Store part checksums in upload metadata if upload succeeded and has checksums
+        if (result.IsSuccess && result.Value != null && HasChecksums(result.Value))
+        {
+            var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
+            if (upload != null)
+            {
+                upload.Parts[partNumber] = new PartMetadata
+                {
+                    ChecksumCRC32 = result.Value.ChecksumCRC32,
+                    ChecksumCRC32C = result.Value.ChecksumCRC32C,
+                    ChecksumCRC64NVME = result.Value.ChecksumCRC64NVME,
+                    ChecksumSHA1 = result.Value.ChecksumSHA1,
+                    ChecksumSHA256 = result.Value.ChecksumSHA256
+                };
+                await _metadataStorage.UpdateUploadMetadataAsync(bucketName, key, uploadId, upload, cancellationToken);
+            }
+        }
+
+        return result;
+    }
+
+    private static bool HasChecksums(UploadPart part)
+    {
+        return !string.IsNullOrEmpty(part.ChecksumCRC32) ||
+               !string.IsNullOrEmpty(part.ChecksumCRC32C) ||
+               !string.IsNullOrEmpty(part.ChecksumCRC64NVME) ||
+               !string.IsNullOrEmpty(part.ChecksumSHA1) ||
+               !string.IsNullOrEmpty(part.ChecksumSHA256);
+    }
+
+    public async Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
+    {
+        // If no chunk validator, use the version with just checksum request
+        if (chunkValidator == null)
+        {
+            return await UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, checksumRequest, cancellationToken);
+        }
+
+        // Data-first approach: Don't check metadata, just validate and store the part
+        // Use the specialized overload that handles validation and storage in a single pass
+        var result = await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, _chunkedDataParser, chunkValidator, checksumRequest, cancellationToken);
+
+        // Store part checksums in upload metadata if upload succeeded and has checksums
+        if (result.IsSuccess && result.Value != null && HasChecksums(result.Value))
+        {
+            var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
+            if (upload != null)
+            {
+                upload.Parts[partNumber] = new PartMetadata
+                {
+                    ChecksumCRC32 = result.Value.ChecksumCRC32,
+                    ChecksumCRC32C = result.Value.ChecksumCRC32C,
+                    ChecksumCRC64NVME = result.Value.ChecksumCRC64NVME,
+                    ChecksumSHA1 = result.Value.ChecksumSHA1,
+                    ChecksumSHA256 = result.Value.ChecksumSHA256
+                };
+                await _metadataStorage.UpdateUploadMetadataAsync(bucketName, key, uploadId, upload, cancellationToken);
+            }
+        }
+
+        return result;
     }
 
     public async Task<StorageResult<CompleteMultipartUploadResponse>> CompleteMultipartUploadAsync(string bucketName, string key, CompleteMultipartUploadRequest request, CancellationToken cancellationToken = default)
@@ -116,7 +185,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         var (size, _) = await _objectDataStorage.StoreMultipartDataAsync(bucketName, key, readersList, cancellationToken);
 
         // Store metadata with the correct multipart ETag
-        await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, cancellationToken);
+        await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, null, cancellationToken);
 
         // Clean up multipart upload
         await _dataStorage.DeleteAllPartsAsync(bucketName, key, request.UploadId, cancellationToken);
@@ -140,7 +209,29 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
 
     public async Task<List<UploadPart>> ListPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
     {
-        return await _dataStorage.GetStoredPartsAsync(bucketName, key, uploadId, cancellationToken);
+        // Get parts from data storage (includes ETag, Size, LastModified)
+        var parts = await _dataStorage.GetStoredPartsAsync(bucketName, key, uploadId, cancellationToken);
+
+        // Get upload metadata which contains part checksums
+        var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
+
+        // Merge checksums from metadata into parts
+        if (upload != null && upload.Parts.Count > 0)
+        {
+            foreach (var part in parts)
+            {
+                if (upload.Parts.TryGetValue(part.PartNumber, out var partMetadata))
+                {
+                    part.ChecksumCRC32 = partMetadata.ChecksumCRC32;
+                    part.ChecksumCRC32C = partMetadata.ChecksumCRC32C;
+                    part.ChecksumCRC64NVME = partMetadata.ChecksumCRC64NVME;
+                    part.ChecksumSHA1 = partMetadata.ChecksumSHA1;
+                    part.ChecksumSHA256 = partMetadata.ChecksumSHA256;
+                }
+            }
+        }
+
+        return parts;
     }
 
     public async Task<List<MultipartUpload>> ListMultipartUploadsAsync(string bucketName, CancellationToken cancellationToken = default)

@@ -4,6 +4,7 @@ using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.Storage.Core;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Helpers;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -74,17 +75,18 @@ public class MultipartUploadStorageFacadeTests
 
         // Data-first approach: No metadata check required
         _mockDataStorage
-            .Setup(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(expectedPart);
+            .Setup(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<ChecksumRequest?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(StorageResult<UploadPart>.Success(expectedPart));
 
         // Act
         var result = await _facade.UploadPartAsync(bucketName, key, uploadId, partNumber, pipe.Reader);
 
         // Assert
-        Assert.Equal(expectedPart, result);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(expectedPart, result.Value);
         // Verify metadata was NOT checked (data-first approach)
         _mockMetadataStorage.Verify(x => x.GetUploadMetadataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-        _mockDataStorage.Verify(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockDataStorage.Verify(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<ChecksumRequest?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -228,7 +230,7 @@ public class MultipartUploadStorageFacadeTests
             .ReturnsAsync((100L, "final-etag"));
 
         _mockObjectMetadataStorage
-            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((S3Object?)null);
 
         _mockDataStorage
@@ -264,6 +266,7 @@ public class MultipartUploadStorageFacadeTests
                     req.ContentType == "application/octet-stream" &&
                     req.Metadata != null &&
                     req.Metadata.Count == 0),
+                It.IsAny<Dictionary<string, string>?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -321,7 +324,7 @@ public class MultipartUploadStorageFacadeTests
             .ReturnsAsync((100L, "final-etag"));
 
         _mockObjectMetadataStorage
-            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((S3Object?)null);
 
         _mockDataStorage
@@ -352,6 +355,7 @@ public class MultipartUploadStorageFacadeTests
                     req.Metadata.Count == 2 &&
                     req.Metadata["author"] == "John Doe" &&
                     req.Metadata["project"] == "Test Project"),
+                It.IsAny<Dictionary<string, string>?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -451,16 +455,17 @@ public class MultipartUploadStorageFacadeTests
             .ReturnsAsync(new ChunkedDataResult { Success = true, TotalBytesWritten = 100L });
 
         _mockDataStorage
-            .Setup(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<IChunkedDataParser>(), It.IsAny<IChunkSignatureValidator>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(expectedPart);
+            .Setup(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<IChunkedDataParser>(), It.IsAny<IChunkSignatureValidator>(), It.IsAny<ChecksumRequest?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(StorageResult<UploadPart>.Success(expectedPart));
 
         // Act
         var result = await _facade.UploadPartAsync(bucketName, key, uploadId, partNumber, pipe.Reader, mockValidator.Object);
 
         // Assert
-        Assert.Equal(expectedPart, result);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(expectedPart, result.Value);
         // Verify the data storage received the validator (parser usage is an implementation detail of the storage layer)
-        _mockDataStorage.Verify(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<IChunkedDataParser>(), mockValidator.Object, It.IsAny<CancellationToken>()), Times.Once);
+        _mockDataStorage.Verify(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<IChunkedDataParser>(), mockValidator.Object, It.IsAny<ChecksumRequest?>(), It.IsAny<CancellationToken>()), Times.Once);
         // Verify metadata was NOT checked (data-first approach)
         _mockMetadataStorage.Verify(x => x.GetUploadMetadataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -480,16 +485,17 @@ public class MultipartUploadStorageFacadeTests
 
         // Data-first approach: Storage layer handles validation failure
         _mockDataStorage
-            .Setup(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<IChunkedDataParser>(), mockValidator.Object, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((UploadPart?)null); // Storage returns null when validation fails
+            .Setup(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<IChunkedDataParser>(), mockValidator.Object, It.IsAny<ChecksumRequest?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(StorageResult<UploadPart>.Error("SignatureDoesNotMatch", "Chunk signature validation failed"));
 
         // Act
         var result = await _facade.UploadPartAsync(bucketName, key, uploadId, partNumber, pipe.Reader, mockValidator.Object);
 
         // Assert
-        Assert.Null(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal("SignatureDoesNotMatch", result.ErrorCode);
         // Verify the storage was called (it's responsible for handling validation)
-        _mockDataStorage.Verify(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<IChunkedDataParser>(), mockValidator.Object, It.IsAny<CancellationToken>()), Times.Once);
+        _mockDataStorage.Verify(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<IChunkedDataParser>(), mockValidator.Object, It.IsAny<ChecksumRequest?>(), It.IsAny<CancellationToken>()), Times.Once);
         // Verify metadata was NOT checked (data-first approach)
         _mockMetadataStorage.Verify(x => x.GetUploadMetadataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -516,17 +522,18 @@ public class MultipartUploadStorageFacadeTests
 
         // But data storage still works (data-first approach)
         _mockDataStorage
-            .Setup(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(expectedPart);
+            .Setup(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<ChecksumRequest?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(StorageResult<UploadPart>.Success(expectedPart));
 
         // Act
         var result = await _facade.UploadPartAsync(bucketName, key, uploadId, partNumber, pipe.Reader);
 
         // Assert
-        Assert.Equal(expectedPart, result);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(expectedPart, result.Value);
         // Verify metadata was NOT checked (data-first approach allows uploads even without metadata)
         _mockMetadataStorage.Verify(x => x.GetUploadMetadataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-        _mockDataStorage.Verify(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockDataStorage.Verify(x => x.StorePartDataAsync(bucketName, key, uploadId, partNumber, It.IsAny<PipeReader>(), It.IsAny<ChecksumRequest?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -577,7 +584,7 @@ public class MultipartUploadStorageFacadeTests
             .ReturnsAsync((100L, "final-etag"));
 
         _mockObjectMetadataStorage
-            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((S3Object?)null);
 
         _mockDataStorage
@@ -611,6 +618,7 @@ public class MultipartUploadStorageFacadeTests
                     req.ContentType == "application/octet-stream" &&
                     req.Metadata != null &&
                     req.Metadata.Count == 0),
+                It.IsAny<Dictionary<string, string>?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -657,7 +665,7 @@ public class MultipartUploadStorageFacadeTests
             .ReturnsAsync((1024L, "etag"));
 
         _mockObjectMetadataStorage
-            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((S3Object?)null);
 
         _mockDataStorage
@@ -686,6 +694,7 @@ public class MultipartUploadStorageFacadeTests
                     req.ContentType == "application/octet-stream" &&
                     req.Metadata != null &&
                     req.Metadata.Count == 0),
+                It.IsAny<Dictionary<string, string>?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }

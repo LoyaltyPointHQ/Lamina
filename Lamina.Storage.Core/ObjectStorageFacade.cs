@@ -2,6 +2,7 @@ using System.IO.Pipelines;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Helpers;
 using Microsoft.Extensions.Logging;
 
 namespace Lamina.Storage.Core;
@@ -31,43 +32,65 @@ public class ObjectStorageFacade : IObjectStorageFacade
         _contentTypeDetector = contentTypeDetector;
     }
 
-    public async Task<S3Object?> PutObjectAsync(string bucketName, string key, PipeReader dataReader, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<S3Object>> PutObjectAsync(string bucketName, string key, PipeReader dataReader, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
     {
         return await PutObjectAsync(bucketName, key, dataReader, null, request, cancellationToken);
     }
 
-    public async Task<S3Object?> PutObjectAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<S3Object>> PutObjectAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
     {
         try
         {
+            // Create ChecksumRequest from PutObjectRequest
+            ChecksumRequest? checksumRequest = null;
+            if (request != null)
+            {
+                checksumRequest = new ChecksumRequest
+                {
+                    Algorithm = request.ChecksumAlgorithm,
+                    ProvidedChecksums = new Dictionary<string, string>()
+                };
+                
+                if (!string.IsNullOrEmpty(request.ChecksumCRC32))
+                    checksumRequest.ProvidedChecksums["CRC32"] = request.ChecksumCRC32;
+                if (!string.IsNullOrEmpty(request.ChecksumCRC32C))
+                    checksumRequest.ProvidedChecksums["CRC32C"] = request.ChecksumCRC32C;
+                if (!string.IsNullOrEmpty(request.ChecksumCRC64NVME))
+                    checksumRequest.ProvidedChecksums["CRC64NVME"] = request.ChecksumCRC64NVME;
+                if (!string.IsNullOrEmpty(request.ChecksumSHA1))
+                    checksumRequest.ProvidedChecksums["SHA1"] = request.ChecksumSHA1;
+                if (!string.IsNullOrEmpty(request.ChecksumSHA256))
+                    checksumRequest.ProvidedChecksums["SHA256"] = request.ChecksumSHA256;
+            }
+
             // Store data with chunk validation and get ETag
-            var storeResult = await _dataStorage.StoreDataAsync(bucketName, key, dataReader, chunkValidator, cancellationToken);
+            var storeResult = await _dataStorage.StoreDataAsync(bucketName, key, dataReader, chunkValidator, checksumRequest, cancellationToken);
 
             // Check if storage failed
             if (!storeResult.IsSuccess)
             {
-                _logger.LogWarning("Failed to store object {Key} in bucket {BucketName}: {ErrorCode} - {ErrorMessage}", 
+                _logger.LogWarning("Failed to store object {Key} in bucket {BucketName}: {ErrorCode} - {ErrorMessage}",
                     key, bucketName, storeResult.ErrorCode, storeResult.ErrorMessage);
-                return null;
+                return StorageResult<S3Object>.Error(storeResult.ErrorCode!, storeResult.ErrorMessage!);
             }
 
-            var (size, etag) = storeResult.Value;
+            var (size, etag, checksums) = storeResult.Value;
 
             // Check if we should store metadata or just return auto-generated object
             if (ShouldStoreMetadata(key, request))
             {
                 // Store metadata
-                var s3Object = await _metadataStorage.StoreMetadataAsync(bucketName, key, etag, size, request, cancellationToken);
+                var s3Object = await _metadataStorage.StoreMetadataAsync(bucketName, key, etag, size, request, checksums, cancellationToken);
 
                 if (s3Object == null)
                 {
                     // Rollback data if metadata storage failed
                     await _dataStorage.DeleteDataAsync(bucketName, key, cancellationToken);
                     _logger.LogError("Failed to store metadata for object {Key} in bucket {BucketName}", key, bucketName);
-                    return null;
+                    return StorageResult<S3Object>.Error("InternalError", "Failed to store metadata");
                 }
 
-                return s3Object;
+                return StorageResult<S3Object>.Success(s3Object);
             }
             else
             {
@@ -76,11 +99,11 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 if (dataPath == null)
                 {
                     _logger.LogError("Data was stored but cannot be retrieved for object {Key} in bucket {BucketName}", key, bucketName);
-                    return null;
+                    return StorageResult<S3Object>.Error("InternalError", "Failed to retrieve stored data");
                 }
 
                 var contentType = GetContentTypeFromKey(key);
-                return new S3Object
+                var s3Object = new S3Object
                 {
                     Key = key,
                     BucketName = bucketName,
@@ -92,6 +115,20 @@ public class ObjectStorageFacade : IObjectStorageFacade
                     OwnerId = request?.OwnerId,
                     OwnerDisplayName = request?.OwnerDisplayName
                 };
+
+                // Populate checksum fields from calculated checksums
+                if (checksums.TryGetValue("CRC32", out var crc32))
+                    s3Object.ChecksumCRC32 = crc32;
+                if (checksums.TryGetValue("CRC32C", out var crc32c))
+                    s3Object.ChecksumCRC32C = crc32c;
+                if (checksums.TryGetValue("CRC64NVME", out var crc64nvme))
+                    s3Object.ChecksumCRC64NVME = crc64nvme;
+                if (checksums.TryGetValue("SHA1", out var sha1))
+                    s3Object.ChecksumSHA1 = sha1;
+                if (checksums.TryGetValue("SHA256", out var sha256))
+                    s3Object.ChecksumSHA256 = sha256;
+
+                return StorageResult<S3Object>.Success(s3Object);
             }
         }
         catch (Exception ex)
@@ -432,7 +469,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
             if (ShouldStoreMetadata(destKey, effectiveRequest))
             {
                 // Store metadata
-                var s3Object = await _metadataStorage.StoreMetadataAsync(destBucketName, destKey, etag, size, effectiveRequest, cancellationToken);
+                var s3Object = await _metadataStorage.StoreMetadataAsync(destBucketName, destKey, etag, size, effectiveRequest, null, cancellationToken);
 
                 if (s3Object == null)
                 {
@@ -545,7 +582,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
             try
             {
                 // Upload the data (or byte range) as a multipart part
-                var uploadPart = await _multipartUploadStorage.UploadPartAsync(
+                var uploadPartResult = await _multipartUploadStorage.UploadPartAsync(
                     destBucketName, destKey, uploadId, partNumber, reader, cancellationToken);
 
                 // Wait for write task to complete
@@ -554,7 +591,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 _logger.LogInformation("Copied part {PartNumber} from {SourceBucket}/{SourceKey} (bytes {Start}-{End}) to {DestBucket}/{DestKey} upload {UploadId}",
                     partNumber, sourceBucketName, sourceKey, startByte, endByte, destBucketName, destKey, uploadId);
 
-                return uploadPart;
+                return uploadPartResult.IsSuccess ? uploadPartResult.Value : null;
             }
             finally
             {

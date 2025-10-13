@@ -1,6 +1,7 @@
 using System.IO.Pipelines;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
+using Lamina.Storage.Core.Helpers;
 
 namespace Lamina.Storage.Core.Abstract;
 
@@ -14,7 +15,7 @@ public class ListDataResult
 
 public interface IObjectDataStorage
 {
-    Task<StorageResult<(long size, string etag)>> StoreDataAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, CancellationToken cancellationToken = default);
+    Task<StorageResult<(long size, string etag, Dictionary<string, string> checksums)>> StoreDataAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default);
     Task<(long size, string etag)> StoreMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default);
     Task<bool> WriteDataToPipeAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default);
     Task<bool> DeleteDataAsync(string bucketName, string key, CancellationToken cancellationToken = default);

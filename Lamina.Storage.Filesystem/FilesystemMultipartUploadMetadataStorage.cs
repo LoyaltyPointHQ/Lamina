@@ -135,6 +135,13 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
         return uploads.OrderBy(u => u.Initiated).ToList();
     }
 
+    public async Task UpdateUploadMetadataAsync(string bucketName, string key, string uploadId, MultipartUpload upload, CancellationToken cancellationToken = default)
+    {
+        var uploadMetadataPath = GetUploadMetadataPath(uploadId);
+        var json = JsonSerializer.Serialize(upload, new JsonSerializerOptions { WriteIndented = true });
+        await _lockManager.WriteFileAsync(uploadMetadataPath, json, cancellationToken);
+    }
+
     private string GetUploadMetadataPath(string uploadId)
     {
         if (_metadataMode == MetadataStorageMode.SeparateDirectory)

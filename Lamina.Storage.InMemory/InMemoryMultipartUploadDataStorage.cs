@@ -12,7 +12,7 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<int, UploadPart>> _uploadParts = new();
 
-    public async Task<UploadPart> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
     {
         var uploadKey = $"{bucketName}/{key}/{uploadId}";
         var parts = _uploadParts.GetOrAdd(uploadKey, _ => new ConcurrentDictionary<int, UploadPart>());
@@ -30,11 +30,40 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
             Data = combinedData
         };
 
+        // Calculate checksums if requested
+        if (checksumRequest != null)
+        {
+            using var calculator = new StreamingChecksumCalculator(checksumRequest.Algorithm, checksumRequest.ProvidedChecksums);
+            if (calculator.HasChecksums)
+            {
+                calculator.Append(combinedData);
+                var result = calculator.Finish();
+
+                if (!result.IsValid)
+                {
+                    // Validation failed - return error
+                    return StorageResult<UploadPart>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
+                }
+
+                // Populate checksum fields from calculated values
+                if (result.CalculatedChecksums.TryGetValue("CRC32", out var crc32))
+                    part.ChecksumCRC32 = crc32;
+                if (result.CalculatedChecksums.TryGetValue("CRC32C", out var crc32c))
+                    part.ChecksumCRC32C = crc32c;
+                if (result.CalculatedChecksums.TryGetValue("CRC64NVME", out var crc64))
+                    part.ChecksumCRC64NVME = crc64;
+                if (result.CalculatedChecksums.TryGetValue("SHA1", out var sha1))
+                    part.ChecksumSHA1 = sha1;
+                if (result.CalculatedChecksums.TryGetValue("SHA256", out var sha256))
+                    part.ChecksumSHA256 = sha256;
+            }
+        }
+
         parts[partNumber] = part;
-        return part;
+        return StorageResult<UploadPart>.Success(part);
     }
 
-    public async Task<UploadPart?> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkedDataParser chunkedDataParser, IChunkSignatureValidator chunkValidator, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkedDataParser chunkedDataParser, IChunkSignatureValidator chunkValidator, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
     {
         var uploadKey = $"{bucketName}/{key}/{uploadId}";
         var parts = _uploadParts.GetOrAdd(uploadKey, _ => new ConcurrentDictionary<int, UploadPart>());
@@ -48,7 +77,7 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         if (!parseResult.Success)
         {
             // Invalid chunk signature
-            return null;
+            return StorageResult<UploadPart>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
         }
 
         var combinedData = memoryStream.ToArray();
@@ -63,8 +92,37 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
             Data = combinedData
         };
 
+        // Calculate checksums if requested
+        if (checksumRequest != null)
+        {
+            using var calculator = new StreamingChecksumCalculator(checksumRequest.Algorithm, checksumRequest.ProvidedChecksums);
+            if (calculator.HasChecksums)
+            {
+                calculator.Append(combinedData);
+                var result = calculator.Finish();
+
+                if (!result.IsValid)
+                {
+                    // Validation failed - return error
+                    return StorageResult<UploadPart>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
+                }
+
+                // Populate checksum fields from calculated values
+                if (result.CalculatedChecksums.TryGetValue("CRC32", out var crc32))
+                    part.ChecksumCRC32 = crc32;
+                if (result.CalculatedChecksums.TryGetValue("CRC32C", out var crc32c))
+                    part.ChecksumCRC32C = crc32c;
+                if (result.CalculatedChecksums.TryGetValue("CRC64NVME", out var crc64))
+                    part.ChecksumCRC64NVME = crc64;
+                if (result.CalculatedChecksums.TryGetValue("SHA1", out var sha1))
+                    part.ChecksumSHA1 = sha1;
+                if (result.CalculatedChecksums.TryGetValue("SHA256", out var sha256))
+                    part.ChecksumSHA256 = sha256;
+            }
+        }
+
         parts[partNumber] = part;
-        return part;
+        return StorageResult<UploadPart>.Success(part);
     }
 
     public Task<IEnumerable<PipeReader>> GetPartReadersAsync(string bucketName, string key, string uploadId, List<CompletedPart> parts, CancellationToken cancellationToken = default)
