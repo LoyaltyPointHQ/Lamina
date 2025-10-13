@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.Filesystem.Locking;
@@ -61,10 +62,15 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         var metadataDir = Path.GetDirectoryName(metadataPath)!;
         Directory.CreateDirectory(metadataDir);
 
+        // Get the actual last modified time from the filesystem for comparison later
+        var dataPath = GetDataPath(bucketName, key);
+        var fileInfo = new FileInfo(dataPath);
+
         var metadata = new S3ObjectMetadata
         {
             BucketName = bucketName,
             ETag = etag,
+            LastModified = fileInfo.LastWriteTimeUtc,
             ContentType = request?.ContentType ?? "application/octet-stream",
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),
             OwnerId = request?.OwnerId,
@@ -98,10 +104,6 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
 
         await _lockManager.WriteFileAsync(metadataPath, json, cancellationToken);
-
-        // Get the actual last modified time from the filesystem
-        var dataPath = GetDataPath(bucketName, key);
-        var fileInfo = new FileInfo(dataPath);
 
         return new S3Object
         {
@@ -155,6 +157,22 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
 
         // Always get size and last modified from filesystem
         var fileInfo = new FileInfo(dataPath);
+
+        // Check if metadata is stale (data file has been modified after metadata was written)
+        // If data is newer, recompute ETag and checksums to maintain data-first architecture
+        if (fileInfo.LastWriteTimeUtc > metadata.LastModified)
+        {
+            _logger.LogInformation("Detected stale metadata for {Key} in bucket {BucketName} (data mtime: {DataTime}, metadata mtime: {MetadataTime}), recomputing checksums",
+                key, bucketName, fileInfo.LastWriteTimeUtc, metadata.LastModified);
+
+            var recomputed = await RecomputeStaleMetadataAsync(dataPath, metadata, cancellationToken);
+            metadata.ETag = recomputed.etag;
+            metadata.ChecksumCRC32 = recomputed.checksums.GetValueOrDefault("CRC32");
+            metadata.ChecksumCRC32C = recomputed.checksums.GetValueOrDefault("CRC32C");
+            metadata.ChecksumCRC64NVME = recomputed.checksums.GetValueOrDefault("CRC64NVME");
+            metadata.ChecksumSHA1 = recomputed.checksums.GetValueOrDefault("SHA1");
+            metadata.ChecksumSHA256 = recomputed.checksums.GetValueOrDefault("SHA256");
+        }
 
         return new S3ObjectInfo
         {
@@ -371,6 +389,48 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         return true;
     }
 
+    /// <summary>
+    /// Recomputes ETag and checksums for stale metadata.
+    /// Only recomputes checksums that were originally stored in the metadata.
+    /// </summary>
+    private async Task<(string etag, Dictionary<string, string> checksums)> RecomputeStaleMetadataAsync(
+        string dataPath,
+        S3ObjectMetadata metadata,
+        CancellationToken cancellationToken)
+    {
+        // Identify which checksums need to be recomputed (only those that exist in metadata)
+        var algorithmsToCompute = new List<string>();
+        if (!string.IsNullOrEmpty(metadata.ChecksumCRC32))
+            algorithmsToCompute.Add("CRC32");
+        if (!string.IsNullOrEmpty(metadata.ChecksumCRC32C))
+            algorithmsToCompute.Add("CRC32C");
+        if (!string.IsNullOrEmpty(metadata.ChecksumCRC64NVME))
+            algorithmsToCompute.Add("CRC64NVME");
+        if (!string.IsNullOrEmpty(metadata.ChecksumSHA1))
+            algorithmsToCompute.Add("SHA1");
+        if (!string.IsNullOrEmpty(metadata.ChecksumSHA256))
+            algorithmsToCompute.Add("SHA256");
+
+        // Always recompute ETag (it's cheap and essential)
+        var etag = await ETagHelper.ComputeETagFromFileAsync(dataPath);
+
+        // Recompute only the checksums that were originally stored
+        Dictionary<string, string> checksums;
+        if (algorithmsToCompute.Count > 0)
+        {
+            checksums = await ChecksumHelper.ComputeSelectiveChecksumsFromFileAsync(
+                dataPath,
+                algorithmsToCompute,
+                cancellationToken);
+        }
+        else
+        {
+            checksums = new Dictionary<string, string>();
+        }
+
+        return (etag, checksums);
+    }
+
     private string GetMetadataPath(string bucketName, string key)
     {
         if (_metadataMode == MetadataStorageMode.SeparateDirectory)
@@ -396,6 +456,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
     {
         public required string BucketName { get; set; }
         public required string ETag { get; set; }
+        public DateTime LastModified { get; set; }
         public string ContentType { get; set; } = "application/octet-stream";
         public Dictionary<string, string> Metadata { get; set; } = new();
         public string? OwnerId { get; set; }

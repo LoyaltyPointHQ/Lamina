@@ -1,18 +1,27 @@
 using Lamina.Core.Models;
-using Microsoft.EntityFrameworkCore;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Sql.Context;
 using Lamina.Storage.Sql.Entities;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Lamina.Storage.Sql;
 
 public class SqlObjectMetadataStorage : IObjectMetadataStorage
 {
     private readonly LaminaDbContext _context;
+    private readonly IObjectDataStorage _dataStorage;
+    private readonly ILogger<SqlObjectMetadataStorage> _logger;
 
-    public SqlObjectMetadataStorage(LaminaDbContext context)
+    public SqlObjectMetadataStorage(
+        LaminaDbContext context,
+        IObjectDataStorage dataStorage,
+        ILogger<SqlObjectMetadataStorage> logger)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
+        _dataStorage = dataStorage ?? throw new ArgumentNullException(nameof(dataStorage));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, CancellationToken cancellationToken = default)
@@ -93,7 +102,35 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
         var entity = await _context.Objects
             .FirstOrDefaultAsync(o => o.BucketName == bucketName && o.Key == key, cancellationToken);
 
-        return entity?.ToS3ObjectInfo();
+        if (entity == null)
+        {
+            return null;
+        }
+
+        // Check if the data file has been modified after the metadata was stored
+        var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+        if (dataInfo == null)
+        {
+            // Data doesn't exist, metadata is orphaned
+            return null;
+        }
+
+        // If data is newer than metadata, recompute ETag and checksums
+        if (dataInfo.Value.lastModified > entity.LastModified)
+        {
+            _logger.LogInformation("Detected stale metadata for {Key} in bucket {BucketName} (data mtime: {DataTime}, metadata mtime: {MetadataTime}), recomputing checksums",
+                key, bucketName, dataInfo.Value.lastModified, entity.LastModified);
+
+            var recomputed = await RecomputeStaleMetadataAsync(entity, bucketName, key, cancellationToken);
+            entity.ETag = recomputed.etag;
+            entity.ChecksumCRC32 = recomputed.checksums.GetValueOrDefault("CRC32");
+            entity.ChecksumCRC32C = recomputed.checksums.GetValueOrDefault("CRC32C");
+            entity.ChecksumCRC64NVME = recomputed.checksums.GetValueOrDefault("CRC64NVME");
+            entity.ChecksumSHA1 = recomputed.checksums.GetValueOrDefault("SHA1");
+            entity.ChecksumSHA256 = recomputed.checksums.GetValueOrDefault("SHA256");
+        }
+
+        return entity.ToS3ObjectInfo();
     }
 
     public async Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
@@ -152,5 +189,43 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
             return false;
 
         return true;
+    }
+
+    /// <summary>
+    /// Recomputes ETag for stale metadata and clears checksums.
+    /// For SQL storage, we only recompute the ETag and set checksums to null,
+    /// since we don't have direct file path access and checksums are expensive.
+    /// </summary>
+    private async Task<(string etag, Dictionary<string, string> checksums)> RecomputeStaleMetadataAsync(
+        ObjectEntity entity,
+        string bucketName,
+        string key,
+        CancellationToken cancellationToken)
+    {
+        // Always recompute ETag (it's relatively cheap and essential)
+        var etag = await _dataStorage.ComputeETagAsync(bucketName, key, cancellationToken);
+        if (etag == null)
+        {
+            // If we can't compute ETag, return the existing one
+            _logger.LogWarning("Failed to recompute ETag for {Key} in bucket {BucketName}, using cached value", key, bucketName);
+            return (entity.ETag, new Dictionary<string, string>());
+        }
+
+        // For SQL storage, we clear checksums when metadata is stale
+        // Checksums are expensive to recompute and we don't have easy file path access
+        // They will be null, indicating they need to be revalidated if required
+        var hadChecksums = !string.IsNullOrEmpty(entity.ChecksumCRC32) ||
+                          !string.IsNullOrEmpty(entity.ChecksumCRC32C) ||
+                          !string.IsNullOrEmpty(entity.ChecksumCRC64NVME) ||
+                          !string.IsNullOrEmpty(entity.ChecksumSHA1) ||
+                          !string.IsNullOrEmpty(entity.ChecksumSHA256);
+
+        if (hadChecksums)
+        {
+            _logger.LogInformation("Clearing checksums for stale metadata of {Key} in bucket {BucketName} - checksums would need to be recalculated if needed", key, bucketName);
+        }
+
+        // Return empty dictionary which will cause all checksums to be set to null
+        return (etag, new Dictionary<string, string>());
     }
 }

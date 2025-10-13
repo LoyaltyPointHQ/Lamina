@@ -1,7 +1,10 @@
 using Lamina.Core.Models;
-using Microsoft.EntityFrameworkCore;
+using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Sql;
 using Lamina.Storage.Sql.Context;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Moq;
 
 namespace Lamina.Storage.Sql.Tests;
 
@@ -9,6 +12,8 @@ public class SqlObjectMetadataStorageTests : IDisposable
 {
     private readonly LaminaDbContext _context;
     private readonly SqlObjectMetadataStorage _storage;
+    private readonly Mock<IObjectDataStorage> _dataStorageMock;
+    private readonly Mock<ILogger<SqlObjectMetadataStorage>> _loggerMock;
 
     public SqlObjectMetadataStorageTests()
     {
@@ -19,7 +24,20 @@ public class SqlObjectMetadataStorageTests : IDisposable
         _context = new LaminaDbContext(options);
         _context.Database.OpenConnection();
         _context.Database.EnsureCreated();
-        _storage = new SqlObjectMetadataStorage(_context);
+
+        _dataStorageMock = new Mock<IObjectDataStorage>();
+        _loggerMock = new Mock<ILogger<SqlObjectMetadataStorage>>();
+
+        // Setup default behavior: data exists with old timestamp (metadata is fresh)
+        // This simulates the normal case where metadata was just written
+        _dataStorageMock.Setup(x => x.GetDataInfoAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string bucketName, string key, CancellationToken ct) =>
+            {
+                // Return data info with a timestamp in the past (metadata will be considered fresh)
+                return (1024L, DateTime.UtcNow.AddMinutes(-10));
+            });
+
+        _storage = new SqlObjectMetadataStorage(_context, _dataStorageMock.Object, _loggerMock.Object);
     }
 
     [Fact]
