@@ -897,4 +897,59 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         Assert.Contains("x-amz-meta-new", headResponse.Headers.Select(h => h.Key));
         Assert.DoesNotContain("x-amz-meta-original", headResponse.Headers.Select(h => h.Key));
     }
+
+    [Fact]
+    public async Task CopyObject_WithSHA256Checksum_ReturnsChecksumInResponse()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create source object with SHA256 checksum
+        var putRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/source-with-checksum.txt");
+        putRequest.Content = new StringContent("Source content with checksum", Encoding.UTF8, "text/plain");
+        putRequest.Headers.Add("x-amz-checksum-algorithm", "SHA256");
+        var putResponse = await Client.SendAsync(putRequest);
+
+        Assert.Equal(HttpStatusCode.OK, putResponse.StatusCode);
+        Assert.True(putResponse.Headers.Contains("x-amz-checksum-sha256"),
+            "PUT response should contain SHA256 checksum header");
+        var sourceChecksum = putResponse.Headers.GetValues("x-amz-checksum-sha256").First();
+        Assert.NotNull(sourceChecksum);
+        Assert.NotEmpty(sourceChecksum);
+
+        // Copy object with x-amz-copy-source header
+        var copyRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/destination-with-checksum.txt");
+        copyRequest.Headers.Add("x-amz-copy-source", $"/{bucketName}/source-with-checksum.txt");
+
+        var copyResponse = await Client.SendAsync(copyRequest);
+
+        Assert.Equal(HttpStatusCode.OK, copyResponse.StatusCode);
+        Assert.Equal("application/xml", copyResponse.Content.Headers.ContentType?.MediaType);
+
+        // Verify CopyObjectResult XML contains checksum
+        var xmlContent = await copyResponse.Content.ReadAsStringAsync();
+        Assert.Contains("CopyObjectResult", xmlContent);
+        Assert.Contains("ETag", xmlContent);
+        Assert.Contains("LastModified", xmlContent);
+
+        var serializer = new XmlSerializer(typeof(CopyObjectResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (CopyObjectResult?)serializer.Deserialize(reader);
+        Assert.NotNull(result);
+        Assert.NotNull(result.ETag);
+        Assert.NotNull(result.LastModified);
+
+        // Verify checksum is copied to destination object
+        var headRequest = new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}/destination-with-checksum.txt");
+        var headResponse = await Client.SendAsync(headRequest);
+        Assert.Equal(HttpStatusCode.OK, headResponse.StatusCode);
+        Assert.True(headResponse.Headers.Contains("x-amz-checksum-sha256"),
+            "HEAD response for destination object should contain SHA256 checksum");
+        var destChecksum = headResponse.Headers.GetValues("x-amz-checksum-sha256").First();
+        Assert.Equal(sourceChecksum, destChecksum);
+
+        // Verify destination object content matches source
+        var getResponse = await Client.GetAsync($"/{bucketName}/destination-with-checksum.txt");
+        var destContent = await getResponse.Content.ReadAsStringAsync();
+        Assert.Equal("Source content with checksum", destContent);
+    }
 }

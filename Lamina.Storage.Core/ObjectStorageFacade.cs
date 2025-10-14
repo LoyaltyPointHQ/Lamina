@@ -454,14 +454,19 @@ public class ObjectStorageFacade : IObjectStorageFacade
             }
             else
             {
-                // COPY mode: use source object's metadata
+                // COPY mode: use source object's metadata and checksums
                 effectiveRequest = new PutObjectRequest
                 {
                     Key = destKey,
                     ContentType = sourceInfo.ContentType,
                     Metadata = new Dictionary<string, string>(sourceInfo.Metadata),
                     OwnerId = request?.OwnerId ?? sourceInfo.OwnerId,
-                    OwnerDisplayName = request?.OwnerDisplayName ?? sourceInfo.OwnerDisplayName
+                    OwnerDisplayName = request?.OwnerDisplayName ?? sourceInfo.OwnerDisplayName,
+                    ChecksumCRC32 = sourceInfo.ChecksumCRC32,
+                    ChecksumCRC32C = sourceInfo.ChecksumCRC32C,
+                    ChecksumSHA1 = sourceInfo.ChecksumSHA1,
+                    ChecksumSHA256 = sourceInfo.ChecksumSHA256,
+                    ChecksumCRC64NVME = sourceInfo.ChecksumCRC64NVME
                 };
             }
 
