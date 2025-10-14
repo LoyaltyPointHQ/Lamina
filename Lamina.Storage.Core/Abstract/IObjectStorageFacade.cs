@@ -1,6 +1,7 @@
 using System.IO.Pipelines;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
+using Lamina.Storage.Core.Helpers;
 
 namespace Lamina.Storage.Core.Abstract;
 
@@ -16,5 +17,5 @@ public interface IObjectStorageFacade
     bool IsValidObjectKey(string key);
     Task<DeleteMultipleObjectsResponse> DeleteMultipleObjectsAsync(string bucketName, List<ObjectIdentifier> objectsToDelete, bool quiet = false, CancellationToken cancellationToken = default);
     Task<S3Object?> CopyObjectAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, string? metadataDirective = null, PutObjectRequest? request = null, CancellationToken cancellationToken = default);
-    Task<UploadPart?> CopyObjectPartAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, string uploadId, int partNumber, long? byteRangeStart = null, long? byteRangeEnd = null, CancellationToken cancellationToken = default);
+    Task<UploadPart?> CopyObjectPartAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, string uploadId, int partNumber, long? byteRangeStart = null, long? byteRangeEnd = null, ChecksumRequest? checksumRequest = null, CancellationToken cancellationToken = default);
 }

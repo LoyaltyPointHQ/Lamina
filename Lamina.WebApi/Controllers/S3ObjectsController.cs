@@ -514,6 +514,18 @@ public class S3ObjectsController : S3ControllerBase
             Response.Headers.Append($"x-amz-meta-{metadata.Key}", metadata.Value);
         }
 
+        // Add checksum headers if present
+        if (!string.IsNullOrEmpty(objectInfo.ChecksumCRC32))
+            Response.Headers.Append("x-amz-checksum-crc32", objectInfo.ChecksumCRC32);
+        if (!string.IsNullOrEmpty(objectInfo.ChecksumCRC32C))
+            Response.Headers.Append("x-amz-checksum-crc32c", objectInfo.ChecksumCRC32C);
+        if (!string.IsNullOrEmpty(objectInfo.ChecksumSHA1))
+            Response.Headers.Append("x-amz-checksum-sha1", objectInfo.ChecksumSHA1);
+        if (!string.IsNullOrEmpty(objectInfo.ChecksumSHA256))
+            Response.Headers.Append("x-amz-checksum-sha256", objectInfo.ChecksumSHA256);
+        if (!string.IsNullOrEmpty(objectInfo.ChecksumCRC64NVME))
+            Response.Headers.Append("x-amz-checksum-crc64nvme", objectInfo.ChecksumCRC64NVME);
+
         return Ok();
     }
 

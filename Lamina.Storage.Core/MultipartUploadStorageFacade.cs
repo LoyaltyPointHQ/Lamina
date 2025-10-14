@@ -197,12 +197,6 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         var partETags = request.Parts.Select(p => storedPartsDict[p.PartNumber].ETag).ToList();
         var multipartETag = ETagHelper.ComputeMultipartETag(partETags);
 
-        // Store multipart data directly using the streaming method
-        var (size, _) = await _objectDataStorage.StoreMultipartDataAsync(bucketName, key, readersList, cancellationToken);
-
-        // Store metadata with the correct multipart ETag
-        await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, null, cancellationToken);
-
         // Aggregate checksums from stored parts (checksum-of-checksums per S3 spec)
         // Use checksums from stored parts, not from the client's request
         var orderedStoredParts = request.Parts
@@ -215,6 +209,25 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         var aggregatedSHA1 = MultipartChecksumAggregator.AggregateSha1(orderedStoredParts.Select(p => p.ChecksumSHA1));
         var aggregatedSHA256 = MultipartChecksumAggregator.AggregateSha256(orderedStoredParts.Select(p => p.ChecksumSHA256));
         var aggregatedCRC64NVME = MultipartChecksumAggregator.AggregateCrc64Nvme(orderedStoredParts.Select(p => p.ChecksumCRC64NVME));
+
+        // Build checksums dictionary for storage
+        var aggregatedChecksums = new Dictionary<string, string>();
+        if (!string.IsNullOrEmpty(aggregatedCRC32))
+            aggregatedChecksums["CRC32"] = aggregatedCRC32;
+        if (!string.IsNullOrEmpty(aggregatedCRC32C))
+            aggregatedChecksums["CRC32C"] = aggregatedCRC32C;
+        if (!string.IsNullOrEmpty(aggregatedSHA1))
+            aggregatedChecksums["SHA1"] = aggregatedSHA1;
+        if (!string.IsNullOrEmpty(aggregatedSHA256))
+            aggregatedChecksums["SHA256"] = aggregatedSHA256;
+        if (!string.IsNullOrEmpty(aggregatedCRC64NVME))
+            aggregatedChecksums["CRC64NVME"] = aggregatedCRC64NVME;
+
+        // Store multipart data directly using the streaming method
+        var (size, _) = await _objectDataStorage.StoreMultipartDataAsync(bucketName, key, readersList, cancellationToken);
+
+        // Store metadata with the correct multipart ETag and aggregated checksums
+        await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, aggregatedChecksums.Count > 0 ? aggregatedChecksums : null, cancellationToken);
 
         // Clean up multipart upload
         await _dataStorage.DeleteAllPartsAsync(bucketName, key, request.UploadId, cancellationToken);

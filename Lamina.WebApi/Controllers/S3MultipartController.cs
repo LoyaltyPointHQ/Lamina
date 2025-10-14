@@ -401,6 +401,49 @@ public class S3MultipartController : S3ControllerBase
                 "UploadPartCopy: source={SourceBucket}/{SourceKey}, dest={DestBucket}/{DestKey}, part={PartNumber}, uploadId={UploadId}, range={RangeStart}-{RangeEnd}",
                 sourceBucketName, sourceKey, bucketName, key, partNumber, uploadId, byteRangeStart, byteRangeEnd);
 
+            // Parse checksum headers
+            Request.Headers.TryGetValue("x-amz-checksum-algorithm", out var checksumAlgorithm);
+            Request.Headers.TryGetValue("x-amz-checksum-crc32", out var checksumCrc32);
+            Request.Headers.TryGetValue("x-amz-checksum-crc32c", out var checksumCrc32c);
+            Request.Headers.TryGetValue("x-amz-checksum-sha1", out var checksumSha1);
+            Request.Headers.TryGetValue("x-amz-checksum-sha256", out var checksumSha256);
+            Request.Headers.TryGetValue("x-amz-checksum-crc64nvme", out var checksumCrc64nvme);
+
+            var checksumAlgorithmValue = checksumAlgorithm.ToString();
+
+            // Validate checksum algorithm if provided
+            if (!string.IsNullOrEmpty(checksumAlgorithmValue) && !StreamingChecksumCalculator.IsValidAlgorithm(checksumAlgorithmValue))
+            {
+                return S3Error("InvalidArgument", $"Invalid checksum algorithm: {checksumAlgorithmValue}. Valid values are: CRC32, CRC32C, SHA1, SHA256, CRC64NVME", $"/{bucketName}/{key}", 400);
+            }
+
+            // Build checksum request if any checksums were provided
+            ChecksumRequest? checksumRequest = null;
+            if (!string.IsNullOrEmpty(checksumAlgorithmValue) ||
+                !string.IsNullOrEmpty(checksumCrc32.ToString()) ||
+                !string.IsNullOrEmpty(checksumCrc32c.ToString()) ||
+                !string.IsNullOrEmpty(checksumSha1.ToString()) ||
+                !string.IsNullOrEmpty(checksumSha256.ToString()) ||
+                !string.IsNullOrEmpty(checksumCrc64nvme.ToString()))
+            {
+                checksumRequest = new ChecksumRequest
+                {
+                    Algorithm = string.IsNullOrEmpty(checksumAlgorithmValue) ? null : checksumAlgorithmValue,
+                    ProvidedChecksums = new Dictionary<string, string>()
+                };
+
+                if (!string.IsNullOrEmpty(checksumCrc32.ToString()))
+                    checksumRequest.ProvidedChecksums["CRC32"] = checksumCrc32.ToString();
+                if (!string.IsNullOrEmpty(checksumCrc32c.ToString()))
+                    checksumRequest.ProvidedChecksums["CRC32C"] = checksumCrc32c.ToString();
+                if (!string.IsNullOrEmpty(checksumSha1.ToString()))
+                    checksumRequest.ProvidedChecksums["SHA1"] = checksumSha1.ToString();
+                if (!string.IsNullOrEmpty(checksumSha256.ToString()))
+                    checksumRequest.ProvidedChecksums["SHA256"] = checksumSha256.ToString();
+                if (!string.IsNullOrEmpty(checksumCrc64nvme.ToString()))
+                    checksumRequest.ProvidedChecksums["CRC64NVME"] = checksumCrc64nvme.ToString();
+            }
+
             // Call the facade to copy the object part
             var uploadPart = await _objectStorage.CopyObjectPartAsync(
                 sourceBucketName,
@@ -411,6 +454,7 @@ public class S3MultipartController : S3ControllerBase
                 partNumber,
                 byteRangeStart,
                 byteRangeEnd,
+                checksumRequest,
                 cancellationToken);
 
             if (uploadPart == null)
@@ -435,6 +479,18 @@ public class S3MultipartController : S3ControllerBase
             // Return success with ETag and copy metadata
             Response.Headers.Append("ETag", $"\"{uploadPart.ETag}\"");
             Response.Headers.Append("x-amz-copy-source-version-id", "null"); // No versioning support yet
+
+            // Add checksum headers if present
+            if (!string.IsNullOrEmpty(uploadPart.ChecksumCRC32))
+                Response.Headers.Append("x-amz-checksum-crc32", uploadPart.ChecksumCRC32);
+            if (!string.IsNullOrEmpty(uploadPart.ChecksumCRC32C))
+                Response.Headers.Append("x-amz-checksum-crc32c", uploadPart.ChecksumCRC32C);
+            if (!string.IsNullOrEmpty(uploadPart.ChecksumSHA1))
+                Response.Headers.Append("x-amz-checksum-sha1", uploadPart.ChecksumSHA1);
+            if (!string.IsNullOrEmpty(uploadPart.ChecksumSHA256))
+                Response.Headers.Append("x-amz-checksum-sha256", uploadPart.ChecksumSHA256);
+            if (!string.IsNullOrEmpty(uploadPart.ChecksumCRC64NVME))
+                Response.Headers.Append("x-amz-checksum-crc64nvme", uploadPart.ChecksumCRC64NVME);
 
             // Return CopyPartResult XML response
             var copyPartResult = new CopyPartResult

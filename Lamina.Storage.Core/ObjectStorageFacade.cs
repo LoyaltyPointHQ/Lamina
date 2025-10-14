@@ -523,6 +523,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
         int partNumber,
         long? byteRangeStart = null,
         long? byteRangeEnd = null,
+        ChecksumRequest? checksumRequest = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -583,7 +584,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
             {
                 // Upload the data (or byte range) as a multipart part
                 var uploadPartResult = await _multipartUploadStorage.UploadPartAsync(
-                    destBucketName, destKey, uploadId, partNumber, reader, cancellationToken);
+                    destBucketName, destKey, uploadId, partNumber, reader, checksumRequest, cancellationToken);
 
                 // Wait for write task to complete
                 await writeTask;

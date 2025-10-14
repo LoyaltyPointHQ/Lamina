@@ -663,4 +663,127 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         // Verify the raw XML contains properly formatted timestamp with 'T' separator, 'Z' suffix, and exactly 3 decimal places for milliseconds
         Assert.Matches(@"<LastModified>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z</LastModified>", copyXml);
     }
+
+    [Fact]
+    public async Task UploadPartCopy_WithSHA256Checksum_ReturnsAggregatedChecksum()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create source objects with known content
+        var sourceContent1 = "First part content for SHA256 testing";
+        var sourceContent2 = "Second part content for SHA256 testing";
+
+        await Client.PutAsync($"/{bucketName}/source1.txt",
+            new StringContent(sourceContent1, Encoding.UTF8));
+        await Client.PutAsync($"/{bucketName}/source2.txt",
+            new StringContent(sourceContent2, Encoding.UTF8));
+
+        // Initiate multipart upload with SHA256 checksum algorithm
+        var initRequest = new HttpRequestMessage(HttpMethod.Post, $"/{bucketName}/dest-with-checksum.txt?uploads");
+        initRequest.Headers.Add("x-amz-checksum-algorithm", "SHA256");
+        var initResponse = await Client.SendAsync(initRequest);
+
+        Assert.Equal(HttpStatusCode.OK, initResponse.StatusCode);
+
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Part 1: UploadPartCopy with SHA256 checksum
+        var copy1Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/dest-with-checksum.txt?partNumber=1&uploadId={initResult.UploadId}");
+        copy1Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/source1.txt");
+        copy1Request.Headers.Add("x-amz-checksum-algorithm", "SHA256");
+        var copy1Response = await Client.SendAsync(copy1Request);
+
+        Assert.Equal(HttpStatusCode.OK, copy1Response.StatusCode);
+        var part1ETag = copy1Response.Headers.GetValues("ETag").First().Trim('\"');
+
+        // Verify response contains SHA256 checksum
+        Assert.True(copy1Response.Headers.Contains("x-amz-checksum-sha256"),
+            "Part 1 copy response should contain SHA256 checksum header");
+        var part1Checksum = copy1Response.Headers.GetValues("x-amz-checksum-sha256").First();
+        Assert.NotNull(part1Checksum);
+        Assert.NotEmpty(part1Checksum);
+
+        // Verify CopyPartResult XML contains checksum
+        var copy1Xml = await copy1Response.Content.ReadAsStringAsync();
+        Assert.Contains("ChecksumSHA256", copy1Xml);
+        Assert.Contains(part1Checksum, copy1Xml);
+
+        // Part 2: UploadPartCopy with SHA256 checksum
+        var copy2Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/dest-with-checksum.txt?partNumber=2&uploadId={initResult.UploadId}");
+        copy2Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/source2.txt");
+        copy2Request.Headers.Add("x-amz-checksum-algorithm", "SHA256");
+        var copy2Response = await Client.SendAsync(copy2Request);
+
+        Assert.Equal(HttpStatusCode.OK, copy2Response.StatusCode);
+        var part2ETag = copy2Response.Headers.GetValues("ETag").First().Trim('\"');
+
+        // Verify response contains SHA256 checksum
+        Assert.True(copy2Response.Headers.Contains("x-amz-checksum-sha256"),
+            "Part 2 copy response should contain SHA256 checksum header");
+        var part2Checksum = copy2Response.Headers.GetValues("x-amz-checksum-sha256").First();
+        Assert.NotNull(part2Checksum);
+        Assert.NotEmpty(part2Checksum);
+
+        // List parts to verify checksums are stored
+        var listPartsResponse = await Client.GetAsync($"/{bucketName}/dest-with-checksum.txt?uploadId={initResult.UploadId}");
+        Assert.Equal(HttpStatusCode.OK, listPartsResponse.StatusCode);
+        var listPartsXml = await listPartsResponse.Content.ReadAsStringAsync();
+
+        // Verify both parts have SHA256 checksums in ListParts response
+        Assert.Contains("ChecksumSHA256", listPartsXml);
+        Assert.Contains(part1Checksum, listPartsXml);
+        Assert.Contains(part2Checksum, listPartsXml);
+
+        // Complete multipart upload
+        var completeRequestXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<CompleteMultipartUpload>
+    <Part>
+        <PartNumber>1</PartNumber>
+        <ETag>{part1ETag}</ETag>
+        <ChecksumSHA256>{part1Checksum}</ChecksumSHA256>
+    </Part>
+    <Part>
+        <PartNumber>2</PartNumber>
+        <ETag>{part2ETag}</ETag>
+        <ChecksumSHA256>{part2Checksum}</ChecksumSHA256>
+    </Part>
+</CompleteMultipartUpload>";
+
+        var completeResponse = await Client.PostAsync(
+            $"/{bucketName}/dest-with-checksum.txt?uploadId={initResult.UploadId}",
+            new StringContent(completeRequestXml, Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
+
+        // Verify aggregated checksum in response headers
+        Assert.True(completeResponse.Headers.Contains("x-amz-checksum-sha256"),
+            "Complete response should contain aggregated SHA256 checksum header");
+        var aggregatedChecksum = completeResponse.Headers.GetValues("x-amz-checksum-sha256").First();
+        Assert.NotNull(aggregatedChecksum);
+        Assert.NotEmpty(aggregatedChecksum);
+
+        // Aggregated checksum should be different from individual part checksums (it's a checksum-of-checksums)
+        Assert.NotEqual(part1Checksum, aggregatedChecksum);
+        Assert.NotEqual(part2Checksum, aggregatedChecksum);
+
+        // Verify aggregated checksum in response XML
+        var completeXml = await completeResponse.Content.ReadAsStringAsync();
+        Assert.Contains("ChecksumSHA256", completeXml);
+        Assert.Contains(aggregatedChecksum, completeXml);
+
+        // Verify the completed object has the checksum
+        var headRequest = new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}/dest-with-checksum.txt");
+        var headResponse = await Client.SendAsync(headRequest);
+        Assert.Equal(HttpStatusCode.OK, headResponse.StatusCode);
+        Assert.True(headResponse.Headers.Contains("x-amz-checksum-sha256"),
+            "HEAD response for completed object should contain SHA256 checksum");
+        var finalChecksum = headResponse.Headers.GetValues("x-amz-checksum-sha256").First();
+        Assert.Equal(aggregatedChecksum, finalChecksum);
+    }
 }
