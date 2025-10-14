@@ -538,44 +538,34 @@ public class S3MultipartController : S3ControllerBase
 
             var completeResponse = storageResult.Value!;
 
-            // Add checksum fields if any were provided in the request parts
-            var firstPartWithChecksum = parts.FirstOrDefault(p =>
-                !string.IsNullOrEmpty(p.ChecksumCRC32) ||
-                !string.IsNullOrEmpty(p.ChecksumCRC32C) ||
-                !string.IsNullOrEmpty(p.ChecksumSHA1) ||
-                !string.IsNullOrEmpty(p.ChecksumSHA256) ||
-                !string.IsNullOrEmpty(p.ChecksumCRC64NVME));
-
+            // Use aggregated checksums from the storage response (checksum-of-checksums per S3 spec)
             var result = new CompleteMultipartUploadResult
             {
                 Location = $"http://{Request.Host}/{bucketName}/{key}",
                 Bucket = bucketName,
                 Key = key,
                 ETag = $"\"{completeResponse.ETag}\"",
-                ChecksumCRC32 = firstPartWithChecksum?.ChecksumCRC32,
-                ChecksumCRC32C = firstPartWithChecksum?.ChecksumCRC32C,
-                ChecksumCRC64NVME = firstPartWithChecksum?.ChecksumCRC64NVME,
-                ChecksumSHA1 = firstPartWithChecksum?.ChecksumSHA1,
-                ChecksumSHA256 = firstPartWithChecksum?.ChecksumSHA256
+                ChecksumCRC32 = completeResponse.ChecksumCRC32,
+                ChecksumCRC32C = completeResponse.ChecksumCRC32C,
+                ChecksumCRC64NVME = completeResponse.ChecksumCRC64NVME,
+                ChecksumSHA1 = completeResponse.ChecksumSHA1,
+                ChecksumSHA256 = completeResponse.ChecksumSHA256
             };
 
             // Add S3-compliant response headers
             Response.Headers.Append("x-amz-version-id", "null");
 
-            // Add checksum headers if any were provided
-            if (firstPartWithChecksum != null)
-            {
-                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumCRC32))
-                    Response.Headers.Append("x-amz-checksum-crc32", firstPartWithChecksum.ChecksumCRC32);
-                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumCRC32C))
-                    Response.Headers.Append("x-amz-checksum-crc32c", firstPartWithChecksum.ChecksumCRC32C);
-                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumSHA1))
-                    Response.Headers.Append("x-amz-checksum-sha1", firstPartWithChecksum.ChecksumSHA1);
-                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumSHA256))
-                    Response.Headers.Append("x-amz-checksum-sha256", firstPartWithChecksum.ChecksumSHA256);
-                if (!string.IsNullOrEmpty(firstPartWithChecksum.ChecksumCRC64NVME))
-                    Response.Headers.Append("x-amz-checksum-crc64nvme", firstPartWithChecksum.ChecksumCRC64NVME);
-            }
+            // Add aggregated checksum headers if present
+            if (!string.IsNullOrEmpty(completeResponse.ChecksumCRC32))
+                Response.Headers.Append("x-amz-checksum-crc32", completeResponse.ChecksumCRC32);
+            if (!string.IsNullOrEmpty(completeResponse.ChecksumCRC32C))
+                Response.Headers.Append("x-amz-checksum-crc32c", completeResponse.ChecksumCRC32C);
+            if (!string.IsNullOrEmpty(completeResponse.ChecksumSHA1))
+                Response.Headers.Append("x-amz-checksum-sha1", completeResponse.ChecksumSHA1);
+            if (!string.IsNullOrEmpty(completeResponse.ChecksumSHA256))
+                Response.Headers.Append("x-amz-checksum-sha256", completeResponse.ChecksumSHA256);
+            if (!string.IsNullOrEmpty(completeResponse.ChecksumCRC64NVME))
+                Response.Headers.Append("x-amz-checksum-crc64nvme", completeResponse.ChecksumCRC64NVME);
 
             Response.ContentType = "application/xml";
             return Ok(result);

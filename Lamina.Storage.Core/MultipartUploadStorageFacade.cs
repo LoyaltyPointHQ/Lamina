@@ -138,6 +138,23 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             return StorageResult<CompleteMultipartUploadResponse>.Error("NoSuchUpload", $"Upload '{request.UploadId}' not found");
         }
 
+        // Merge checksums from metadata storage (similar to ListPartsAsync pattern)
+        var uploadMetadata = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, request.UploadId, cancellationToken);
+        if (uploadMetadata != null && uploadMetadata.Parts.Count > 0)
+        {
+            foreach (var part in storedParts)
+            {
+                if (uploadMetadata.Parts.TryGetValue(part.PartNumber, out var partMetadata))
+                {
+                    part.ChecksumCRC32 = partMetadata.ChecksumCRC32;
+                    part.ChecksumCRC32C = partMetadata.ChecksumCRC32C;
+                    part.ChecksumCRC64NVME = partMetadata.ChecksumCRC64NVME;
+                    part.ChecksumSHA1 = partMetadata.ChecksumSHA1;
+                    part.ChecksumSHA256 = partMetadata.ChecksumSHA256;
+                }
+            }
+        }
+
         var storedPartsDict = storedParts.ToDictionary(p => p.PartNumber, p => p);
 
         for (int i = 0; i < request.Parts.Count; i++)
@@ -168,13 +185,12 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             throw new InvalidOperationException("Failed to get part readers");
         }
 
-        // Try to retrieve metadata for S3 compliance, but fall back to defaults if missing (data-first resilience)
-        var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, request.UploadId, cancellationToken);
+        // Use already retrieved metadata for S3 compliance, but fall back to defaults if missing (data-first resilience)
         var putRequest = new PutObjectRequest
         {
             Key = key,
-            ContentType = upload?.ContentType ?? "application/octet-stream",
-            Metadata = upload?.Metadata ?? new Dictionary<string, string>()
+            ContentType = uploadMetadata?.ContentType ?? "application/octet-stream",
+            Metadata = uploadMetadata?.Metadata ?? new Dictionary<string, string>()
         };
 
         // Phase 5: Compute proper multipart ETag from individual part ETags
@@ -187,6 +203,19 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         // Store metadata with the correct multipart ETag
         await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, null, cancellationToken);
 
+        // Aggregate checksums from stored parts (checksum-of-checksums per S3 spec)
+        // Use checksums from stored parts, not from the client's request
+        var orderedStoredParts = request.Parts
+            .OrderBy(p => p.PartNumber)
+            .Select(p => storedPartsDict[p.PartNumber])
+            .ToList();
+
+        var aggregatedCRC32 = MultipartChecksumAggregator.AggregateCrc32(orderedStoredParts.Select(p => p.ChecksumCRC32));
+        var aggregatedCRC32C = MultipartChecksumAggregator.AggregateCrc32C(orderedStoredParts.Select(p => p.ChecksumCRC32C));
+        var aggregatedSHA1 = MultipartChecksumAggregator.AggregateSha1(orderedStoredParts.Select(p => p.ChecksumSHA1));
+        var aggregatedSHA256 = MultipartChecksumAggregator.AggregateSha256(orderedStoredParts.Select(p => p.ChecksumSHA256));
+        var aggregatedCRC64NVME = MultipartChecksumAggregator.AggregateCrc64Nvme(orderedStoredParts.Select(p => p.ChecksumCRC64NVME));
+
         // Clean up multipart upload
         await _dataStorage.DeleteAllPartsAsync(bucketName, key, request.UploadId, cancellationToken);
         await _metadataStorage.DeleteUploadMetadataAsync(bucketName, key, request.UploadId, cancellationToken);
@@ -195,7 +224,12 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         {
             BucketName = bucketName,
             Key = key,
-            ETag = multipartETag  // Use the proper multipart ETag
+            ETag = multipartETag,  // Use the proper multipart ETag
+            ChecksumCRC32 = aggregatedCRC32,
+            ChecksumCRC32C = aggregatedCRC32C,
+            ChecksumSHA1 = aggregatedSHA1,
+            ChecksumSHA256 = aggregatedSHA256,
+            ChecksumCRC64NVME = aggregatedCRC64NVME
         });
     }
 

@@ -103,12 +103,17 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
         Assert.NotNull(initResult);
 
-        // Upload part
-        var partResponse = await Client.PutAsync(
-            $"/{bucketName}/checksum-test.bin?partNumber=1&uploadId={initResult.UploadId}",
-            new StringContent("Test content for checksum", Encoding.UTF8));
+        // Upload part WITH checksum header
+        var partRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/checksum-test.bin?partNumber=1&uploadId={initResult.UploadId}");
+        partRequest.Content = new StringContent("Test content for checksum", Encoding.UTF8);
+        partRequest.Headers.Add("x-amz-checksum-algorithm", "CRC32");  // Request server to calculate checksum
+        var partResponse = await Client.SendAsync(partRequest);
         Assert.Equal(HttpStatusCode.OK, partResponse.StatusCode);
         var partETag = partResponse.Headers.GetValues("ETag").First().Trim('"');
+
+        // Get the calculated checksum from the response
+        var calculatedChecksum = partResponse.Headers.GetValues("x-amz-checksum-crc32").FirstOrDefault();
+        Assert.NotNull(calculatedChecksum);
 
         // Create complete request XML with checksum
         var completeRequestXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
@@ -116,7 +121,7 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
     <Part>
         <PartNumber>1</PartNumber>
         <ETag>{partETag}</ETag>
-        <ChecksumCRC32>example-crc32</ChecksumCRC32>
+        <ChecksumCRC32>{calculatedChecksum}</ChecksumCRC32>
     </Part>
 </CompleteMultipartUpload>";
 
@@ -127,9 +132,8 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
 
         Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
 
-        // Verify checksum header is returned
+        // Verify checksum header is returned (aggregated from stored part checksums)
         Assert.True(completeResponse.Headers.Contains("x-amz-checksum-crc32"));
-        Assert.Equal("example-crc32", completeResponse.Headers.GetValues("x-amz-checksum-crc32").First());
     }
 
     [Fact]

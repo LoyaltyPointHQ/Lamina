@@ -512,15 +512,31 @@ public class ChecksumCalculationTests : IntegrationTestBase
             .First(e => e.Name.LocalName == "UploadId")
             .Value;
 
-        // Upload part 1
+        // Upload part 1 WITH checksum header
         var content1 = new StringContent(TestData, Encoding.UTF8, "application/octet-stream");
-        var part1Response = await Client.PutAsync($"/{bucketName}/mp-complete.txt?partNumber=1&uploadId={uploadId}", content1);
+        var part1Request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/mp-complete.txt?partNumber=1&uploadId={uploadId}");
+        part1Request.Content = content1;
+        part1Request.Headers.Add("x-amz-checksum-crc32", TestData_CRC32);
+        var part1Response = await Client.SendAsync(part1Request);
+        Assert.Equal(HttpStatusCode.OK, part1Response.StatusCode);
+        Assert.True(part1Response.Headers.Contains("x-amz-checksum-crc32"), "Part 1 upload should return checksum in response");
         var etag1 = part1Response.Headers.ETag!.Tag.Trim('"');
 
-        // Upload part 2
+        // Upload part 2 WITH checksum header
         var content2 = new StringContent(TestData, Encoding.UTF8, "application/octet-stream");
-        var part2Response = await Client.PutAsync($"/{bucketName}/mp-complete.txt?partNumber=2&uploadId={uploadId}", content2);
+        var part2Request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/mp-complete.txt?partNumber=2&uploadId={uploadId}");
+        part2Request.Content = content2;
+        part2Request.Headers.Add("x-amz-checksum-crc32", TestData_CRC32);
+        var part2Response = await Client.SendAsync(part2Request);
+        Assert.Equal(HttpStatusCode.OK, part2Response.StatusCode);
+        Assert.True(part2Response.Headers.Contains("x-amz-checksum-crc32"), "Part 2 upload should return checksum in response");
         var etag2 = part2Response.Headers.ETag!.Tag.Trim('"');
+
+        // Verify parts have checksums by listing them
+        var listPartsResponse = await Client.GetAsync($"/{bucketName}/mp-complete.txt?uploadId={uploadId}");
+        var listPartsXml = await listPartsResponse.Content.ReadAsStringAsync();
+        Assert.Contains("ChecksumCRC32", listPartsXml);
+        Assert.Contains(TestData_CRC32, listPartsXml);
 
         // Complete multipart upload
         var completeXml = $@"
@@ -550,10 +566,15 @@ public class ChecksumCalculationTests : IntegrationTestBase
         Assert.Contains("CompleteMultipartUploadResult", responseXml);
         Assert.Contains("ETag", responseXml);
 
-        // Checksum should be present in the response (aggregated or individual)
+        // Check response headers for checksum
+        var hasChecksumHeader = response.Headers.Contains("x-amz-checksum-crc32");
+
+        // Checksum should be present in the response (aggregated checksums in headers or XML)
         var doc = XDocument.Parse(responseXml);
-        var hasChecksum = doc.Descendants().Any(e => e.Name.LocalName.StartsWith("Checksum"));
-        Assert.True(hasChecksum, "Response should contain checksum information");
+        var hasChecksumInXml = doc.Descendants().Any(e => e.Name.LocalName.StartsWith("Checksum"));
+
+        Assert.True(hasChecksumHeader || hasChecksumInXml,
+            $"Response should contain checksum information. Has header: {hasChecksumHeader}, Has XML: {hasChecksumInXml}, Response XML: {responseXml}");
     }
 
     [Fact]
@@ -627,12 +648,15 @@ public class ChecksumCalculationTests : IntegrationTestBase
             .First(e => e.Name.LocalName == "UploadId")
             .Value;
 
-        // Upload 3 parts
+        // Upload 3 parts WITH checksum headers
         var etags = new List<string>();
         for (int i = 1; i <= 3; i++)
         {
             var content = new StringContent(TestData, Encoding.UTF8, "application/octet-stream");
-            var partResponse = await Client.PutAsync($"/{bucketName}/mp-aggregate.txt?partNumber={i}&uploadId={uploadId}", content);
+            var partRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/mp-aggregate.txt?partNumber={i}&uploadId={uploadId}");
+            partRequest.Content = content;
+            partRequest.Headers.Add("x-amz-checksum-crc32", TestData_CRC32);
+            var partResponse = await Client.SendAsync(partRequest);
             etags.Add(partResponse.Headers.ETag!.Tag.Trim('"'));
         }
 

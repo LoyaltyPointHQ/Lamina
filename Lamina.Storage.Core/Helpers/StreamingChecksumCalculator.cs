@@ -148,7 +148,6 @@ public class StreamingChecksumCalculator : IDisposable
         if (_crc64 != null)
         {
             var hash = _crc64.GetCurrentHash();
-            Array.Reverse(hash);
             calculated["CRC64NVME"] = Convert.ToBase64String(hash);
         }
 
