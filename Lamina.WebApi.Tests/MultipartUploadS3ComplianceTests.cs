@@ -960,4 +960,88 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         Assert.Equal(150000, resultContent.Length);
         Assert.Equal(sourceContent, resultContent);
     }
+
+    [Fact]
+    public async Task UploadPartCopy_IdempotentRetry_ReturnsExistingPart()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create source object
+        var sourceContent = "Source content for idempotent retry test";
+        await Client.PutAsync($"/{bucketName}/source.txt",
+            new StringContent(sourceContent, Encoding.UTF8));
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/dest.txt?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // First UploadPartCopy request for part 1
+        var copy1Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/dest.txt?partNumber=1&uploadId={initResult.UploadId}");
+        copy1Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.txt");
+        var copy1Response = await Client.SendAsync(copy1Request);
+
+        Assert.Equal(HttpStatusCode.OK, copy1Response.StatusCode);
+        var firstETag = copy1Response.Headers.GetValues("ETag").First();
+        var firstXml = await copy1Response.Content.ReadAsStringAsync();
+
+        // Parse first response to get ETag and LastModified
+        var copy1Serializer = new XmlSerializer(typeof(CopyPartResult));
+        using var copy1Reader = new StringReader(firstXml);
+        var copy1Result = (CopyPartResult?)copy1Serializer.Deserialize(copy1Reader);
+        Assert.NotNull(copy1Result);
+
+        // Simulate a retry - send the same UploadPartCopy request again
+        var copy2Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/dest.txt?partNumber=1&uploadId={initResult.UploadId}");
+        copy2Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.txt");
+        var copy2Response = await Client.SendAsync(copy2Request);
+
+        // Assert - The retry should succeed with HTTP 200
+        Assert.Equal(HttpStatusCode.OK, copy2Response.StatusCode);
+
+        // Assert - The ETag should be the same as the first request (idempotent)
+        var secondETag = copy2Response.Headers.GetValues("ETag").First();
+        Assert.Equal(firstETag, secondETag);
+
+        // Assert - The XML response should contain the same part information
+        var secondXml = await copy2Response.Content.ReadAsStringAsync();
+        var copy2Serializer = new XmlSerializer(typeof(CopyPartResult));
+        using var copy2Reader = new StringReader(secondXml);
+        var copy2Result = (CopyPartResult?)copy2Serializer.Deserialize(copy2Reader);
+        Assert.NotNull(copy2Result);
+
+        // Verify the ETag and LastModified are identical (or nearly identical - within 1 second tolerance)
+        Assert.Equal(copy1Result.ETag, copy2Result.ETag);
+
+        // Parse timestamps to compare
+        var firstModified = DateTime.ParseExact(copy1Result.LastModified, "yyyy-MM-dd'T'HH:mm:ss.fff'Z'",
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal);
+        var secondModified = DateTime.ParseExact(copy2Result.LastModified, "yyyy-MM-dd'T'HH:mm:ss.fff'Z'",
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal);
+
+        // Timestamps should be within 1 second of each other (idempotent retry returns cached part)
+        var timeDifference = Math.Abs((secondModified - firstModified).TotalSeconds);
+        Assert.True(timeDifference < 1,
+            $"LastModified timestamps differ by {timeDifference:F3}s, expected < 1s for idempotent retry");
+
+        // Verify the retry should be fast (< 1 second) since it just returns existing part
+        // This test would fail if the implementation re-copied the data
+        var retryStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var copy3Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/dest.txt?partNumber=1&uploadId={initResult.UploadId}");
+        copy3Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.txt");
+        var copy3Response = await Client.SendAsync(copy3Request);
+        retryStopwatch.Stop();
+
+        Assert.Equal(HttpStatusCode.OK, copy3Response.StatusCode);
+        Assert.True(retryStopwatch.Elapsed.TotalSeconds < 1,
+            $"Idempotent retry took {retryStopwatch.Elapsed.TotalMilliseconds:F2}ms, expected < 1000ms");
+    }
 }

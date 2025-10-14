@@ -353,6 +353,52 @@ public class S3MultipartController : S3ControllerBase
     {
         try
         {
+            // Check if this part already exists (idempotent retry handling)
+            // This prevents unnecessary re-copying when clients retry due to timeout
+            var existingParts = await _multipartStorage.ListPartsAsync(bucketName, key, uploadId, cancellationToken);
+            var existingPart = existingParts.FirstOrDefault(p => p.PartNumber == partNumber);
+            
+            if (existingPart != null)
+            {
+                _logger.LogInformation(
+                    "UploadPartCopy part {PartNumber} already exists for upload {UploadId}, returning existing part (idempotent retry)",
+                    partNumber, uploadId);
+                
+                // Return the existing part information
+                Response.Headers.Append("ETag", $"\"{existingPart.ETag}\"");
+                Response.Headers.Append("x-amz-copy-source-version-id", "null");
+
+                // Add checksum headers if present
+                if (!string.IsNullOrEmpty(existingPart.ChecksumCRC32))
+                    Response.Headers.Append("x-amz-checksum-crc32", existingPart.ChecksumCRC32);
+                if (!string.IsNullOrEmpty(existingPart.ChecksumCRC32C))
+                    Response.Headers.Append("x-amz-checksum-crc32c", existingPart.ChecksumCRC32C);
+                if (!string.IsNullOrEmpty(existingPart.ChecksumSHA1))
+                    Response.Headers.Append("x-amz-checksum-sha1", existingPart.ChecksumSHA1);
+                if (!string.IsNullOrEmpty(existingPart.ChecksumSHA256))
+                    Response.Headers.Append("x-amz-checksum-sha256", existingPart.ChecksumSHA256);
+                if (!string.IsNullOrEmpty(existingPart.ChecksumCRC64NVME))
+                    Response.Headers.Append("x-amz-checksum-crc64nvme", existingPart.ChecksumCRC64NVME);
+
+                // Return CopyPartResult XML response
+                var cachedResult = new CopyPartResult
+                {
+                    LastModified = existingPart.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
+                    ETag = $"\"{existingPart.ETag}\"",
+                    ChecksumCRC32 = existingPart.ChecksumCRC32,
+                    ChecksumCRC32C = existingPart.ChecksumCRC32C,
+                    ChecksumCRC64NVME = existingPart.ChecksumCRC64NVME,
+                    ChecksumSHA1 = existingPart.ChecksumSHA1,
+                    ChecksumSHA256 = existingPart.ChecksumSHA256
+                };
+
+                var cachedSerializer = new XmlSerializer(typeof(CopyPartResult));
+                await using var cachedWriter = new StringWriter();
+                cachedSerializer.Serialize(cachedWriter, cachedResult);
+
+                return Content(cachedWriter.ToString(), "application/xml");
+            }
+
             // Parse x-amz-copy-source header
             if (!Request.Headers.TryGetValue("x-amz-copy-source", out var copySourceValue))
             {
