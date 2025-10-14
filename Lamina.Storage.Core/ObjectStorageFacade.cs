@@ -142,7 +142,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
     public async Task<bool> WriteObjectToStreamAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default)
     {
-        return await _dataStorage.WriteDataToPipeAsync(bucketName, key, writer, cancellationToken);
+        return await _dataStorage.WriteDataToPipeAsync(bucketName, key, writer, null, null, cancellationToken);
     }
 
     public async Task<bool> DeleteObjectAsync(string bucketName, string key, CancellationToken cancellationToken = default)
@@ -548,26 +548,29 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 return null;
             }
 
-            // Validate and normalize byte range
-            long startByte = byteRangeStart ?? 0;
-            long endByte = byteRangeEnd ?? (sourceInfo.Size - 1);
-
-            if (startByte < 0 || endByte >= sourceInfo.Size || startByte > endByte)
+            // Validate byte range
+            if (byteRangeStart.HasValue || byteRangeEnd.HasValue)
             {
-                _logger.LogWarning("Invalid byte range: {Start}-{End} for object size {Size}",
-                    startByte, endByte, sourceInfo.Size);
-                return null;
+                long startByte = byteRangeStart ?? 0;
+                long endByte = byteRangeEnd ?? (sourceInfo.Size - 1);
+
+                if (startByte < 0 || endByte >= sourceInfo.Size || startByte > endByte)
+                {
+                    _logger.LogWarning("Invalid byte range: {Start}-{End} for object size {Size}",
+                        startByte, endByte, sourceInfo.Size);
+                    return null;
+                }
             }
 
             // Create a pipe to stream data from source to destination
             var pipe = new Pipe();
 
-            // Start a background task to write source data to the pipe
+            // Start a background task to write source data (or byte range) to the pipe
             var writeTask = Task.Run(async () =>
             {
                 try
                 {
-                    await _dataStorage.WriteDataToPipeAsync(sourceBucketName, sourceKey, pipe.Writer, cancellationToken);
+                    await _dataStorage.WriteDataToPipeAsync(sourceBucketName, sourceKey, pipe.Writer, byteRangeStart, byteRangeEnd, cancellationToken);
                     await pipe.Writer.CompleteAsync();
                 }
                 catch (Exception ex)
@@ -578,31 +581,24 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 }
             }, cancellationToken);
 
-            // If a byte range is specified, wrap the reader to only read that range
-            PipeReader reader = pipe.Reader;
-            if (byteRangeStart.HasValue || byteRangeEnd.HasValue)
-            {
-                reader = new ByteRangePipeReader(pipe.Reader, startByte, endByte);
-            }
-
             try
             {
                 // Upload the data (or byte range) as a multipart part
                 var uploadPartResult = await _multipartUploadStorage.UploadPartAsync(
-                    destBucketName, destKey, uploadId, partNumber, reader, checksumRequest, cancellationToken);
+                    destBucketName, destKey, uploadId, partNumber, pipe.Reader, checksumRequest, cancellationToken);
 
                 // Wait for write task to complete
                 await writeTask;
 
                 _logger.LogInformation("Copied part {PartNumber} from {SourceBucket}/{SourceKey} (bytes {Start}-{End}) to {DestBucket}/{DestKey} upload {UploadId}",
-                    partNumber, sourceBucketName, sourceKey, startByte, endByte, destBucketName, destKey, uploadId);
+                    partNumber, sourceBucketName, sourceKey, byteRangeStart ?? 0, byteRangeEnd ?? (sourceInfo.Size - 1), destBucketName, destKey, uploadId);
 
                 return uploadPartResult.IsSuccess ? uploadPartResult.Value : null;
             }
             finally
             {
                 // Ensure reader is completed
-                await reader.CompleteAsync();
+                await pipe.Reader.CompleteAsync();
             }
         }
         catch (Exception ex)
@@ -610,129 +606,6 @@ public class ObjectStorageFacade : IObjectStorageFacade
             _logger.LogError(ex, "Error copying object part from {SourceBucket}/{SourceKey} to {DestBucket}/{DestKey} part {PartNumber}",
                 sourceBucketName, sourceKey, destBucketName, destKey, partNumber);
             return null;
-        }
-    }
-
-    /// <summary>
-    /// PipeReader wrapper that only reads a specific byte range from the underlying reader.
-    /// Simplified implementation: read entire source, then slice to range.
-    /// </summary>
-    private class ByteRangePipeReader : PipeReader
-    {
-        private readonly PipeReader _innerReader;
-        private readonly long _startByte;
-        private readonly long _endByte;
-        private long _position;
-        private SequencePosition _lastConsumed;
-        private SequencePosition _lastExamined;
-        private bool _completed;
-
-        public ByteRangePipeReader(PipeReader innerReader, long startByte, long endByte)
-        {
-            _innerReader = innerReader;
-            _startByte = startByte;
-            _endByte = endByte;
-            _position = 0;
-        }
-
-        public override async ValueTask<ReadResult> ReadAsync(CancellationToken cancellationToken = default)
-        {
-            if (_completed)
-            {
-                return new ReadResult(default, false, true);
-            }
-
-            var result = await _innerReader.ReadAsync(cancellationToken);
-            return ProcessBuffer(result);
-        }
-
-        public override bool TryRead(out ReadResult result)
-        {
-            if (_completed)
-            {
-                result = new ReadResult(default, false, true);
-                return true;
-            }
-
-            if (!_innerReader.TryRead(out var innerResult))
-            {
-                result = default;
-                return false;
-            }
-
-            result = ProcessBuffer(innerResult);
-            return true;
-        }
-
-        private ReadResult ProcessBuffer(ReadResult innerResult)
-        {
-            var buffer = innerResult.Buffer;
-            var bufferLength = buffer.Length;
-
-            // Calculate the range we need in the current buffer
-            var bytesToSkip = Math.Max(0, _startByte - _position);
-            var rangeSize = _endByte - _startByte + 1;
-            var alreadyReturned = _position - _startByte;
-            if (alreadyReturned < 0) alreadyReturned = 0;
-            var bytesToReturn = rangeSize - alreadyReturned;
-
-            // Update position for next call
-            _position += bufferLength;
-
-            // If we haven't reached the start yet
-            if (_position <= _startByte)
-            {
-                _lastConsumed = buffer.End;
-                _lastExamined = buffer.End;
-                return new ReadResult(default, innerResult.IsCanceled, innerResult.IsCompleted);
-            }
-
-            // If we're past the end
-            if (_position > _endByte + 1 && alreadyReturned >= rangeSize)
-            {
-                _completed = true;
-                _lastConsumed = buffer.End;
-                _lastExamined = buffer.End;
-                return new ReadResult(default, innerResult.IsCanceled, true);
-            }
-
-            // Slice the buffer to only return bytes within our range
-            var sliced = buffer;
-            if (bytesToSkip > 0)
-            {
-                sliced = buffer.Slice(Math.Min(bytesToSkip, bufferLength));
-            }
-            if (sliced.Length > bytesToReturn)
-            {
-                sliced = sliced.Slice(0, bytesToReturn);
-                _completed = true;
-            }
-
-            _lastConsumed = sliced.End;
-            _lastExamined = sliced.End;
-
-            return new ReadResult(sliced, innerResult.IsCanceled, _completed || innerResult.IsCompleted);
-        }
-
-        public override void AdvanceTo(SequencePosition consumed)
-        {
-            _innerReader.AdvanceTo(_lastConsumed);
-        }
-
-        public override void AdvanceTo(SequencePosition consumed, SequencePosition examined)
-        {
-            _innerReader.AdvanceTo(_lastConsumed, _lastExamined);
-        }
-
-        public override void CancelPendingRead()
-        {
-            _innerReader.CancelPendingRead();
-        }
-
-        public override void Complete(Exception? exception = null)
-        {
-            _completed = true;
-            _innerReader.Complete(exception);
         }
     }
 }

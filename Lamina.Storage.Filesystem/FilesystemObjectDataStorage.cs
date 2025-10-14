@@ -222,7 +222,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         }
     }
 
-    public async Task<bool> WriteDataToPipeAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default)
+    public async Task<bool> WriteDataToPipeAsync(string bucketName, string key, PipeWriter writer, long? byteRangeStart = null, long? byteRangeEnd = null, CancellationToken cancellationToken = default)
     {
         // Validate that the key doesn't conflict with temporary files or metadata directories
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
@@ -245,16 +245,46 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         }
 
         await using var fileStream = File.OpenRead(dataPath);
+        
+        // Calculate the actual byte range to read
+        long startPosition = byteRangeStart ?? 0;
+        long endPosition = byteRangeEnd ?? (fileStream.Length - 1);
+        long bytesToRead = endPosition - startPosition + 1;
+
+        // Validate range
+        if (startPosition < 0 || endPosition >= fileStream.Length || startPosition > endPosition)
+        {
+            _logger.LogWarning("Invalid byte range requested: {Start}-{End} for file size {Size}", startPosition, endPosition, fileStream.Length);
+            return false;
+        }
+
+        // Seek to the start position if needed
+        if (startPosition > 0)
+        {
+            fileStream.Seek(startPosition, SeekOrigin.Begin);
+        }
+
         const int bufferSize = 4096;
         var buffer = new byte[bufferSize];
-        int bytesRead;
+        long totalBytesRead = 0;
 
-        while ((bytesRead = await fileStream.ReadAsync(buffer, cancellationToken)) > 0)
+        while (totalBytesRead < bytesToRead)
         {
+            var remainingBytes = bytesToRead - totalBytesRead;
+            var bytesToReadNow = (int)Math.Min(bufferSize, remainingBytes);
+            
+            var bytesRead = await fileStream.ReadAsync(buffer.AsMemory(0, bytesToReadNow), cancellationToken);
+            if (bytesRead == 0)
+            {
+                break; // End of file reached
+            }
+
             var memory = writer.GetMemory(bytesRead);
             buffer.AsMemory(0, bytesRead).CopyTo(memory);
             writer.Advance(bytesRead);
             await writer.FlushAsync(cancellationToken);
+            
+            totalBytesRead += bytesRead;
         }
 
         await writer.CompleteAsync();

@@ -114,7 +114,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         return (totalSize, etag);
     }
 
-    public async Task<bool> WriteDataToPipeAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default)
+    public async Task<bool> WriteDataToPipeAsync(string bucketName, string key, PipeWriter writer, long? byteRangeStart = null, long? byteRangeEnd = null, CancellationToken cancellationToken = default)
     {
         if (!_data.TryGetValue(bucketName, out var bucketData) ||
             !bucketData.TryGetValue(key, out var data))
@@ -122,7 +122,22 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
             return false;
         }
 
-        await writer.WriteAsync(data, cancellationToken);
+        // Calculate the actual byte range to write
+        long startPosition = byteRangeStart ?? 0;
+        long endPosition = byteRangeEnd ?? (data.Length - 1);
+
+        // Validate range
+        if (startPosition < 0 || endPosition >= data.Length || startPosition > endPosition)
+        {
+            return false;
+        }
+
+        // Calculate length to write
+        int length = (int)(endPosition - startPosition + 1);
+        int offset = (int)startPosition;
+
+        // Write only the requested byte range
+        await writer.WriteAsync(new ReadOnlyMemory<byte>(data, offset, length), cancellationToken);
         await writer.CompleteAsync();
         return true;
     }

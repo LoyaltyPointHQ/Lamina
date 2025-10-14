@@ -786,4 +786,178 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var finalChecksum = headResponse.Headers.GetValues("x-amz-checksum-sha256").First();
         Assert.Equal(aggregatedChecksum, finalChecksum);
     }
+
+    [Fact]
+    public async Task UploadPartCopy_ParallelCopiesFromSameSource_CompleteQuickly()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create a source object of ~100KB with distinct regions
+        var contentBuilder = new StringBuilder();
+        contentBuilder.Append(new string('A', 50000)); // First 50KB
+        contentBuilder.Append(new string('B', 50000)); // Second 50KB
+        var sourceContent = contentBuilder.ToString();
+
+        await Client.PutAsync($"/{bucketName}/large-source.bin",
+            new StringContent(sourceContent, Encoding.UTF8));
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/parallel-dest.bin?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Act - Execute two UploadPartCopy operations in parallel copying different byte ranges from the same source
+        // This is the specific scenario that was taking 30+ seconds before the fix
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var copy1Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/parallel-dest.bin?partNumber=1&uploadId={initResult.UploadId}");
+        copy1Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/large-source.bin");
+        copy1Request.Headers.Add("x-amz-copy-source-range", "bytes=0-49999");
+
+        var copy2Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/parallel-dest.bin?partNumber=2&uploadId={initResult.UploadId}");
+        copy2Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/large-source.bin");
+        copy2Request.Headers.Add("x-amz-copy-source-range", "bytes=50000-99999");
+
+        // Execute both requests in parallel
+        var copy1Task = Client.SendAsync(copy1Request);
+        var copy2Task = Client.SendAsync(copy2Request);
+
+        var responses = await Task.WhenAll(copy1Task, copy2Task);
+        stopwatch.Stop();
+
+        // Assert - Both should succeed
+        Assert.Equal(HttpStatusCode.OK, responses[0].StatusCode);
+        Assert.Equal(HttpStatusCode.OK, responses[1].StatusCode);
+
+        // Assert - Should complete in reasonable time (< 5 seconds for 100KB, was 30+ seconds before fix)
+        Assert.True(stopwatch.Elapsed.TotalSeconds < 5,
+            $"Parallel UploadPartCopy operations took {stopwatch.Elapsed.TotalSeconds:F2} seconds, expected < 5 seconds");
+
+        // Get ETags from responses
+        var part1ETag = responses[0].Headers.GetValues("ETag").First().Trim('\"');
+        var part2ETag = responses[1].Headers.GetValues("ETag").First().Trim('\"');
+
+        // Complete multipart upload
+        var completeRequestXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<CompleteMultipartUpload>
+    <Part>
+        <PartNumber>1</PartNumber>
+        <ETag>{part1ETag}</ETag>
+    </Part>
+    <Part>
+        <PartNumber>2</PartNumber>
+        <ETag>{part2ETag}</ETag>
+    </Part>
+</CompleteMultipartUpload>";
+
+        var completeResponse = await Client.PostAsync(
+            $"/{bucketName}/parallel-dest.bin?uploadId={initResult.UploadId}",
+            new StringContent(completeRequestXml, Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
+
+        // Verify the final object has correct content
+        var getResponse = await Client.GetAsync($"/{bucketName}/parallel-dest.bin");
+        var resultContent = await getResponse.Content.ReadAsStringAsync();
+        Assert.Equal(100000, resultContent.Length);
+        Assert.Equal(sourceContent, resultContent);
+    }
+
+    [Fact]
+    public async Task UploadPartCopy_ThreeParallelCopiesFromSameSource_CompleteQuickly()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create a larger source object of ~150KB with distinct regions
+        var contentBuilder = new StringBuilder();
+        contentBuilder.Append(new string('X', 50000)); // Bytes 0-49999
+        contentBuilder.Append(new string('Y', 50000)); // Bytes 50000-99999
+        contentBuilder.Append(new string('Z', 50000)); // Bytes 100000-149999
+        var sourceContent = contentBuilder.ToString();
+
+        await Client.PutAsync($"/{bucketName}/large-source-3parts.bin",
+            new StringContent(sourceContent, Encoding.UTF8));
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/parallel-dest-3parts.bin?uploads", null);
+        var initXml = await initResponse.Content.ReadAsStringAsync();
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(initXml);
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Act - Execute three UploadPartCopy operations in parallel
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var copy1Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/parallel-dest-3parts.bin?partNumber=1&uploadId={initResult.UploadId}");
+        copy1Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/large-source-3parts.bin");
+        copy1Request.Headers.Add("x-amz-copy-source-range", "bytes=0-49999");
+
+        var copy2Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/parallel-dest-3parts.bin?partNumber=2&uploadId={initResult.UploadId}");
+        copy2Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/large-source-3parts.bin");
+        copy2Request.Headers.Add("x-amz-copy-source-range", "bytes=50000-99999");
+
+        var copy3Request = new HttpRequestMessage(HttpMethod.Put,
+            $"/{bucketName}/parallel-dest-3parts.bin?partNumber=3&uploadId={initResult.UploadId}");
+        copy3Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/large-source-3parts.bin");
+        copy3Request.Headers.Add("x-amz-copy-source-range", "bytes=100000-149999");
+
+        // Execute all three requests in parallel
+        var copy1Task = Client.SendAsync(copy1Request);
+        var copy2Task = Client.SendAsync(copy2Request);
+        var copy3Task = Client.SendAsync(copy3Request);
+
+        var responses = await Task.WhenAll(copy1Task, copy2Task, copy3Task);
+        stopwatch.Stop();
+
+        // Assert - All should succeed
+        Assert.Equal(HttpStatusCode.OK, responses[0].StatusCode);
+        Assert.Equal(HttpStatusCode.OK, responses[1].StatusCode);
+        Assert.Equal(HttpStatusCode.OK, responses[2].StatusCode);
+
+        // Assert - Should complete in reasonable time (< 7 seconds for 150KB with 3 parallel operations)
+        Assert.True(stopwatch.Elapsed.TotalSeconds < 7,
+            $"Three parallel UploadPartCopy operations took {stopwatch.Elapsed.TotalSeconds:F2} seconds, expected < 7 seconds");
+
+        // Get ETags from responses
+        var part1ETag = responses[0].Headers.GetValues("ETag").First().Trim('\"');
+        var part2ETag = responses[1].Headers.GetValues("ETag").First().Trim('\"');
+        var part3ETag = responses[2].Headers.GetValues("ETag").First().Trim('\"');
+
+        // Complete multipart upload
+        var completeRequestXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<CompleteMultipartUpload>
+    <Part>
+        <PartNumber>1</PartNumber>
+        <ETag>{part1ETag}</ETag>
+    </Part>
+    <Part>
+        <PartNumber>2</PartNumber>
+        <ETag>{part2ETag}</ETag>
+    </Part>
+    <Part>
+        <PartNumber>3</PartNumber>
+        <ETag>{part3ETag}</ETag>
+    </Part>
+</CompleteMultipartUpload>";
+
+        var completeResponse = await Client.PostAsync(
+            $"/{bucketName}/parallel-dest-3parts.bin?uploadId={initResult.UploadId}",
+            new StringContent(completeRequestXml, Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
+
+        // Verify the final object has correct content
+        var getResponse = await Client.GetAsync($"/{bucketName}/parallel-dest-3parts.bin");
+        var resultContent = await getResponse.Content.ReadAsStringAsync();
+        Assert.Equal(150000, resultContent.Length);
+        Assert.Equal(sourceContent, resultContent);
+    }
 }

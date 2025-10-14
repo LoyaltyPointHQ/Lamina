@@ -457,6 +457,277 @@ public class FilesystemObjectDataStorageTests : IDisposable
     }
 
 
+    [Fact]
+    public async Task WriteDataToPipeAsync_WithByteRange_ReadsOnlySpecifiedBytes()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string key = "byte-range-test.txt";
+        var content = Encoding.UTF8.GetBytes("0123456789ABCDEFGHIJ"); // 20 bytes
+
+        var storePipe = new Pipe();
+        await storePipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
+        await storePipe.Writer.CompleteAsync();
+
+        var storeResult = await _storage.StoreDataAsync(bucketName, key, storePipe.Reader, null, null);
+        Assert.True(storeResult.IsSuccess);
+
+        var readPipe = new Pipe();
+
+        // Act - Read bytes 5-14 (middle 10 bytes: "56789ABCDE")
+        var success = await _storage.WriteDataToPipeAsync(bucketName, key, readPipe.Writer, 5, 14, default);
+        Assert.True(success);
+        await readPipe.Writer.CompleteAsync();
+
+        // Read the result
+        var resultBuffer = new List<byte>();
+        while (true)
+        {
+            var result = await readPipe.Reader.ReadAsync();
+            var buffer = result.Buffer;
+
+            foreach (var segment in buffer)
+            {
+                resultBuffer.AddRange(segment.ToArray());
+            }
+
+            readPipe.Reader.AdvanceTo(buffer.End);
+
+            if (result.IsCompleted)
+            {
+                break;
+            }
+        }
+
+        await readPipe.Reader.CompleteAsync();
+
+        // Assert
+        Assert.Equal(10, resultBuffer.Count);
+        Assert.Equal("56789ABCDE", Encoding.UTF8.GetString(resultBuffer.ToArray()));
+    }
+
+    [Fact]
+    public async Task WriteDataToPipeAsync_MultipleConcurrentByteRangeReads_AllSucceed()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string key = "large-file.bin";
+
+        // Create a large file with distinct regions
+        var contentBuilder = new StringBuilder();
+        contentBuilder.Append(new string('A', 10000)); // Bytes 0-9999
+        contentBuilder.Append(new string('B', 10000)); // Bytes 10000-19999
+        contentBuilder.Append(new string('C', 10000)); // Bytes 20000-29999
+        var content = Encoding.UTF8.GetBytes(contentBuilder.ToString());
+
+        var storePipe = new Pipe();
+        await storePipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
+        await storePipe.Writer.CompleteAsync();
+
+        var storeResult = await _storage.StoreDataAsync(bucketName, key, storePipe.Reader, null, null);
+        Assert.True(storeResult.IsSuccess);
+
+        // Act - Read three different byte ranges concurrently (simulating parallel UploadPartCopy)
+        var pipe1 = new Pipe();
+        var pipe2 = new Pipe();
+        var pipe3 = new Pipe();
+
+        var write1Task = _storage.WriteDataToPipeAsync(bucketName, key, pipe1.Writer, 0, 9999, default);
+        var write2Task = _storage.WriteDataToPipeAsync(bucketName, key, pipe2.Writer, 10000, 19999, default);
+        var write3Task = _storage.WriteDataToPipeAsync(bucketName, key, pipe3.Writer, 20000, 29999, default);
+
+        // Read from all pipes concurrently
+        var read1Task = Task.Run(async () =>
+        {
+            var buffer = new List<byte>();
+            while (true)
+            {
+                var result = await pipe1.Reader.ReadAsync();
+                var readBuffer = result.Buffer;
+
+                foreach (var segment in readBuffer)
+                {
+                    buffer.AddRange(segment.ToArray());
+                }
+
+                pipe1.Reader.AdvanceTo(readBuffer.End);
+
+                if (result.IsCompleted)
+                {
+                    break;
+                }
+            }
+
+            await pipe1.Reader.CompleteAsync();
+            return buffer.ToArray();
+        });
+
+        var read2Task = Task.Run(async () =>
+        {
+            var buffer = new List<byte>();
+            while (true)
+            {
+                var result = await pipe2.Reader.ReadAsync();
+                var readBuffer = result.Buffer;
+
+                foreach (var segment in readBuffer)
+                {
+                    buffer.AddRange(segment.ToArray());
+                }
+
+                pipe2.Reader.AdvanceTo(readBuffer.End);
+
+                if (result.IsCompleted)
+                {
+                    break;
+                }
+            }
+
+            await pipe2.Reader.CompleteAsync();
+            return buffer.ToArray();
+        });
+
+        var read3Task = Task.Run(async () =>
+        {
+            var buffer = new List<byte>();
+            while (true)
+            {
+                var result = await pipe3.Reader.ReadAsync();
+                var readBuffer = result.Buffer;
+
+                foreach (var segment in readBuffer)
+                {
+                    buffer.AddRange(segment.ToArray());
+                }
+
+                pipe3.Reader.AdvanceTo(readBuffer.End);
+
+                if (result.IsCompleted)
+                {
+                    break;
+                }
+            }
+
+            await pipe3.Reader.CompleteAsync();
+            return buffer.ToArray();
+        });
+
+        await Task.WhenAll(write1Task, write2Task, write3Task);
+        var result1 = await read1Task;
+        var result2 = await read2Task;
+        var result3 = await read3Task;
+
+        // Assert
+        Assert.Equal(10000, result1.Length);
+        Assert.Equal(10000, result2.Length);
+        Assert.Equal(10000, result3.Length);
+
+        var str1 = Encoding.UTF8.GetString(result1);
+        var str2 = Encoding.UTF8.GetString(result2);
+        var str3 = Encoding.UTF8.GetString(result3);
+
+        Assert.True(str1.All(c => c == 'A'));
+        Assert.True(str2.All(c => c == 'B'));
+        Assert.True(str3.All(c => c == 'C'));
+    }
+
+    [Fact]
+    public async Task WriteDataToPipeAsync_InvalidByteRange_ReturnsFalse()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string key = "test-file.txt";
+        var content = Encoding.UTF8.GetBytes("0123456789"); // 10 bytes
+
+        var storePipe = new Pipe();
+        await storePipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
+        await storePipe.Writer.CompleteAsync();
+
+        var storeResult = await _storage.StoreDataAsync(bucketName, key, storePipe.Reader, null, null);
+        Assert.True(storeResult.IsSuccess);
+
+        var readPipe = new Pipe();
+
+        // Act - Try to read beyond file size (bytes 5-100, but file is only 10 bytes)
+        var success = await _storage.WriteDataToPipeAsync(bucketName, key, readPipe.Writer, 5, 100, default);
+
+        // Assert
+        Assert.False(success);
+    }
+
+    [Fact]
+    public async Task WriteDataToPipeAsync_ByteRangeWithStartGreaterThanEnd_ReturnsFalse()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string key = "test-file.txt";
+        var content = Encoding.UTF8.GetBytes("0123456789"); // 10 bytes
+
+        var storePipe = new Pipe();
+        await storePipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
+        await storePipe.Writer.CompleteAsync();
+
+        var storeResult = await _storage.StoreDataAsync(bucketName, key, storePipe.Reader, null, null);
+        Assert.True(storeResult.IsSuccess);
+
+        var readPipe = new Pipe();
+
+        // Act - Invalid range: start > end
+        var success = await _storage.WriteDataToPipeAsync(bucketName, key, readPipe.Writer, 8, 3, default);
+
+        // Assert
+        Assert.False(success);
+    }
+
+    [Fact]
+    public async Task WriteDataToPipeAsync_SingleByteRange_ReturnsOneByte()
+    {
+        // Arrange
+        const string bucketName = "test-bucket";
+        const string key = "test-file.txt";
+        var content = Encoding.UTF8.GetBytes("0123456789"); // 10 bytes
+
+        var storePipe = new Pipe();
+        await storePipe.Writer.WriteAsync(new ReadOnlyMemory<byte>(content));
+        await storePipe.Writer.CompleteAsync();
+
+        var storeResult = await _storage.StoreDataAsync(bucketName, key, storePipe.Reader, null, null);
+        Assert.True(storeResult.IsSuccess);
+
+        var readPipe = new Pipe();
+
+        // Act - Read single byte at position 5 ('5')
+        var success = await _storage.WriteDataToPipeAsync(bucketName, key, readPipe.Writer, 5, 5, default);
+        Assert.True(success);
+        await readPipe.Writer.CompleteAsync();
+
+        // Read the result
+        var resultBuffer = new List<byte>();
+        while (true)
+        {
+            var result = await readPipe.Reader.ReadAsync();
+            var buffer = result.Buffer;
+
+            foreach (var segment in buffer)
+            {
+                resultBuffer.AddRange(segment.ToArray());
+            }
+
+            readPipe.Reader.AdvanceTo(buffer.End);
+
+            if (result.IsCompleted)
+            {
+                break;
+            }
+        }
+
+        await readPipe.Reader.CompleteAsync();
+
+        // Assert
+        Assert.Single(resultBuffer);
+        Assert.Equal("5", Encoding.UTF8.GetString(resultBuffer.ToArray()));
+    }
+
     public void Dispose()
     {
         // Clean up test directories
