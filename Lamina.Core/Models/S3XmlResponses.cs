@@ -233,11 +233,11 @@ public class CopyObjectResult
 [XmlRoot("CopyPartResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
 public class CopyPartResult
 {
-    [XmlElement("ETag")]
-    public string ETag { get; set; } = string.Empty;
-
     [XmlElement("LastModified")]
     public string LastModified { get; set; } = string.Empty;
+
+    [XmlElement("ETag")]
+    public string ETag { get; set; } = string.Empty;
 
     [XmlElement("ChecksumCRC32")]
     public string? ChecksumCRC32 { get; set; }

@@ -1,3 +1,5 @@
+using System.Text;
+using System.Xml;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.Storage.Core;
@@ -13,6 +15,7 @@ using Lamina.Storage.Sql.Configuration;
 using Lamina.Storage.Sql.Context;
 using Lamina.WebApi.Configuration;
 using Lamina.WebApi.Extensions;
+using Lamina.WebApi.Formatters;
 using Lamina.WebApi.Middleware;
 using Lamina.WebApi.Services;
 using Lamina.WebApi.Streaming;
@@ -45,8 +48,21 @@ builder.Logging.AddDebug();
 builder.Services.AddControllers(options =>
 {
     options.RespectBrowserAcceptHeader = true;
+
+    // Remove default XML formatters
+    options.OutputFormatters.RemoveType<Microsoft.AspNetCore.Mvc.Formatters.XmlSerializerOutputFormatter>();
+    options.OutputFormatters.RemoveType<Microsoft.AspNetCore.Mvc.Formatters.XmlDataContractSerializerOutputFormatter>();
+
+    // Add custom S3 XML formatter with UTF-8 encoding and clean namespace output
+    var xmlWriterSettings = new XmlWriterSettings
+    {
+        Encoding = Encoding.UTF8,
+        Indent = false,
+        OmitXmlDeclaration = false
+    };
+    options.OutputFormatters.Add(new S3XmlOutputFormatter(xmlWriterSettings));
 })
-.AddXmlSerializerFormatters()
+.AddXmlSerializerFormatters() // Still add input formatters for deserialization
 .AddXmlDataContractSerializerFormatters();
 builder.Services.AddOpenApi();
 

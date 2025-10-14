@@ -300,7 +300,6 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var copyResponse = await Client.SendAsync(copyRequest);
 
         Assert.Equal(HttpStatusCode.OK, copyResponse.StatusCode);
-        Assert.True(copyResponse.Headers.Contains("ETag"));
 
         // Verify response contains CopyPartResult XML
         var copyXml = await copyResponse.Content.ReadAsStringAsync();
@@ -335,7 +334,14 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var copyResponse = await Client.SendAsync(copyRequest);
 
         Assert.Equal(HttpStatusCode.OK, copyResponse.StatusCode);
-        var partETag = copyResponse.Headers.GetValues("ETag").First().Trim('\"');
+        
+        // Extract ETag from XML response body
+        var copyXml = await copyResponse.Content.ReadAsStringAsync();
+        var copySerializer = new XmlSerializer(typeof(CopyPartResult));
+        using var copyReader = new StringReader(copyXml);
+        var copyResult = (CopyPartResult?)copySerializer.Deserialize(copyReader);
+        Assert.NotNull(copyResult);
+        var partETag = copyResult.ETag.Trim('\"');
 
         // Complete the upload with just this one part
         var completeRequestXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
@@ -383,7 +389,14 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         copy1Request.Headers.Add("x-amz-copy-source-range", "bytes=0-9999");
         var copy1Response = await Client.SendAsync(copy1Request);
         Assert.Equal(HttpStatusCode.OK, copy1Response.StatusCode);
-        var part1ETag = copy1Response.Headers.GetValues("ETag").First().Trim('\"');
+        
+        // Extract ETag from XML response body for part 1
+        var copy1Xml = await copy1Response.Content.ReadAsStringAsync();
+        var copy1Serializer = new XmlSerializer(typeof(CopyPartResult));
+        using var copy1Reader = new StringReader(copy1Xml);
+        var copy1Result = (CopyPartResult?)copy1Serializer.Deserialize(copy1Reader);
+        Assert.NotNull(copy1Result);
+        var part1ETag = copy1Result.ETag.Trim('\"');
 
         // Copy part 2: bytes 10000-19999 (10KB of 'B')
         var copy2Request = new HttpRequestMessage(HttpMethod.Put,
@@ -392,7 +405,14 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         copy2Request.Headers.Add("x-amz-copy-source-range", "bytes=10000-19999");
         var copy2Response = await Client.SendAsync(copy2Request);
         Assert.Equal(HttpStatusCode.OK, copy2Response.StatusCode);
-        var part2ETag = copy2Response.Headers.GetValues("ETag").First().Trim('\"');
+        
+        // Extract ETag from XML response body for part 2
+        var copy2Xml = await copy2Response.Content.ReadAsStringAsync();
+        var copy2Serializer = new XmlSerializer(typeof(CopyPartResult));
+        using var copy2Reader = new StringReader(copy2Xml);
+        var copy2Result = (CopyPartResult?)copy2Serializer.Deserialize(copy2Reader);
+        Assert.NotNull(copy2Result);
+        var part2ETag = copy2Result.ETag.Trim('\"');
 
         // Complete multipart upload
         var completeRequestXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
@@ -447,7 +467,11 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var copyResponse = await Client.SendAsync(copyRequest);
 
         Assert.Equal(HttpStatusCode.OK, copyResponse.StatusCode);
-        Assert.True(copyResponse.Headers.Contains("ETag"));
+        
+        // Verify response contains CopyPartResult XML with ETag
+        var copyXml = await copyResponse.Content.ReadAsStringAsync();
+        Assert.Contains("<CopyPartResult", copyXml);
+        Assert.Contains("<ETag>", copyXml);
     }
 
     [Fact]
@@ -535,7 +559,14 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         copy2Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.txt");
         var copy2Response = await Client.SendAsync(copy2Request);
         Assert.Equal(HttpStatusCode.OK, copy2Response.StatusCode);
-        var part2ETag = copy2Response.Headers.GetValues("ETag").First().Trim('\"');
+        
+        // Extract ETag from XML response body for part 2
+        var copy2Xml = await copy2Response.Content.ReadAsStringAsync();
+        var copy2Serializer = new XmlSerializer(typeof(CopyPartResult));
+        using var copy2Reader = new StringReader(copy2Xml);
+        var copy2Result = (CopyPartResult?)copy2Serializer.Deserialize(copy2Reader);
+        Assert.NotNull(copy2Result);
+        var part2ETag = copy2Result.ETag.Trim('\"');
 
         // Complete multipart upload
         var completeRequestXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
@@ -699,7 +730,14 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var copy1Response = await Client.SendAsync(copy1Request);
 
         Assert.Equal(HttpStatusCode.OK, copy1Response.StatusCode);
-        var part1ETag = copy1Response.Headers.GetValues("ETag").First().Trim('\"');
+        
+        // Extract ETag from XML response body for part 1
+        var copy1Xml = await copy1Response.Content.ReadAsStringAsync();
+        var copy1Serializer = new XmlSerializer(typeof(CopyPartResult));
+        using var copy1Reader = new StringReader(copy1Xml);
+        var copy1Result = (CopyPartResult?)copy1Serializer.Deserialize(copy1Reader);
+        Assert.NotNull(copy1Result);
+        var part1ETag = copy1Result.ETag.Trim('\"');
 
         // Verify response contains SHA256 checksum
         Assert.True(copy1Response.Headers.Contains("x-amz-checksum-sha256"),
@@ -709,7 +747,6 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         Assert.NotEmpty(part1Checksum);
 
         // Verify CopyPartResult XML contains checksum
-        var copy1Xml = await copy1Response.Content.ReadAsStringAsync();
         Assert.Contains("ChecksumSHA256", copy1Xml);
         Assert.Contains(part1Checksum, copy1Xml);
 
@@ -721,7 +758,14 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var copy2Response = await Client.SendAsync(copy2Request);
 
         Assert.Equal(HttpStatusCode.OK, copy2Response.StatusCode);
-        var part2ETag = copy2Response.Headers.GetValues("ETag").First().Trim('\"');
+        
+        // Extract ETag from XML response body for part 2
+        var copy2Xml = await copy2Response.Content.ReadAsStringAsync();
+        var copy2Serializer = new XmlSerializer(typeof(CopyPartResult));
+        using var copy2Reader = new StringReader(copy2Xml);
+        var copy2Result = (CopyPartResult?)copy2Serializer.Deserialize(copy2Reader);
+        Assert.NotNull(copy2Result);
+        var part2ETag = copy2Result.ETag.Trim('\"');
 
         // Verify response contains SHA256 checksum
         Assert.True(copy2Response.Headers.Contains("x-amz-checksum-sha256"),
@@ -838,9 +882,20 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         Assert.True(stopwatch.Elapsed.TotalSeconds < 5,
             $"Parallel UploadPartCopy operations took {stopwatch.Elapsed.TotalSeconds:F2} seconds, expected < 5 seconds");
 
-        // Get ETags from responses
-        var part1ETag = responses[0].Headers.GetValues("ETag").First().Trim('\"');
-        var part2ETag = responses[1].Headers.GetValues("ETag").First().Trim('\"');
+        // Get ETags from XML responses
+        var response1Xml = await responses[0].Content.ReadAsStringAsync();
+        var response1Serializer = new XmlSerializer(typeof(CopyPartResult));
+        using var response1Reader = new StringReader(response1Xml);
+        var response1Result = (CopyPartResult?)response1Serializer.Deserialize(response1Reader);
+        Assert.NotNull(response1Result);
+        var part1ETag = response1Result.ETag.Trim('\"');
+
+        var response2Xml = await responses[1].Content.ReadAsStringAsync();
+        var response2Serializer = new XmlSerializer(typeof(CopyPartResult));
+        using var response2Reader = new StringReader(response2Xml);
+        var response2Result = (CopyPartResult?)response2Serializer.Deserialize(response2Reader);
+        Assert.NotNull(response2Result);
+        var part2ETag = response2Result.ETag.Trim('\"');
 
         // Complete multipart upload
         var completeRequestXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
@@ -926,10 +981,27 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         Assert.True(stopwatch.Elapsed.TotalSeconds < 7,
             $"Three parallel UploadPartCopy operations took {stopwatch.Elapsed.TotalSeconds:F2} seconds, expected < 7 seconds");
 
-        // Get ETags from responses
-        var part1ETag = responses[0].Headers.GetValues("ETag").First().Trim('\"');
-        var part2ETag = responses[1].Headers.GetValues("ETag").First().Trim('\"');
-        var part3ETag = responses[2].Headers.GetValues("ETag").First().Trim('\"');
+        // Get ETags from XML responses
+        var response1Xml = await responses[0].Content.ReadAsStringAsync();
+        var response1Serializer = new XmlSerializer(typeof(CopyPartResult));
+        using var response1Reader = new StringReader(response1Xml);
+        var response1Result = (CopyPartResult?)response1Serializer.Deserialize(response1Reader);
+        Assert.NotNull(response1Result);
+        var part1ETag = response1Result.ETag.Trim('\"');
+
+        var response2Xml = await responses[1].Content.ReadAsStringAsync();
+        var response2Serializer = new XmlSerializer(typeof(CopyPartResult));
+        using var response2Reader = new StringReader(response2Xml);
+        var response2Result = (CopyPartResult?)response2Serializer.Deserialize(response2Reader);
+        Assert.NotNull(response2Result);
+        var part2ETag = response2Result.ETag.Trim('\"');
+
+        var response3Xml = await responses[2].Content.ReadAsStringAsync();
+        var response3Serializer = new XmlSerializer(typeof(CopyPartResult));
+        using var response3Reader = new StringReader(response3Xml);
+        var response3Result = (CopyPartResult?)response3Serializer.Deserialize(response3Reader);
+        Assert.NotNull(response3Result);
+        var part3ETag = response3Result.ETag.Trim('\"');
 
         // Complete multipart upload
         var completeRequestXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
@@ -986,7 +1058,6 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var copy1Response = await Client.SendAsync(copy1Request);
 
         Assert.Equal(HttpStatusCode.OK, copy1Response.StatusCode);
-        var firstETag = copy1Response.Headers.GetValues("ETag").First();
         var firstXml = await copy1Response.Content.ReadAsStringAsync();
 
         // Parse first response to get ETag and LastModified
@@ -1003,10 +1074,6 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
 
         // Assert - The retry should succeed with HTTP 200
         Assert.Equal(HttpStatusCode.OK, copy2Response.StatusCode);
-
-        // Assert - The ETag should be the same as the first request (idempotent)
-        var secondETag = copy2Response.Headers.GetValues("ETag").First();
-        Assert.Equal(firstETag, secondETag);
 
         // Assert - The XML response should contain the same part information
         var secondXml = await copy2Response.Content.ReadAsStringAsync();

@@ -365,7 +365,6 @@ public class S3MultipartController : S3ControllerBase
                     partNumber, uploadId);
                 
                 // Return the existing part information
-                Response.Headers.Append("ETag", $"\"{existingPart.ETag}\"");
                 Response.Headers.Append("x-amz-copy-source-version-id", "null");
 
                 // Add checksum headers if present
@@ -392,11 +391,8 @@ public class S3MultipartController : S3ControllerBase
                     ChecksumSHA256 = existingPart.ChecksumSHA256
                 };
 
-                var cachedSerializer = new XmlSerializer(typeof(CopyPartResult));
-                await using var cachedWriter = new StringWriter();
-                cachedSerializer.Serialize(cachedWriter, cachedResult);
-
-                return Content(cachedWriter.ToString(), "application/xml");
+                Response.ContentType = "application/xml";
+                return Ok(cachedResult);
             }
 
             // Parse x-amz-copy-source header
@@ -522,8 +518,7 @@ public class S3MultipartController : S3ControllerBase
                 return StatusCode(500);
             }
 
-            // Return success with ETag and copy metadata
-            Response.Headers.Append("ETag", $"\"{uploadPart.ETag}\"");
+            // Return success with copy metadata
             Response.Headers.Append("x-amz-copy-source-version-id", "null"); // No versioning support yet
 
             // Add checksum headers if present
@@ -550,12 +545,8 @@ public class S3MultipartController : S3ControllerBase
                 ChecksumSHA256 = uploadPart.ChecksumSHA256
             };
 
-            // Serialize to XML and return - Content() method handles ContentType
-            var xmlSerializer = new XmlSerializer(typeof(CopyPartResult));
-            await using var stringWriter = new StringWriter();
-            xmlSerializer.Serialize(stringWriter, copyPartResult);
-
-            return Content(stringWriter.ToString(), "application/xml");
+            Response.ContentType = "application/xml";
+            return Ok(copyPartResult);
         }
         catch (InvalidOperationException ex)
         {
