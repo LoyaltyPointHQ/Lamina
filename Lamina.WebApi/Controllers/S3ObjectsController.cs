@@ -441,13 +441,116 @@ public class S3ObjectsController : S3ControllerBase
             return S3Error("NoSuchKey", "The specified key does not exist.", $"{bucketName}/{key}", 404);
         }
 
+        // Parse Range header if present
+        long? byteRangeStart = null;
+        long? byteRangeEnd = null;
+        bool isRangeRequest = false;
+
+        if (Request.Headers.TryGetValue("Range", out var rangeHeader) && !string.IsNullOrEmpty(rangeHeader.ToString()))
+        {
+            var rangeStr = rangeHeader.ToString();
+            if (rangeStr.StartsWith("bytes=", StringComparison.OrdinalIgnoreCase))
+            {
+                var bytesRange = rangeStr.Substring(6); // Remove "bytes=" prefix
+                var rangeParts = bytesRange.Split('-');
+
+                if (rangeParts.Length == 2)
+                {
+                    // Parse start and end
+                    var startStr = rangeParts[0].Trim();
+                    var endStr = rangeParts[1].Trim();
+
+                    if (!string.IsNullOrEmpty(startStr) && long.TryParse(startStr, out var start))
+                    {
+                        byteRangeStart = start;
+                    }
+
+                    if (!string.IsNullOrEmpty(endStr) && long.TryParse(endStr, out var end))
+                    {
+                        byteRangeEnd = end;
+                    }
+                    else if (string.IsNullOrEmpty(endStr) && byteRangeStart.HasValue)
+                    {
+                        // Open-ended range: bytes=100-
+                        byteRangeEnd = metadata.Size - 1;
+                    }
+
+                    // Handle suffix-byte-range: bytes=-500 (last 500 bytes)
+                    if (string.IsNullOrEmpty(startStr) && byteRangeEnd.HasValue)
+                    {
+                        var suffixLength = byteRangeEnd.Value;
+                        byteRangeStart = Math.Max(0, metadata.Size - suffixLength);
+                        byteRangeEnd = metadata.Size - 1;
+                    }
+
+                    isRangeRequest = true;
+                }
+            }
+        }
+
+        // Validate range
+        if (isRangeRequest)
+        {
+            if (byteRangeStart.HasValue && byteRangeStart.Value >= metadata.Size)
+            {
+                _logger.LogWarning("Invalid range for object {Key} in bucket {BucketName}: start {Start} >= size {Size}",
+                    key, bucketName, byteRangeStart.Value, metadata.Size);
+                Response.Headers.Append("Content-Range", $"bytes */{metadata.Size}");
+                return S3Error("InvalidRange", "The requested range is not satisfiable", $"/{bucketName}/{key}", 416);
+            }
+
+            if (byteRangeStart.HasValue && byteRangeEnd.HasValue && byteRangeStart.Value > byteRangeEnd.Value)
+            {
+                _logger.LogWarning("Invalid range for object {Key} in bucket {BucketName}: start {Start} > end {End}",
+                    key, bucketName, byteRangeStart.Value, byteRangeEnd.Value);
+                Response.Headers.Append("Content-Range", $"bytes */{metadata.Size}");
+                return S3Error("InvalidRange", "The requested range is not satisfiable", $"/{bucketName}/{key}", 416);
+            }
+
+            // Clamp end to object size
+            if (byteRangeEnd.HasValue && byteRangeEnd.Value >= metadata.Size)
+            {
+                byteRangeEnd = metadata.Size - 1;
+            }
+        }
+
+        // Set response headers
         Response.Headers.Append("ETag", $"\"{metadata.ETag}\"");
         Response.Headers.Append("Last-Modified", metadata.LastModified.ToString("R"));
-        Response.Headers.Append("Content-Length", metadata.Size.ToString());
+        Response.Headers.Append("Accept-Ranges", "bytes");
 
         foreach (var metadataItem in metadata.Metadata)
         {
             Response.Headers.Append($"x-amz-meta-{metadataItem.Key}", metadataItem.Value);
+        }
+
+        // Add checksum headers if present
+        if (!string.IsNullOrEmpty(metadata.ChecksumCRC32))
+            Response.Headers.Append("x-amz-checksum-crc32", metadata.ChecksumCRC32);
+        if (!string.IsNullOrEmpty(metadata.ChecksumCRC32C))
+            Response.Headers.Append("x-amz-checksum-crc32c", metadata.ChecksumCRC32C);
+        if (!string.IsNullOrEmpty(metadata.ChecksumSHA1))
+            Response.Headers.Append("x-amz-checksum-sha1", metadata.ChecksumSHA1);
+        if (!string.IsNullOrEmpty(metadata.ChecksumSHA256))
+            Response.Headers.Append("x-amz-checksum-sha256", metadata.ChecksumSHA256);
+        if (!string.IsNullOrEmpty(metadata.ChecksumCRC64NVME))
+            Response.Headers.Append("x-amz-checksum-crc64nvme", metadata.ChecksumCRC64NVME);
+
+        // Calculate content length and set status code
+        long contentLength;
+        if (isRangeRequest && byteRangeStart.HasValue && byteRangeEnd.HasValue)
+        {
+            contentLength = byteRangeEnd.Value - byteRangeStart.Value + 1;
+            Response.Headers.Append("Content-Range", $"bytes {byteRangeStart.Value}-{byteRangeEnd.Value}/{metadata.Size}");
+            Response.Headers.Append("Content-Length", contentLength.ToString());
+            Response.StatusCode = 206; // Partial Content
+            _logger.LogInformation("Returning partial content for {Key} in bucket {BucketName}: bytes {Start}-{End}/{Total}",
+                key, bucketName, byteRangeStart.Value, byteRangeEnd.Value, metadata.Size);
+        }
+        else
+        {
+            contentLength = metadata.Size;
+            Response.Headers.Append("Content-Length", contentLength.ToString());
         }
 
         // Create a pipe to stream data back
@@ -459,7 +562,7 @@ public class S3ObjectsController : S3ControllerBase
         {
             try
             {
-                await _objectStorage.WriteObjectToStreamAsync(bucketName, key, writer, cancellationToken);
+                await _objectStorage.WriteObjectToStreamAsync(bucketName, key, writer, byteRangeStart, byteRangeEnd, cancellationToken);
                 await writer.CompleteAsync();
             }
             catch (Exception ex)

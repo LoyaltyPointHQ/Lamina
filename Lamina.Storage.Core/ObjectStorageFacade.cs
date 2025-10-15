@@ -140,9 +140,9 @@ public class ObjectStorageFacade : IObjectStorageFacade
         }
     }
 
-    public async Task<bool> WriteObjectToStreamAsync(string bucketName, string key, PipeWriter writer, CancellationToken cancellationToken = default)
+    public async Task<bool> WriteObjectToStreamAsync(string bucketName, string key, PipeWriter writer, long? byteRangeStart = null, long? byteRangeEnd = null, CancellationToken cancellationToken = default)
     {
-        return await _dataStorage.WriteDataToPipeAsync(bucketName, key, writer, null, null, cancellationToken);
+        return await _dataStorage.WriteDataToPipeAsync(bucketName, key, writer, byteRangeStart, byteRangeEnd, cancellationToken);
     }
 
     public async Task<bool> DeleteObjectAsync(string bucketName, string key, CancellationToken cancellationToken = default)

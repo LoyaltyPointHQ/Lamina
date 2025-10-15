@@ -952,4 +952,251 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         var destContent = await getResponse.Content.ReadAsStringAsync();
         Assert.Equal("Source content with checksum", destContent);
     }
+
+    [Fact]
+    public async Task GetObject_WithRangeHeader_ReturnsPartialContent()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var content = "0123456789ABCDEFGHIJ"; // 20 bytes
+        await Client.PutAsync($"/{bucketName}/range-test.txt",
+            new StringContent(content, Encoding.UTF8, "text/plain"));
+
+        // Request first 10 bytes
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/range-test.txt");
+        request.Headers.Add("Range", "bytes=0-9");
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.PartialContent, response.StatusCode);
+        Assert.Equal("bytes", response.Headers.GetValues("Accept-Ranges").First());
+        Assert.Equal("bytes 0-9/20", response.Content.Headers.GetValues("Content-Range").First());
+        Assert.Equal(10, response.Content.Headers.ContentLength);
+
+        var responseContent = await response.Content.ReadAsStringAsync();
+        Assert.Equal("0123456789", responseContent);
+    }
+
+    [Fact]
+    public async Task GetObject_WithOpenEndedRange_ReturnsFromStartToEnd()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var content = "0123456789ABCDEFGHIJ"; // 20 bytes
+        await Client.PutAsync($"/{bucketName}/range-test.txt",
+            new StringContent(content, Encoding.UTF8, "text/plain"));
+
+        // Request from byte 10 to end
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/range-test.txt");
+        request.Headers.Add("Range", "bytes=10-");
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.PartialContent, response.StatusCode);
+        Assert.Equal("bytes 10-19/20", response.Content.Headers.GetValues("Content-Range").First());
+        Assert.Equal(10, response.Content.Headers.ContentLength);
+
+        var responseContent = await response.Content.ReadAsStringAsync();
+        Assert.Equal("ABCDEFGHIJ", responseContent);
+    }
+
+    [Fact]
+    public async Task GetObject_WithSuffixRange_ReturnsLastBytes()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var content = "0123456789ABCDEFGHIJ"; // 20 bytes
+        await Client.PutAsync($"/{bucketName}/range-test.txt",
+            new StringContent(content, Encoding.UTF8, "text/plain"));
+
+        // Request last 5 bytes
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/range-test.txt");
+        request.Headers.Add("Range", "bytes=-5");
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.PartialContent, response.StatusCode);
+        Assert.Equal("bytes 15-19/20", response.Content.Headers.GetValues("Content-Range").First());
+        Assert.Equal(5, response.Content.Headers.ContentLength);
+
+        var responseContent = await response.Content.ReadAsStringAsync();
+        Assert.Equal("FGHIJ", responseContent);
+    }
+
+    [Fact]
+    public async Task GetObject_WithSingleByteRange_ReturnsSingleByte()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var content = "0123456789"; // 10 bytes
+        await Client.PutAsync($"/{bucketName}/range-test.txt",
+            new StringContent(content, Encoding.UTF8, "text/plain"));
+
+        // Request single byte at position 5
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/range-test.txt");
+        request.Headers.Add("Range", "bytes=5-5");
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.PartialContent, response.StatusCode);
+        Assert.Equal("bytes 5-5/10", response.Content.Headers.GetValues("Content-Range").First());
+        Assert.Equal(1, response.Content.Headers.ContentLength);
+
+        var responseContent = await response.Content.ReadAsStringAsync();
+        Assert.Equal("5", responseContent);
+    }
+
+    [Fact]
+    public async Task GetObject_WithRangeBeyondEnd_ClampsToObjectSize()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var content = "0123456789"; // 10 bytes
+        await Client.PutAsync($"/{bucketName}/range-test.txt",
+            new StringContent(content, Encoding.UTF8, "text/plain"));
+
+        // Request range that extends beyond object
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/range-test.txt");
+        request.Headers.Add("Range", "bytes=5-99");
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.PartialContent, response.StatusCode);
+        Assert.Equal("bytes 5-9/10", response.Content.Headers.GetValues("Content-Range").First());
+        Assert.Equal(5, response.Content.Headers.ContentLength);
+
+        var responseContent = await response.Content.ReadAsStringAsync();
+        Assert.Equal("56789", responseContent);
+    }
+
+    [Fact]
+    public async Task GetObject_WithInvalidRangeStartGreaterThanSize_Returns416()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var content = "0123456789"; // 10 bytes
+        await Client.PutAsync($"/{bucketName}/range-test.txt",
+            new StringContent(content, Encoding.UTF8, "text/plain"));
+
+        // Request range starting beyond object size
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/range-test.txt");
+        request.Headers.Add("Range", "bytes=20-30");
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.RequestedRangeNotSatisfiable, response.StatusCode);
+        Assert.Equal("bytes */10", response.Content.Headers.GetValues("Content-Range").First());
+
+        var errorXml = await response.Content.ReadAsStringAsync();
+        Assert.Contains("InvalidRange", errorXml);
+    }
+
+    [Fact]
+    public async Task GetObject_WithInvalidRangeStartGreaterThanEnd_Returns416()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var content = "0123456789"; // 10 bytes
+        await Client.PutAsync($"/{bucketName}/range-test.txt",
+            new StringContent(content, Encoding.UTF8, "text/plain"));
+
+        // Request range with start > end
+        // Note: HttpClient validates Range header format, so we use TryAddWithoutValidation
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/range-test.txt");
+        request.Headers.TryAddWithoutValidation("Range", "bytes=5-3");
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.RequestedRangeNotSatisfiable, response.StatusCode);
+        Assert.Equal("bytes */10", response.Content.Headers.GetValues("Content-Range").First());
+
+        var errorXml = await response.Content.ReadAsStringAsync();
+        Assert.Contains("InvalidRange", errorXml);
+    }
+
+    [Fact]
+    public async Task GetObject_NoRangeHeader_ReturnsFullObject()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var content = "Full content without range";
+        await Client.PutAsync($"/{bucketName}/no-range.txt",
+            new StringContent(content, Encoding.UTF8, "text/plain"));
+
+        var response = await Client.GetAsync($"/{bucketName}/no-range.txt");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("bytes", response.Headers.GetValues("Accept-Ranges").First());
+        Assert.False(response.Content.Headers.Contains("Content-Range"));
+        Assert.Equal(content.Length, response.Content.Headers.ContentLength);
+
+        var responseContent = await response.Content.ReadAsStringAsync();
+        Assert.Equal(content, responseContent);
+    }
+
+    [Fact]
+    public async Task GetObject_WithRangeHeaderOnNonExistentObject_Returns404()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/non-existent.txt");
+        request.Headers.Add("Range", "bytes=0-9");
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+
+        var errorXml = await response.Content.ReadAsStringAsync();
+        Assert.Contains("NoSuchKey", errorXml);
+    }
+
+    [Fact]
+    public async Task GetObject_WithRange_IncludesETagAndLastModified()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var content = "0123456789ABCDEFGHIJ";
+        await Client.PutAsync($"/{bucketName}/range-test.txt",
+            new StringContent(content, Encoding.UTF8, "text/plain"));
+
+        // Request with range
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/range-test.txt");
+        request.Headers.Add("Range", "bytes=0-9");
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.PartialContent, response.StatusCode);
+
+        // Verify standard headers are present
+        var allHeaders = response.Headers.Concat(response.Content.Headers).Select(h => h.Key);
+        Assert.Contains("ETag", allHeaders);
+        Assert.Contains("Last-Modified", allHeaders);
+        Assert.Contains("Accept-Ranges", allHeaders);
+    }
+
+    [Fact]
+    public async Task GetObject_WithRangeAndMetadata_IncludesMetadataHeaders()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create object with custom metadata
+        var putRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/meta-range.txt");
+        putRequest.Content = new StringContent("0123456789ABCDEFGHIJ", Encoding.UTF8, "text/plain");
+        putRequest.Headers.Add("x-amz-meta-test-key", "test-value");
+        await Client.SendAsync(putRequest);
+
+        // Request with range
+        var getRequest = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/meta-range.txt");
+        getRequest.Headers.Add("Range", "bytes=0-9");
+        var response = await Client.SendAsync(getRequest);
+
+        Assert.Equal(HttpStatusCode.PartialContent, response.StatusCode);
+
+        // Verify metadata headers are present
+        Assert.Contains("x-amz-meta-test-key", response.Headers.Select(h => h.Key));
+        Assert.Equal("test-value", response.Headers.GetValues("x-amz-meta-test-key").First());
+    }
+
+    [Fact]
+    public async Task GetObject_WithEntireObjectRange_Returns206()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var content = "0123456789"; // 10 bytes
+        await Client.PutAsync($"/{bucketName}/range-test.txt",
+            new StringContent(content, Encoding.UTF8, "text/plain"));
+
+        // Request entire object with range header
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/range-test.txt");
+        request.Headers.Add("Range", "bytes=0-9");
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.PartialContent, response.StatusCode);
+        Assert.Equal("bytes 0-9/10", response.Content.Headers.GetValues("Content-Range").First());
+        Assert.Equal(10, response.Content.Headers.ContentLength);
+
+        var responseContent = await response.Content.ReadAsStringAsync();
+        Assert.Equal(content, responseContent);
+    }
 }
