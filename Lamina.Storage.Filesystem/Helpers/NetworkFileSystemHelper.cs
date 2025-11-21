@@ -247,9 +247,18 @@ public class NetworkFileSystemHelper
             {
                 if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
                 {
-                    // For CIFS, we'll let the retry mechanism handle "directory not empty" errors
-                    Directory.Delete(directory);
-                    directory = Path.GetDirectoryName(directory);
+                    try
+                    {
+                        // For CIFS, we'll let the retry mechanism handle "directory not empty" errors
+                        Directory.Delete(directory);
+                        directory = Path.GetDirectoryName(directory);
+                    }
+                    catch (DirectoryNotFoundException)
+                    {
+                        // Directory was already deleted by another thread/process - this is fine
+                        // Break the loop since parent directories may also be deleted
+                        break;
+                    }
                 }
                 else
                 {

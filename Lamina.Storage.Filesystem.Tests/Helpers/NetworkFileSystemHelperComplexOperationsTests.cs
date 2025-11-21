@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
@@ -338,6 +340,142 @@ public class NetworkFileSystemHelperComplexOperationsTests : IDisposable
 
         // Assert - should still exist (we hit the stop condition)
         Assert.True(Directory.Exists(dirPath));
+    }
+
+    #endregion
+
+    #region DeleteDirectoryIfEmptyAsync Race Condition Tests
+
+    [Fact]
+    public async Task DeleteDirectoryIfEmpty_ConcurrentDeletionOfSameHierarchy_HandlesRaceCondition()
+    {
+        // Arrange
+        var helper = CreateHelper(NetworkFileSystemMode.CIFS);
+        var level1 = Path.Combine(_testDir, "level1");
+        var level2 = Path.Combine(level1, "level2");
+        var level3 = Path.Combine(level2, "level3");
+        Directory.CreateDirectory(level3);
+
+        // Act - Multiple threads simultaneously delete the same directory hierarchy
+        var tasks = Enumerable.Range(0, 10)
+            .Select(_ => helper.DeleteDirectoryIfEmptyAsync(level3, _testDir))
+            .ToArray();
+
+        // Should not throw - all tasks should handle DirectoryNotFoundException gracefully
+        await Task.WhenAll(tasks);
+
+        // Assert
+        Assert.False(Directory.Exists(level3));
+        Assert.False(Directory.Exists(level2));
+        Assert.False(Directory.Exists(level1));
+    }
+
+    [Fact]
+    public async Task DeleteDirectoryIfEmpty_ParentDeletedByAnotherThread_DoesNotThrow()
+    {
+        // Arrange
+        var helper = CreateHelper(NetworkFileSystemMode.NFS);
+        var level1 = Path.Combine(_testDir, "level1");
+        var level2 = Path.Combine(level1, "level2");
+        var level3a = Path.Combine(level2, "level3a");
+        var level3b = Path.Combine(level2, "level3b");
+        Directory.CreateDirectory(level3a);
+        Directory.CreateDirectory(level3b);
+
+        // Act - Two threads delete sibling directories, racing to delete shared parents
+        var task1 = helper.DeleteDirectoryIfEmptyAsync(level3a, _testDir);
+        var task2 = helper.DeleteDirectoryIfEmptyAsync(level3b, _testDir);
+
+        // Should not throw even though both try to delete level2 and level1
+        await Task.WhenAll(task1, task2);
+
+        // Assert
+        Assert.False(Directory.Exists(level3a));
+        Assert.False(Directory.Exists(level3b));
+        Assert.False(Directory.Exists(level2));
+        Assert.False(Directory.Exists(level1));
+    }
+
+    [Fact]
+    public async Task DeleteDirectoryIfEmpty_HighConcurrencyStressTest_NoExceptions()
+    {
+        // Arrange
+        var helper = CreateHelper(NetworkFileSystemMode.CIFS);
+        const int threadCount = 20;
+        const int hierarchyCount = 5;
+
+        // Create multiple overlapping directory hierarchies
+        var hierarchies = new List<string>();
+        for (int i = 0; i < hierarchyCount; i++)
+        {
+            var level1 = Path.Combine(_testDir, $"shared");
+            var level2 = Path.Combine(level1, $"sub{i}");
+            var level3 = Path.Combine(level2, $"deep{i}");
+            Directory.CreateDirectory(level3);
+            hierarchies.Add(level3);
+        }
+
+        // Act - Many threads concurrently delete overlapping hierarchies
+        var tasks = new List<Task>();
+        for (int i = 0; i < threadCount; i++)
+        {
+            var hierarchy = hierarchies[i % hierarchyCount];
+            tasks.Add(helper.DeleteDirectoryIfEmptyAsync(hierarchy, _testDir));
+        }
+
+        // Should handle all race conditions without throwing
+        await Task.WhenAll(tasks);
+
+        // Assert - All hierarchies should be cleaned up
+        foreach (var hierarchy in hierarchies)
+        {
+            Assert.False(Directory.Exists(hierarchy));
+        }
+    }
+
+    [Fact]
+    public async Task DeleteDirectoryIfEmpty_MultipleObjectsInSameDirectory_SimulatesRealWorldScenario()
+    {
+        // Arrange - Simulates the MongoDB backup scenario from the logs
+        var helper = CreateHelper(NetworkFileSystemMode.CIFS);
+        var bucketDir = Path.Combine(_testDir, "mongo");
+        var dateDir = Path.Combine(bucketDir, "2025-11-14T02:00:00Z");
+        var rs0Dir = Path.Combine(dateDir, "rs0");
+        var metaDir = Path.Combine(rs0Dir, ".lamina-meta");
+
+        Directory.CreateDirectory(metaDir);
+
+        // Create multiple metadata files (simulating multiple objects)
+        var metadataFiles = new[]
+        {
+            Path.Combine(metaDir, "meta.pbm.json"),
+            Path.Combine(metaDir, "admin.system.version.gz.json"),
+            Path.Combine(metaDir, "admin.pbmRUsers.gz.json"),
+            Path.Combine(metaDir, "admin.pbmRRoles.gz.json")
+        };
+
+        foreach (var file in metadataFiles)
+        {
+            await File.WriteAllTextAsync(file, "{}");
+        }
+
+        // Act - Simulate concurrent deletion of multiple objects (each triggers directory cleanup)
+        var deleteTasks = metadataFiles.Select(async file =>
+        {
+            // Delete file
+            File.Delete(file);
+            // Then try to clean up directories
+            await helper.DeleteDirectoryIfEmptyAsync(metaDir, bucketDir);
+        }).ToArray();
+
+        // Should not throw DirectoryNotFoundException
+        await Task.WhenAll(deleteTasks);
+
+        // Assert - All empty directories should be cleaned up
+        Assert.False(Directory.Exists(metaDir));
+        Assert.False(Directory.Exists(rs0Dir));
+        Assert.False(Directory.Exists(dateDir));
+        Assert.True(Directory.Exists(bucketDir)); // Stop directory should remain
     }
 
     #endregion
