@@ -2,15 +2,16 @@ using System.Runtime.InteropServices;
 using Lamina.Storage.Filesystem.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Retry;
 
 namespace Lamina.Storage.Filesystem.Helpers;
 
 public class NetworkFileSystemHelper
 {
     private readonly NetworkFileSystemMode _mode;
-    private readonly int _retryCount;
-    private readonly int _retryDelayMs;
     private readonly ILogger<NetworkFileSystemHelper> _logger;
+    private readonly ResiliencePipeline? _resiliencePipeline;
 
     public NetworkFileSystemHelper(
         IOptions<FilesystemStorageSettings> settingsOptions,
@@ -18,52 +19,70 @@ public class NetworkFileSystemHelper
     {
         var settings = settingsOptions.Value;
         _mode = settings.NetworkMode;
-        _retryCount = settings.RetryCount;
-        _retryDelayMs = settings.RetryDelayMs;
         _logger = logger;
+
+        // Only create pipeline for network filesystems
+        if (_mode != NetworkFileSystemMode.None)
+        {
+            _resiliencePipeline = BuildResiliencePipeline(settings);
+        }
+    }
+
+    private ResiliencePipeline BuildResiliencePipeline(FilesystemStorageSettings settings)
+    {
+        var retryOptions = new RetryStrategyOptions
+        {
+            MaxRetryAttempts = settings.RetryCount,
+            BackoffType = DelayBackoffType.Exponential,
+            UseJitter = true,
+            Delay = TimeSpan.FromMilliseconds(settings.RetryDelayMs),
+
+            // Custom exception filtering using existing ShouldRetry logic
+            ShouldHandle = new PredicateBuilder().Handle<IOException>(ex => ShouldRetry(ex))
+                .Handle<UnauthorizedAccessException>(_ => _mode == NetworkFileSystemMode.CIFS),
+
+            // Logging on retry attempts
+            OnRetry = args =>
+            {
+                var attemptNumber = args.AttemptNumber + 1; // Polly uses 0-based attempt numbers
+                var totalAttempts = settings.RetryCount + 1;
+
+                _logger.LogWarning(
+                    args.Outcome.Exception,
+                    "Network filesystem operation failed: {Message}. Retrying (attempt {Attempt}/{MaxAttempts}) after {Delay}ms.",
+                    args.Outcome.Exception?.Message,
+                    attemptNumber,
+                    totalAttempts,
+                    args.RetryDelay.TotalMilliseconds);
+
+                return ValueTask.CompletedTask;
+            }
+        };
+
+        // Build pipeline with retry strategy
+        // Note: Telemetry is handled through OnRetry callback and logging
+        return new ResiliencePipelineBuilder()
+            .AddRetry(retryOptions)
+            .Build();
     }
 
     public async Task<T> ExecuteWithRetryAsync<T>(Func<Task<T>> operation, string operationName)
     {
-        if (_mode == NetworkFileSystemMode.None)
+        if (_resiliencePipeline == null)
         {
+            // No network mode, execute directly
             return await operation();
         }
 
-        var lastException = default(Exception);
-
-        for (int attempt = 0; attempt <= _retryCount; attempt++)
+        try
         {
-            try
-            {
-                if (attempt > 0)
-                {
-                    var delay = _retryDelayMs * Math.Pow(2, attempt - 1); // Exponential backoff
-                    _logger.LogDebug("Retrying {OperationName} after {Delay}ms (attempt {Attempt}/{MaxAttempts})",
-                        operationName, delay, attempt + 1, _retryCount + 1);
-                    await Task.Delay(TimeSpan.FromMilliseconds(delay));
-                }
-
-                return await operation();
-            }
-            catch (IOException ex) when (ShouldRetry(ex) && attempt < _retryCount)
-            {
-                lastException = ex;
-                _logger.LogWarning("Network filesystem operation {OperationName} failed: {Message}. Will retry.",
-                    operationName, ex.Message);
-            }
-            catch (UnauthorizedAccessException ex) when (_mode == NetworkFileSystemMode.CIFS && attempt < _retryCount)
-            {
-                // CIFS can throw UnauthorizedAccessException for transient lock issues
-                lastException = ex;
-                _logger.LogWarning("CIFS operation {OperationName} failed with access error: {Message}. Will retry.",
-                    operationName, ex.Message);
-            }
+            return await _resiliencePipeline.ExecuteAsync(async ct => await operation(), CancellationToken.None);
         }
-
-        _logger.LogError(lastException, "Network filesystem operation {OperationName} failed after {RetryCount} retries",
-            operationName, _retryCount);
-        throw lastException!;
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Network filesystem operation {OperationName} failed after all retries", operationName);
+            throw;
+        }
     }
 
     public async Task ExecuteWithRetryAsync(Func<Task> operation, string operationName)
