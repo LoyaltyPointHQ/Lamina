@@ -3,6 +3,7 @@ using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Configuration;
 using Lamina.Storage.Filesystem.Configuration;
+using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.Filesystem.Locking;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -16,6 +17,7 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
     private readonly string? _metadataDirectory;
     private readonly MetadataStorageMode _metadataMode;
     private readonly string _inlineMetadataDirectoryName;
+    private readonly NetworkFileSystemHelper _networkHelper;
     private readonly IFileSystemLockManager _lockManager;
     private readonly IBucketDataStorage _dataStorage;
     private readonly IMemoryCache? _cache;
@@ -25,6 +27,7 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
     public FilesystemBucketMetadataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
         IOptions<MetadataCacheSettings> cacheSettingsOptions,
+        NetworkFileSystemHelper networkHelper,
         IFileSystemLockManager lockManager,
         IBucketDataStorage dataStorage,
         ILogger<FilesystemBucketMetadataStorage> logger,
@@ -36,13 +39,14 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
         _metadataMode = settings.MetadataMode;
         _metadataDirectory = settings.MetadataDirectory;
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
+        _networkHelper = networkHelper;
         _lockManager = lockManager;
         _dataStorage = dataStorage;
         _cacheSettings = cacheSettingsOptions.Value;
         _cache = _cacheSettings.Enabled ? cache : null;
         _logger = logger;
 
-        Directory.CreateDirectory(_dataDirectory);
+        _networkHelper.EnsureDirectoryExists(_dataDirectory);
 
         if (_metadataMode == MetadataStorageMode.SeparateDirectory)
         {
@@ -50,14 +54,14 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
             {
                 throw new InvalidOperationException("MetadataDirectory is required when using SeparateDirectory metadata mode");
             }
-            Directory.CreateDirectory(_metadataDirectory);
-            Directory.CreateDirectory(Path.Combine(_metadataDirectory, "_buckets"));
+            _networkHelper.EnsureDirectoryExists(_metadataDirectory);
+            _networkHelper.EnsureDirectoryExists(Path.Combine(_metadataDirectory, "_buckets"));
         }
         else
         {
             // Create the bucket metadata directory for inline mode
             var inlineBucketMetadataDir = Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_buckets");
-            Directory.CreateDirectory(inlineBucketMetadataDir);
+            _networkHelper.EnsureDirectoryExists(inlineBucketMetadataDir);
         }
     }
 

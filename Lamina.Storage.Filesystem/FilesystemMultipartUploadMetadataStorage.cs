@@ -3,6 +3,7 @@ using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Configuration;
 using Lamina.Storage.Filesystem.Configuration;
+using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.Filesystem.Locking;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -16,6 +17,7 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
     private readonly string? _metadataDirectory;
     private readonly MetadataStorageMode _metadataMode;
     private readonly string _inlineMetadataDirectoryName;
+    private readonly NetworkFileSystemHelper _networkHelper;
     private readonly IFileSystemLockManager _lockManager;
     private readonly IMemoryCache? _cache;
     private readonly MetadataCacheSettings _cacheSettings;
@@ -24,6 +26,7 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
     public FilesystemMultipartUploadMetadataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
         IOptions<MetadataCacheSettings> cacheSettingsOptions,
+        NetworkFileSystemHelper networkHelper,
         IFileSystemLockManager lockManager,
         ILogger<FilesystemMultipartUploadMetadataStorage> logger,
         IMemoryCache? cache = null)
@@ -33,12 +36,13 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
         _metadataMode = settings.MetadataMode;
         _metadataDirectory = settings.MetadataDirectory;
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
+        _networkHelper = networkHelper;
         _lockManager = lockManager;
         _cacheSettings = cacheSettingsOptions.Value;
         _cache = _cacheSettings.Enabled ? cache : null;
         _logger = logger;
 
-        Directory.CreateDirectory(_dataDirectory);
+        _networkHelper.EnsureDirectoryExists(_dataDirectory);
 
         if (_metadataMode == MetadataStorageMode.SeparateDirectory)
         {
@@ -46,7 +50,7 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
             {
                 throw new InvalidOperationException("MetadataDirectory is required when using SeparateDirectory metadata mode");
             }
-            Directory.CreateDirectory(_metadataDirectory);
+            _networkHelper.EnsureDirectoryExists(_metadataDirectory);
         }
     }
 
@@ -65,7 +69,7 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
 
         var uploadMetadataPath = GetUploadMetadataPath(uploadId);
         var uploadDir = Path.GetDirectoryName(uploadMetadataPath)!;
-        Directory.CreateDirectory(uploadDir);
+        await _networkHelper.EnsureDirectoryExistsAsync(uploadDir, $"InitiateUpload-{uploadId}");
 
         var json = JsonSerializer.Serialize(upload, new JsonSerializerOptions { WriteIndented = true });
 

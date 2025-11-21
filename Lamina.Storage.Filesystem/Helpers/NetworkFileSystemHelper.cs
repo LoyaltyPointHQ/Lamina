@@ -75,6 +75,67 @@ public class NetworkFileSystemHelper
         }, operationName);
     }
 
+    /// <summary>
+    /// Ensures a directory exists, creating it if necessary.
+    /// Validates that no file exists at the path. Synchronous version for use in constructors.
+    /// </summary>
+    /// <param name="directoryPath">The path to the directory to create.</param>
+    /// <exception cref="InvalidOperationException">Thrown when a file exists at the directory path.</exception>
+    public void EnsureDirectoryExists(string directoryPath)
+    {
+        // Fast path: directory already exists
+        if (Directory.Exists(directoryPath))
+        {
+            return;
+        }
+
+        // Check if a FILE exists with this name (conflict scenario)
+        if (File.Exists(directoryPath))
+        {
+            throw new InvalidOperationException(
+                $"Cannot create directory at '{directoryPath}' because a file already exists at that path. " +
+                "Please remove the file or configure a different directory path.");
+        }
+
+        // Create the directory
+        Directory.CreateDirectory(directoryPath);
+    }
+
+    /// <summary>
+    /// Ensures a directory exists, creating it if necessary.
+    /// Validates that no file exists at the path and handles network filesystem transient errors.
+    /// Async version with retry logic for use in runtime operations.
+    /// </summary>
+    /// <param name="directoryPath">The path to the directory to create.</param>
+    /// <param name="operationName">Optional operation name for logging (defaults to "EnsureDirectory").</param>
+    /// <exception cref="InvalidOperationException">Thrown when a file exists at the directory path.</exception>
+    public async Task EnsureDirectoryExistsAsync(string directoryPath, string operationName = "EnsureDirectory")
+    {
+        await ExecuteWithRetryAsync(() =>
+        {
+            // Fast path: directory already exists
+            if (Directory.Exists(directoryPath))
+            {
+                return Task.CompletedTask;
+            }
+
+            // Check if a FILE exists with this name (conflict scenario)
+            // This must be checked before Directory.CreateDirectory, which would throw a generic IOException
+            if (File.Exists(directoryPath))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot create directory at '{directoryPath}' because a file already exists at that path. " +
+                    "Please remove the file or configure a different directory path.");
+            }
+
+            // Create the directory
+            // This is safe even if the directory was created by another process between our checks
+            Directory.CreateDirectory(directoryPath);
+
+            return Task.CompletedTask;
+        }, operationName);
+    }
+
     public async Task<bool> AtomicMoveAsync(string sourcePath, string destPath, bool overwrite = false)
     {
         if (_mode == NetworkFileSystemMode.CIFS && overwrite && File.Exists(destPath))

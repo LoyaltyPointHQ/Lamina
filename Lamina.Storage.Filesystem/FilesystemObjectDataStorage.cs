@@ -37,7 +37,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         _logger = logger;
         _chunkedDataParser = chunkedDataParser;
 
-        Directory.CreateDirectory(_dataDirectory);
+        _networkHelper.EnsureDirectoryExists(_dataDirectory);
     }
 
 
@@ -60,7 +60,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
         var dataPath = GetDataPath(bucketName, key);
         var dataDir = Path.GetDirectoryName(dataPath)!;
-        Directory.CreateDirectory(dataDir);
+        await _networkHelper.EnsureDirectoryExistsAsync(dataDir, $"StoreObject-{bucketName}/{key}");
 
         // Create a temporary file in the same directory to ensure atomic move
         var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
@@ -174,7 +174,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
         var dataPath = GetDataPath(bucketName, key);
         var dataDir = Path.GetDirectoryName(dataPath)!;
-        Directory.CreateDirectory(dataDir);
+        await _networkHelper.EnsureDirectoryExistsAsync(dataDir, $"StoreMultipartObject-{bucketName}/{key}");
 
         // Create a temporary file in the same directory to ensure atomic move
         var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
@@ -693,7 +693,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
         var destPath = GetDataPath(destBucketName, destKey);
         var destDir = Path.GetDirectoryName(destPath)!;
-        Directory.CreateDirectory(destDir);
+        await _networkHelper.EnsureDirectoryExistsAsync(destDir, $"CopyObject-{destBucketName}/{destKey}");
 
         // Use a temporary file for atomic copy
         var tempPath = Path.Combine(destDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");

@@ -4,6 +4,7 @@ using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Filesystem.Configuration;
+using Lamina.Storage.Filesystem.Helpers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -15,10 +16,12 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
     private readonly string? _metadataDirectory;
     private readonly MetadataStorageMode _metadataMode;
     private readonly string _inlineMetadataDirectoryName;
+    private readonly NetworkFileSystemHelper _networkHelper;
     private readonly ILogger<FilesystemMultipartUploadDataStorage> _logger;
 
     public FilesystemMultipartUploadDataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
+        NetworkFileSystemHelper networkHelper,
         ILogger<FilesystemMultipartUploadDataStorage> logger)
     {
         var settings = settingsOptions.Value;
@@ -26,9 +29,10 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
         _metadataMode = settings.MetadataMode;
         _metadataDirectory = settings.MetadataDirectory;
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
+        _networkHelper = networkHelper;
         _logger = logger;
 
-        Directory.CreateDirectory(_dataDirectory);
+        _networkHelper.EnsureDirectoryExists(_dataDirectory);
 
         if (_metadataMode == MetadataStorageMode.SeparateDirectory)
         {
@@ -36,7 +40,7 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
             {
                 throw new InvalidOperationException("MetadataDirectory is required when using SeparateDirectory metadata mode");
             }
-            Directory.CreateDirectory(_metadataDirectory);
+            _networkHelper.EnsureDirectoryExists(_metadataDirectory);
         }
     }
 
@@ -44,7 +48,7 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
     {
         var partPath = GetPartPath(uploadId, partNumber);
         var partDir = Path.GetDirectoryName(partPath)!;
-        Directory.CreateDirectory(partDir);
+        await _networkHelper.EnsureDirectoryExistsAsync(partDir, $"StorePartData-{uploadId}/{partNumber}");
 
         long bytesWritten = 0;
 
@@ -130,7 +134,7 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
     {
         var partPath = GetPartPath(uploadId, partNumber);
         var partDir = Path.GetDirectoryName(partPath)!;
-        Directory.CreateDirectory(partDir);
+        await _networkHelper.EnsureDirectoryExistsAsync(partDir, $"StorePartDataChunked-{uploadId}/{partNumber}");
 
         // Create a temporary file for validated data
         var tempPath = Path.Combine(partDir, $".lamina-tmp-{Guid.NewGuid():N}");

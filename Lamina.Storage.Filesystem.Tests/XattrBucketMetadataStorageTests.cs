@@ -1,5 +1,6 @@
 using Lamina.Storage.Filesystem;
 using Lamina.Storage.Filesystem.Configuration;
+using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.InMemory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -29,14 +30,17 @@ public class XattrBucketMetadataStorageTests : IDisposable
 
         var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
         var logger = loggerFactory.CreateLogger<XattrBucketMetadataStorage>();
+        var networkHelper = new NetworkFileSystemHelper(Options.Create(settings), loggerFactory.CreateLogger<NetworkFileSystemHelper>());
 
         // Create bucket data storage for testing
         _bucketDataStorage = new FilesystemBucketDataStorage(
             Options.Create(settings),
+            networkHelper,
             loggerFactory.CreateLogger<FilesystemBucketDataStorage>());
 
         _storage = new XattrBucketMetadataStorage(
             Options.Create(settings),
+            networkHelper,
             _bucketDataStorage,
             logger,
             loggerFactory);
@@ -56,13 +60,16 @@ public class XattrBucketMetadataStorageTests : IDisposable
 
             var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
             var logger = loggerFactory.CreateLogger<XattrBucketMetadataStorage>();
+            var networkHelper = new NetworkFileSystemHelper(Options.Create(settings), loggerFactory.CreateLogger<NetworkFileSystemHelper>());
 
             var bucketDataStorage = new FilesystemBucketDataStorage(
                 Options.Create(settings),
+                networkHelper,
                 loggerFactory.CreateLogger<FilesystemBucketDataStorage>());
 
             Assert.Throws<NotSupportedException>(() => new XattrBucketMetadataStorage(
                 Options.Create(settings),
+                networkHelper,
                 bucketDataStorage,
                 logger,
                 loggerFactory));

@@ -47,7 +47,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         _cache = _cacheSettings.Enabled ? cache : null;
         _logger = logger;
 
-        Directory.CreateDirectory(_dataDirectory);
+        _networkHelper.EnsureDirectoryExists(_dataDirectory);
 
         if (_metadataMode == MetadataStorageMode.SeparateDirectory)
         {
@@ -55,7 +55,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             {
                 throw new InvalidOperationException("MetadataDirectory is required when using SeparateDirectory metadata mode");
             }
-            Directory.CreateDirectory(_metadataDirectory);
+            _networkHelper.EnsureDirectoryExists(_metadataDirectory);
         }
     }
 
@@ -71,7 +71,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
 
         var metadataPath = GetMetadataPath(bucketName, key);
         var metadataDir = Path.GetDirectoryName(metadataPath)!;
-        Directory.CreateDirectory(metadataDir);
+        await _networkHelper.EnsureDirectoryExistsAsync(metadataDir, $"StoreMetadata-{bucketName}/{key}");
 
         // Get the actual last modified time from the filesystem for comparison later
         var dataPath = GetDataPath(bucketName, key);

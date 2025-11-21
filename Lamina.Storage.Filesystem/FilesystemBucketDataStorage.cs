@@ -1,5 +1,6 @@
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Filesystem.Configuration;
+using Lamina.Storage.Filesystem.Helpers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -10,45 +11,48 @@ public class FilesystemBucketDataStorage : IBucketDataStorage
     private readonly string _dataDirectory;
     private readonly string _inlineMetadataDirectoryName;
     private readonly MetadataStorageMode _metadataMode;
+    private readonly NetworkFileSystemHelper _networkHelper;
     private readonly ILogger<FilesystemBucketDataStorage> _logger;
 
     public FilesystemBucketDataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
+        NetworkFileSystemHelper networkHelper,
         ILogger<FilesystemBucketDataStorage> logger)
     {
         var settings = settingsOptions.Value;
         _dataDirectory = settings.DataDirectory;
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
         _metadataMode = settings.MetadataMode;
+        _networkHelper = networkHelper;
         _logger = logger;
 
-        Directory.CreateDirectory(_dataDirectory);
+        _networkHelper.EnsureDirectoryExists(_dataDirectory);
     }
 
-    public Task<bool> CreateBucketAsync(string bucketName, CancellationToken cancellationToken = default)
+    public async Task<bool> CreateBucketAsync(string bucketName, CancellationToken cancellationToken = default)
     {
         try
         {
             // Don't allow creating buckets with the metadata directory name
             if (_metadataMode == MetadataStorageMode.Inline && bucketName == _inlineMetadataDirectoryName)
             {
-                return Task.FromResult(false);
+                return false;
             }
 
             var bucketPath = Path.Combine(_dataDirectory, bucketName);
 
             if (Directory.Exists(bucketPath))
             {
-                return Task.FromResult(false);
+                return false;
             }
 
-            Directory.CreateDirectory(bucketPath);
-            return Task.FromResult(true);
+            await _networkHelper.EnsureDirectoryExistsAsync(bucketPath, $"CreateBucket-{bucketName}");
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to create bucket directory: {BucketName}", bucketName);
-            return Task.FromResult(false);
+            return false;
         }
     }
 

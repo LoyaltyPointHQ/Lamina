@@ -10,6 +10,7 @@ namespace Lamina.Storage.Filesystem;
 public class XattrBucketMetadataStorage : IBucketMetadataStorage
 {
     private readonly string _dataDirectory;
+    private readonly NetworkFileSystemHelper _networkHelper;
     private readonly IBucketDataStorage _dataStorage;
     private readonly XattrHelper _xattrHelper;
     private readonly ILogger<XattrBucketMetadataStorage> _logger;
@@ -22,12 +23,14 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
 
     public XattrBucketMetadataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
+        NetworkFileSystemHelper networkHelper,
         IBucketDataStorage dataStorage,
         ILogger<XattrBucketMetadataStorage> logger,
         ILoggerFactory loggerFactory)
     {
         var settings = settingsOptions.Value;
         _dataDirectory = settings.DataDirectory;
+        _networkHelper = networkHelper;
         _dataStorage = dataStorage;
         _logger = logger;
 
@@ -38,7 +41,7 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
             throw new NotSupportedException("Extended attributes are not supported on this platform. Cannot use Xattr metadata storage mode.");
         }
 
-        Directory.CreateDirectory(_dataDirectory);
+        _networkHelper.EnsureDirectoryExists(_dataDirectory);
     }
 
     public async Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest request, CancellationToken cancellationToken = default)
