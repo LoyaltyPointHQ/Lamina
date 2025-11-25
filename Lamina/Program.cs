@@ -22,8 +22,6 @@ using Lamina.WebApi.Streaming;
 using Lamina.WebApi.Streaming.Chunked;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using RedLockNet.SERedis;
-using RedLockNet.SERedis.Configuration;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -109,20 +107,6 @@ if (lockManagerType.Equals("Redis", StringComparison.OrdinalIgnoreCase))
         var redisSettings = builder.Configuration.GetSection("Redis").Get<RedisSettings>() ?? new RedisSettings();
         var configuration = ConfigurationOptions.Parse(redisSettings.ConnectionString);
         return ConnectionMultiplexer.Connect(configuration);
-    });
-
-    // Register RedLock factory
-    builder.Services.AddSingleton<RedLockFactory>(provider =>
-    {
-        var redis = provider.GetRequiredService<ConnectionMultiplexer>();
-        var redisSettings = builder.Configuration.GetSection("Redis").Get<RedisSettings>() ?? new RedisSettings();
-
-        var multiplexers = new List<RedLockMultiplexer>
-        {
-            new RedLockMultiplexer(redis)
-        };
-
-        return RedLockFactory.Create(multiplexers);
     });
 
     // Register Redis-based lock manager

@@ -23,7 +23,7 @@
       <PackageReference Include="Microsoft.Extensions.Resilience" Version="10.0.0" />
       <PackageReference Include="Microsoft.Extensions.Telemetry" Version="10.0.0" />
       <PackageReference Include="Nito.AsyncEx.Coordination" Version="5.1.2" />
-      <PackageReference Include="RedLock.net" Version="2.3.2" />
+      <PackageReference Include="DistributedLock.Redis" Version="1.0.3" />
     </ItemGroup>
 
 </Project>

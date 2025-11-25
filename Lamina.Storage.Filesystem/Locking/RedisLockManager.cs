@@ -1,50 +1,37 @@
-using System.Text.Json;
 using Lamina.Storage.Core.Configuration;
+using Medallion.Threading.Redis;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using RedLockNet.SERedis;
-using RedLockNet.SERedis.Configuration;
 using StackExchange.Redis;
 
 namespace Lamina.Storage.Filesystem.Locking;
 
 public class RedisLockManager : IFileSystemLockManager, IDisposable
 {
-    private readonly RedLockFactory _redLockFactory;
-    private readonly ConnectionMultiplexer _redis;
+    private readonly IDatabase _database;
     private readonly RedisSettings _settings;
     private readonly ILogger<RedisLockManager> _logger;
-    private bool _disposed;
 
     public RedisLockManager(
         ConnectionMultiplexer redis,
-        RedLockFactory redLockFactory,
         IOptions<RedisSettings> settingsOptions,
         ILogger<RedisLockManager> logger)
     {
-        _redis = redis ?? throw new ArgumentNullException(nameof(redis));
-        _redLockFactory = redLockFactory ?? throw new ArgumentNullException(nameof(redLockFactory));
-        _settings = settingsOptions.Value ?? throw new ArgumentNullException(nameof(settingsOptions));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _database = redis.GetDatabase(settingsOptions.Value.Database);
+        _settings = settingsOptions.Value;
+        _logger = logger;
     }
 
     public async Task<T?> ReadFileAsync<T>(string filePath, Func<string, Task<T>> readOperation, CancellationToken cancellationToken = default)
     {
-        var lockKey = GetLockKey(filePath, "read");
-        var lockExpiry = TimeSpan.FromSeconds(_settings.LockExpirySeconds);
+        var lockName = GetLockName(filePath);
+        var rwLock = new RedisDistributedReaderWriterLock(lockName, _database);
 
-        var waitTime = TimeSpan.FromMilliseconds(_settings.RetryDelayMs * _settings.RetryCount);
+        var timeout = TimeSpan.FromMilliseconds(_settings.RetryDelayMs * _settings.RetryCount);
 
-        var retryTime = TimeSpan.FromMilliseconds(_settings.RetryDelayMs);
+        await using var handle = await rwLock.TryAcquireReadLockAsync(timeout, cancellationToken);
 
-        using var redLock = await _redLockFactory.CreateLockAsync(
-            lockKey,
-            lockExpiry,
-            waitTime,
-            retryTime,
-            cancellationToken: cancellationToken);
-
-        if (!redLock.IsAcquired)
+        if (handle == null)
         {
             _logger.LogWarning("Failed to acquire read lock for path: {FilePath}", filePath);
             throw new InvalidOperationException($"Failed to acquire read lock for path: {filePath}");
@@ -52,39 +39,23 @@ public class RedisLockManager : IFileSystemLockManager, IDisposable
 
         _logger.LogDebug("Acquired read lock for path: {FilePath}", filePath);
 
-        try
-        {
-            if (!File.Exists(filePath))
-            {
-                return default;
-            }
+        if (!File.Exists(filePath))
+            return default;
 
-            var content = await File.ReadAllTextAsync(filePath, cancellationToken);
-            return await readOperation(content);
-        }
-        finally
-        {
-            _logger.LogDebug("Released read lock for path: {FilePath}", filePath);
-        }
+        var content = await File.ReadAllTextAsync(filePath, cancellationToken);
+        return await readOperation(content);
     }
 
     public async Task WriteFileAsync(string filePath, string content, CancellationToken cancellationToken = default)
     {
-        var lockKey = GetLockKey(filePath, "write");
-        var lockExpiry = TimeSpan.FromSeconds(_settings.LockExpirySeconds);
+        var lockName = GetLockName(filePath);
+        var rwLock = new RedisDistributedReaderWriterLock(lockName, _database);
 
-        var waitTime = TimeSpan.FromMilliseconds(_settings.RetryDelayMs * _settings.RetryCount);
+        var timeout = TimeSpan.FromMilliseconds(_settings.RetryDelayMs * _settings.RetryCount);
 
-        var retryTime = TimeSpan.FromMilliseconds(_settings.RetryDelayMs);
+        await using var handle = await rwLock.TryAcquireWriteLockAsync(timeout, cancellationToken);
 
-        using var redLock = await _redLockFactory.CreateLockAsync(
-            lockKey,
-            lockExpiry,
-            waitTime,
-            retryTime,
-            cancellationToken: cancellationToken);
-
-        if (!redLock.IsAcquired)
+        if (handle == null)
         {
             _logger.LogWarning("Failed to acquire write lock for path: {FilePath}", filePath);
             throw new InvalidOperationException($"Failed to acquire write lock for path: {filePath}");
@@ -92,34 +63,23 @@ public class RedisLockManager : IFileSystemLockManager, IDisposable
 
         _logger.LogDebug("Acquired write lock for path: {FilePath}", filePath);
 
-        try
-        {
-            // Ensure directory exists
-            var directory = Path.GetDirectoryName(filePath);
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
+        var directory = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
 
-            await File.WriteAllTextAsync(filePath, content, cancellationToken);
-        }
-        finally
-        {
-            _logger.LogDebug("Released write lock for path: {FilePath}", filePath);
-        }
+        await File.WriteAllTextAsync(filePath, content, cancellationToken);
     }
 
     public async Task<bool> DeleteFile(string filePath)
     {
-        var lockKey = GetLockKey(filePath, "delete");
-        var lockExpiry = TimeSpan.FromSeconds(_settings.LockExpirySeconds);
-        var waitTime = TimeSpan.FromMilliseconds(_settings.RetryDelayMs * _settings.RetryCount);
+        var lockName = GetLockName(filePath);
+        var rwLock = new RedisDistributedReaderWriterLock(lockName, _database);
 
-        var retryTime = TimeSpan.FromMilliseconds(_settings.RetryDelayMs);
+        var timeout = TimeSpan.FromMilliseconds(_settings.RetryDelayMs * _settings.RetryCount);
 
-        using var redLock = await _redLockFactory.CreateLockAsync(lockKey, lockExpiry, waitTime, retryTime);
+        await using var handle = await rwLock.TryAcquireWriteLockAsync(timeout);
 
-        if (!redLock.IsAcquired)
+        if (handle == null)
         {
             _logger.LogWarning("Failed to acquire delete lock for path: {FilePath}", filePath);
             throw new InvalidOperationException($"Failed to acquire delete lock for path: {filePath}");
@@ -127,60 +87,29 @@ public class RedisLockManager : IFileSystemLockManager, IDisposable
 
         _logger.LogDebug("Acquired delete lock for path: {FilePath}", filePath);
 
-        try
-        {
-            if (File.Exists(filePath))
-            {
-                File.Delete(filePath);
-                return true;
-            }
-
+        if (!File.Exists(filePath))
             return false;
-        }
-        finally
-        {
-            _logger.LogDebug("Released delete lock for path: {FilePath}", filePath);
-        }
+
+        File.Delete(filePath);
+        return true;
     }
 
-    private string GetLockKey(string filePath, string operation)
+    private string GetLockName(string filePath)
     {
         try
         {
-            // Normalize path to handle different representations of the same path
             var normalizedPath = Path.GetFullPath(filePath).ToLowerInvariant();
-            return $"{_settings.LockKeyPrefix}:{operation}:{normalizedPath}";
+            return $"{_settings.LockKeyPrefix}:{normalizedPath}";
         }
         catch
         {
-            // If path normalization fails, use as-is
-            return $"{_settings.LockKeyPrefix}:{operation}:{filePath.ToLowerInvariant()}";
+            return $"{_settings.LockKeyPrefix}:{filePath.ToLowerInvariant()}";
         }
     }
 
     public void Dispose()
     {
-        if (_disposed)
-            return;
-
-        try
-        {
-            _redLockFactory?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error disposing RedLockFactory");
-        }
-
-        try
-        {
-            _redis?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error disposing Redis connection");
-        }
-
-        _disposed = true;
+        // No resources to dispose - RedisDistributedReaderWriterLock doesn't need disposal
+        // The ConnectionMultiplexer is managed externally via DI
     }
 }
