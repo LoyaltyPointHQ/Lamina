@@ -6,7 +6,7 @@ using StackExchange.Redis;
 
 namespace Lamina.Storage.Filesystem.Locking;
 
-public class RedisLockManager : IFileSystemLockManager, IDisposable
+public class RedisLockManager : IFileSystemLockManager
 {
     private readonly IDatabase _database;
     private readonly RedisSettings _settings;
@@ -105,11 +105,5 @@ public class RedisLockManager : IFileSystemLockManager, IDisposable
         {
             return $"{_settings.LockKeyPrefix}:{filePath.ToLowerInvariant()}";
         }
-    }
-
-    public void Dispose()
-    {
-        // No resources to dispose - RedisDistributedReaderWriterLock doesn't need disposal
-        // The ConnectionMultiplexer is managed externally via DI
     }
 }
