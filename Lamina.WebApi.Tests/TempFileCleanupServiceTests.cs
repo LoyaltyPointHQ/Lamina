@@ -258,8 +258,10 @@ public class TempFileCleanupServiceTests : IDisposable
         // Arrange
         var service = new TempFileCleanupService(_mockLogger.Object, _configuration, null);
 
-        // Act - start and wait for ExecuteAsync to complete (it returns immediately when disabled)
+        // Act - start and wait for ExecuteAsync to actually complete before asserting
         await service.StartAsync(CancellationToken.None);
+        if (service.ExecuteTask != null)
+            await service.ExecuteTask;
         await service.StopAsync(CancellationToken.None);
 
         // Assert - Should log that service is disabled
