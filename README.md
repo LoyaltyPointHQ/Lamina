@@ -1,6 +1,6 @@
 # Lamina
 
-**Lamina** is a lightweight, high-performance S3-compatible storage gateway that exposes filesystem directories as S3 buckets. Built with .NET 9.0, Lamina provides a standards-compliant Amazon S3 REST
+**Lamina** is a lightweight, high-performance S3-compatible storage gateway that exposes filesystem directories as S3 buckets. Built with .NET 10.0, Lamina provides a standards-compliant Amazon S3 REST
 API interface while storing data directly on your local filesystem or network storage.
 
 [![Docker Image](https://img.shields.io/badge/docker-ghcr.io%2Floyaltypointhq%2Flamina-blue)](https://github.com/LoyaltyPointHQ/Lamina/pkgs/container/lamina)
@@ -444,7 +444,7 @@ volumes:
 
 ### Build Requirements
 
-- .NET 9.0 SDK
+- .NET 10.0 SDK
 - Optional: Docker for containerized development
 
 ## 📚 Use Cases

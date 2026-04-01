@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/Storage/">
+    <Project Path="Lamina.Storage.Core.Tests/Lamina.Storage.Core.Tests.csproj" />
+    <Project Path="Lamina.Storage.Core/Lamina.Storage.Core.csproj" />
+    <Project Path="Lamina.Storage.Filesystem/Lamina.Storage.Filesystem.csproj" />
+    <Project Path="Lamina.Storage.InMemory/Lamina.Storage.InMemory.csproj" />
+    <Project Path="Lamina.Storage.Sql/Lamina.Storage.Sql.csproj" />
+  </Folder>
+  <Project Path="Lamina.Core/Lamina.Core.csproj" />
+  <Project Path="Lamina.Storage.Filesystem.Tests/Lamina.Storage.Filesystem.Tests.csproj" />
+  <Project Path="Lamina.Storage.Sql.Tests/Lamina.Storage.Sql.Tests.csproj" />
+  <Project Path="Lamina.WebApi.Tests/Lamina.WebApi.Tests.csproj" />
+  <Project Path="Lamina.WebApi/Lamina.WebApi.csproj" />
+  <Project Path="Lamina/Lamina.csproj" />
+</Solution>

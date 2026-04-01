@@ -228,7 +228,7 @@ public class RedisLockManagerTests : IDisposable
         };
 
         var shortTimeoutOptions = Options.Create(shortTimeoutSettings);
-        using var shortTimeoutLockManager = new RedisLockManager(_redis!, shortTimeoutOptions, _loggerMock.Object);
+        var shortTimeoutLockManager = new RedisLockManager(_redis!, shortTimeoutOptions, _loggerMock.Object);
 
         // Create a long-running operation to hold the lock
         var longRunningTask = _lockManager!.WriteFileAsync(_testFilePath, "holding lock");
@@ -294,7 +294,7 @@ public class RedisLockManagerTests : IDisposable
         };
 
         var customOptions = Options.Create(customSettings);
-        using var customLockManager = new RedisLockManager(_redis!, customOptions, _loggerMock.Object);
+        var customLockManager = new RedisLockManager(_redis!, customOptions, _loggerMock.Object);
 
         var testContent = "configurable prefix test";
         await File.WriteAllTextAsync(_testFilePath, testContent);
@@ -402,7 +402,7 @@ public class RedisLockManagerTests : IDisposable
 
         // Try to write with short timeout - should fail because read holds the lock
         var writeOptions = Options.Create(shortTimeoutSettings);
-        using var shortTimeoutManager = new RedisLockManager(_redis!, writeOptions, _loggerMock.Object);
+        var shortTimeoutManager = new RedisLockManager(_redis!, writeOptions, _loggerMock.Object);
 
         // This should throw because the read lock blocks the write lock
         // With the old bug (different keys), this would succeed immediately
@@ -418,7 +418,6 @@ public class RedisLockManagerTests : IDisposable
     {
         try
         {
-            _lockManager?.Dispose();
             _redis?.Dispose();
 
             if (Directory.Exists(_testDirectory))

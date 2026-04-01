@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-.NET 9.0 ASP.NET Core Web API implementing S3-compatible storage API with strict compliance to Amazon S3 REST API specification.
+.NET 10.0 ASP.NET Core Web API implementing S3-compatible storage API with strict compliance to Amazon S3 REST API specification.
 
 **Repository**: https://github.com/LoyaltyPointHQ/Lamina
 **Docker**: `ghcr.io/loyaltypointhq/lamina:latest`
