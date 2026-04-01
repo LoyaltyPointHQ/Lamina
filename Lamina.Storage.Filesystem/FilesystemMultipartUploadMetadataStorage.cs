@@ -170,8 +170,10 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
             {
                 try
                 {
-                    var json = await File.ReadAllTextAsync(uploadMetadataPath, cancellationToken);
-                    var upload = JsonSerializer.Deserialize<MultipartUpload>(json);
+                    var upload = await _lockManager.ReadFileAsync(uploadMetadataPath, content =>
+                    {
+                        return Task.FromResult(JsonSerializer.Deserialize<MultipartUpload>(content));
+                    }, cancellationToken);
 
                     if (upload != null && upload.BucketName == bucketName)
                     {
