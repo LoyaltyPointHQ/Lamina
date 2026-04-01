@@ -7,7 +7,8 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
 
-# Copy project files for dependency resolution
+# Copy Central Package Management props and project files for dependency resolution
+COPY ["Directory.Packages.props", "./"]
 COPY ["Lamina/Lamina.csproj", "Lamina/"]
 COPY ["Lamina.WebApi/Lamina.WebApi.csproj", "Lamina.WebApi/"]
 COPY ["Lamina.Core/Lamina.Core.csproj", "Lamina.Core/"]
