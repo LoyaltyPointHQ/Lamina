@@ -47,6 +47,10 @@ public class InMemoryLockManager : IFileSystemLockManager
         }
 
         var content = await File.ReadAllTextAsync(filePath, cancellationToken);
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return default;
+        }
         return await readOperation(content);
     }
 
@@ -64,7 +68,18 @@ public class InMemoryLockManager : IFileSystemLockManager
             Directory.CreateDirectory(directory);
         }
 
-        await File.WriteAllTextAsync(filePath, content, cancellationToken);
+        // Atomic write: write to temp file, then rename
+        var tempPath = Path.Combine(directory ?? ".", $".lamina-tmp-{Guid.NewGuid():N}");
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, content, cancellationToken);
+            File.Move(tempPath, filePath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tempPath); } catch { /* ignore cleanup errors */ }
+            throw;
+        }
     }
 
     public async Task<bool> DeleteFile(string filePath)

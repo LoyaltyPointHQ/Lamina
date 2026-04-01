@@ -234,10 +234,10 @@ else if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
 }
 else
 {
-    // Register in-memory metadata services (no caching needed - already in memory)
-    builder.Services.AddScoped<IBucketMetadataStorage, InMemoryBucketMetadataStorage>();
-    builder.Services.AddScoped<IObjectMetadataStorage, InMemoryObjectMetadataStorage>();
-    builder.Services.AddScoped<IMultipartUploadMetadataStorage, InMemoryMultipartUploadMetadataStorage>();
+    // Register in-memory metadata services as singletons (state must persist across requests)
+    builder.Services.AddSingleton<IBucketMetadataStorage, InMemoryBucketMetadataStorage>();
+    builder.Services.AddSingleton<IObjectMetadataStorage, InMemoryObjectMetadataStorage>();
+    builder.Services.AddSingleton<IMultipartUploadMetadataStorage, InMemoryMultipartUploadMetadataStorage>();
 }
 
 // Register content type detector

@@ -9,7 +9,7 @@ public class TempFileCleanupService : BackgroundService
     private readonly TimeSpan _cleanupInterval;
     private readonly TimeSpan _tempFileAge;
     private readonly int _batchSize;
-    private readonly string? _dataDirectory;
+    private readonly List<string> _directoriesToScan = new();
     private readonly string? _tempFilePrefix;
 
     public TempFileCleanupService(
@@ -27,15 +27,27 @@ public class TempFileCleanupService : BackgroundService
         // Get filesystem settings if available
         if (filesystemSettings?.Value != null)
         {
-            _dataDirectory = filesystemSettings.Value.DataDirectory;
             _tempFilePrefix = filesystemSettings.Value.TempFilePrefix;
+
+            if (!string.IsNullOrEmpty(filesystemSettings.Value.DataDirectory))
+            {
+                _directoriesToScan.Add(filesystemSettings.Value.DataDirectory);
+            }
+
+            // In SeparateDirectory mode, also scan the metadata directory for temp files from atomic writes
+            if (filesystemSettings.Value.MetadataMode == MetadataStorageMode.SeparateDirectory
+                && !string.IsNullOrEmpty(filesystemSettings.Value.MetadataDirectory)
+                && !string.Equals(filesystemSettings.Value.MetadataDirectory, filesystemSettings.Value.DataDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                _directoriesToScan.Add(filesystemSettings.Value.MetadataDirectory);
+            }
         }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Only run if we have filesystem storage configured
-        if (string.IsNullOrEmpty(_dataDirectory) || string.IsNullOrEmpty(_tempFilePrefix))
+        if (_directoriesToScan.Count == 0 || string.IsNullOrEmpty(_tempFilePrefix))
         {
             _logger.LogInformation("Temp file cleanup service disabled - not using filesystem storage");
             return;
@@ -71,22 +83,40 @@ public class TempFileCleanupService : BackgroundService
 
     private void CleanupStaleTempFilesAsync(CancellationToken cancellationToken)
     {
-        if (!Directory.Exists(_dataDirectory))
-        {
-            _logger.LogWarning("Data directory does not exist: {DataDirectory}", _dataDirectory);
-            return;
-        }
-
-        _logger.LogDebug("Starting cleanup of stale temporary files in {DataDirectory}", _dataDirectory);
-
         var totalCleaned = 0;
         var totalProcessed = 0;
         var batch = new List<string>();
         var cutoffTime = DateTime.UtcNow - _tempFileAge;
 
+        foreach (var directory in _directoriesToScan)
+        {
+            if (!Directory.Exists(directory))
+            {
+                _logger.LogWarning("Directory does not exist: {Directory}", directory);
+                continue;
+            }
+
+            _logger.LogDebug("Starting cleanup of stale temporary files in {Directory}", directory);
+
+            CleanupDirectory(directory, cutoffTime, batch, ref totalCleaned, ref totalProcessed, cancellationToken);
+        }
+
+        if (totalCleaned > 0)
+        {
+            _logger.LogInformation("Cleaned up {CleanedCount} stale temp files out of {TotalCount} processed",
+                totalCleaned, totalProcessed);
+        }
+        else
+        {
+            _logger.LogDebug("No stale temp files found. Processed {TotalCount} files", totalProcessed);
+        }
+    }
+
+    private void CleanupDirectory(string directory, DateTime cutoffTime, List<string> batch, ref int totalCleaned, ref int totalProcessed, CancellationToken cancellationToken)
+    {
         try
         {
-            foreach (var tempFilePath in FindTempFilesAsync(_dataDirectory!, _tempFilePrefix!, cancellationToken))
+            foreach (var tempFilePath in FindTempFilesAsync(directory, _tempFilePrefix!, cancellationToken))
             {
                 if (cancellationToken.IsCancellationRequested)
                     break;
@@ -111,22 +141,13 @@ public class TempFileCleanupService : BackgroundService
             {
                 var cleaned = ProcessTempFileBatchAsync(batch, cutoffTime, cancellationToken);
                 totalCleaned += cleaned;
-            }
-
-            if (totalCleaned > 0)
-            {
-                _logger.LogInformation("Cleaned up {CleanedCount} stale temp files out of {TotalCount} processed",
-                    totalCleaned, totalProcessed);
-            }
-            else
-            {
-                _logger.LogDebug("No stale temp files found. Processed {TotalCount} files", totalProcessed);
+                batch.Clear();
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to perform temp file cleanup. Processed {ProcessedCount} files, cleaned {CleanedCount}",
-                totalProcessed, totalCleaned);
+            _logger.LogError(ex, "Failed to perform temp file cleanup in {Directory}. Processed {ProcessedCount} files, cleaned {CleanedCount}",
+                directory, totalProcessed, totalCleaned);
         }
     }
 

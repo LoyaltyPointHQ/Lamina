@@ -63,38 +63,54 @@ public class ObjectStorageFacade : IObjectStorageFacade
                     checksumRequest.ProvidedChecksums["SHA256"] = request.ChecksumSHA256;
             }
 
-            // Store data with chunk validation and get ETag
-            var storeResult = await _dataStorage.StoreDataAsync(bucketName, key, dataReader, chunkValidator, checksumRequest, cancellationToken);
+            // Phase 1: Prepare data (process to temp storage, not yet visible)
+            var prepareResult = await _dataStorage.PrepareDataAsync(bucketName, key, dataReader, chunkValidator, checksumRequest, cancellationToken);
 
-            // Check if storage failed
-            if (!storeResult.IsSuccess)
+            if (!prepareResult.IsSuccess)
             {
-                _logger.LogWarning("Failed to store object {Key} in bucket {BucketName}: {ErrorCode} - {ErrorMessage}",
-                    key, bucketName, storeResult.ErrorCode, storeResult.ErrorMessage);
-                return StorageResult<S3Object>.Error(storeResult.ErrorCode!, storeResult.ErrorMessage!);
+                _logger.LogWarning("Failed to prepare object {Key} in bucket {BucketName}: {ErrorCode} - {ErrorMessage}",
+                    key, bucketName, prepareResult.ErrorCode, prepareResult.ErrorMessage);
+                return StorageResult<S3Object>.Error(prepareResult.ErrorCode!, prepareResult.ErrorMessage!);
             }
 
-            var (size, etag, checksums) = storeResult.Value;
+            using var preparedData = prepareResult.Value!;
+            var size = preparedData.Size;
+            var etag = preparedData.ETag;
+            var checksums = preparedData.Checksums;
 
-            // Check if we should store metadata or just return auto-generated object
+            // Phase 2: Store metadata BEFORE committing data (metadata-before-data)
             if (ShouldStoreMetadata(key, request))
             {
-                // Store metadata
                 var s3Object = await _metadataStorage.StoreMetadataAsync(bucketName, key, etag, size, request, checksums, cancellationToken);
 
                 if (s3Object == null)
                 {
-                    // Rollback data if metadata storage failed
-                    await _dataStorage.DeleteDataAsync(bucketName, key, cancellationToken);
+                    // Abort prepared data if metadata storage failed
+                    await _dataStorage.AbortPreparedDataAsync(preparedData, cancellationToken);
                     _logger.LogError("Failed to store metadata for object {Key} in bucket {BucketName}", key, bucketName);
                     return StorageResult<S3Object>.Error("InternalError", "Failed to store metadata");
+                }
+
+                // Phase 3: Commit data (make visible via atomic move)
+                try
+                {
+                    await _dataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    // Rollback metadata if commit failed
+                    await _metadataStorage.DeleteMetadataAsync(bucketName, key, cancellationToken);
+                    _logger.LogError(ex, "Failed to commit data for object {Key} in bucket {BucketName}", key, bucketName);
+                    return StorageResult<S3Object>.Error("InternalError", "Failed to commit data");
                 }
 
                 return StorageResult<S3Object>.Success(s3Object);
             }
             else
             {
-                // Return object with auto-generated metadata without storing it
+                // No metadata to store — commit data directly
+                await _dataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
+
                 var dataPath = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
                 if (dataPath == null)
                 {
@@ -116,7 +132,6 @@ public class ObjectStorageFacade : IObjectStorageFacade
                     OwnerDisplayName = request?.OwnerDisplayName
                 };
 
-                // Populate checksum fields from calculated checksums
                 if (checksums.TryGetValue("CRC32", out var crc32))
                     s3Object.ChecksumCRC32 = crc32;
                 if (checksums.TryGetValue("CRC32C", out var crc32c))
@@ -134,8 +149,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error storing object {Key} in bucket {BucketName} with chunk validation", key, bucketName);
-            // Try to clean up any partial data
-            await _dataStorage.DeleteDataAsync(bucketName, key, cancellationToken);
+            // PreparedData cleanup is handled by using/Dispose
             throw;
         }
     }
@@ -341,6 +355,17 @@ public class ObjectStorageFacade : IObjectStorageFacade
             return true; // User metadata exists, store metadata
         }
 
+        // Check if there are any checksums that need to be persisted
+        if (!string.IsNullOrEmpty(request.ChecksumCRC32) ||
+            !string.IsNullOrEmpty(request.ChecksumCRC32C) ||
+            !string.IsNullOrEmpty(request.ChecksumCRC64NVME) ||
+            !string.IsNullOrEmpty(request.ChecksumSHA1) ||
+            !string.IsNullOrEmpty(request.ChecksumSHA256) ||
+            !string.IsNullOrEmpty(request.ChecksumAlgorithm))
+        {
+            return true; // Checksums present, store metadata to preserve them
+        }
+
         // Metadata matches defaults, no need to store
         return false;
     }
@@ -431,16 +456,17 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 return null;
             }
 
-            // Copy the data at storage level
-            var copyResult = await _dataStorage.CopyDataAsync(sourceBucketName, sourceKey, destBucketName, destKey, cancellationToken);
-            if (copyResult == null)
+            // Phase 1: Prepare copy (temp file, not yet visible)
+            using var preparedData = await _dataStorage.PrepareCopyDataAsync(sourceBucketName, sourceKey, destBucketName, destKey, cancellationToken);
+            if (preparedData == null)
             {
                 _logger.LogError("Failed to copy data from {SourceBucket}/{SourceKey} to {DestBucket}/{DestKey}",
                     sourceBucketName, sourceKey, destBucketName, destKey);
                 return null;
             }
 
-            var (size, etag) = copyResult.Value;
+            var size = preparedData.Size;
+            var etag = preparedData.ETag;
 
             // Determine metadata handling based on directive
             // Default is "COPY" per S3 spec
@@ -470,17 +496,27 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 };
             }
 
-            // Decide if we need to store metadata
+            // Phase 2: Store metadata BEFORE committing data
             if (ShouldStoreMetadata(destKey, effectiveRequest))
             {
-                // Store metadata
                 var s3Object = await _metadataStorage.StoreMetadataAsync(destBucketName, destKey, etag, size, effectiveRequest, null, cancellationToken);
 
                 if (s3Object == null)
                 {
-                    // Rollback data if metadata storage failed
-                    await _dataStorage.DeleteDataAsync(destBucketName, destKey, cancellationToken);
+                    await _dataStorage.AbortPreparedDataAsync(preparedData, cancellationToken);
                     _logger.LogError("Failed to store metadata for copied object {DestKey} in bucket {DestBucket}", destKey, destBucketName);
+                    return null;
+                }
+
+                // Phase 3: Commit data
+                try
+                {
+                    await _dataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    await _metadataStorage.DeleteMetadataAsync(destBucketName, destKey, cancellationToken);
+                    _logger.LogError(ex, "Failed to commit copied data for object {DestKey} in bucket {DestBucket}", destKey, destBucketName);
                     return null;
                 }
 
@@ -488,7 +524,9 @@ public class ObjectStorageFacade : IObjectStorageFacade
             }
             else
             {
-                // Return object with auto-generated metadata without storing it
+                // No metadata — commit data directly
+                await _dataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
+
                 var dataInfo = await _dataStorage.GetDataInfoAsync(destBucketName, destKey, cancellationToken);
                 if (dataInfo == null)
                 {

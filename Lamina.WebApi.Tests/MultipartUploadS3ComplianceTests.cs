@@ -821,7 +821,7 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         Assert.Contains("ChecksumSHA256", completeXml);
         Assert.Contains(aggregatedChecksum, completeXml);
 
-        // Verify the completed object has the checksum
+        // Verify the completed object has a checksum via HEAD
         var headRequest = new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}/dest-with-checksum.txt");
         var headResponse = await Client.SendAsync(headRequest);
         Assert.Equal(HttpStatusCode.OK, headResponse.StatusCode);

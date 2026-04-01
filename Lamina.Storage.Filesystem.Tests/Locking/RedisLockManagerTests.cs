@@ -414,6 +414,92 @@ public class RedisLockManagerTests : IDisposable
         Assert.Equal("content", result);
     }
 
+    [Fact]
+    public async Task ReadFileAsync_EmptyFile_ReturnsDefault()
+    {
+        if (!IsRedisAvailable())
+            return;
+
+        // Arrange - create an empty file (simulates truncated/corrupted metadata)
+        await File.WriteAllTextAsync(_testFilePath, "");
+
+        // Act
+        var result = await _lockManager!.ReadFileAsync(_testFilePath, content =>
+            Task.FromResult(content));
+
+        // Assert - should return default (null) instead of passing empty string to callback
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task ReadFileAsync_WhitespaceOnlyFile_ReturnsDefault()
+    {
+        if (!IsRedisAvailable())
+            return;
+
+        // Arrange
+        await File.WriteAllTextAsync(_testFilePath, "   \n  ");
+
+        // Act
+        var result = await _lockManager!.ReadFileAsync(_testFilePath, content =>
+            Task.FromResult(content));
+
+        // Assert
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task WriteFileAsync_IsAtomic_NeverExposesEmptyFile()
+    {
+        if (!IsRedisAvailable())
+            return;
+
+        // Arrange - write initial content
+        await _lockManager!.WriteFileAsync(_testFilePath, "initial content");
+
+        var sawEmptyContent = false;
+        var iterations = 100;
+        var cts = new CancellationTokenSource();
+
+        // Act - concurrent reads while writing (bypassing lock to simulate external reader)
+        var readerTask = Task.Run(async () =>
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    if (File.Exists(_testFilePath))
+                    {
+                        var content = await File.ReadAllTextAsync(_testFilePath, cts.Token);
+                        if (content.Length == 0)
+                        {
+                            sawEmptyContent = true;
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (IOException)
+                {
+                    // File might be locked, that's fine
+                }
+            }
+        });
+
+        for (int i = 0; i < iterations; i++)
+        {
+            await _lockManager!.WriteFileAsync(_testFilePath, $"content iteration {i}");
+        }
+
+        cts.Cancel();
+        await readerTask;
+
+        // Assert
+        Assert.False(sawEmptyContent, "Reader observed empty file content during write - write is not atomic");
+    }
+
     public void Dispose()
     {
         try

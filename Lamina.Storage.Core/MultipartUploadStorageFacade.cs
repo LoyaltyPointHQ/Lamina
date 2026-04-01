@@ -223,11 +223,15 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         if (!string.IsNullOrEmpty(aggregatedCRC64NVME))
             aggregatedChecksums["CRC64NVME"] = aggregatedCRC64NVME;
 
-        // Store multipart data directly using the streaming method
-        var (size, _) = await _objectDataStorage.StoreMultipartDataAsync(bucketName, key, readersList, cancellationToken);
+        // Phase 1: Prepare multipart data (temp file, not yet visible)
+        using var preparedData = await _objectDataStorage.PrepareMultipartDataAsync(bucketName, key, readersList, cancellationToken);
+        var size = preparedData.Size;
 
-        // Store metadata with the correct multipart ETag and aggregated checksums
+        // Phase 2: Store metadata BEFORE committing data
         await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, aggregatedChecksums.Count > 0 ? aggregatedChecksums : null, cancellationToken);
+
+        // Phase 3: Commit data (make visible)
+        await _objectDataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
 
         // Clean up multipart upload
         await _dataStorage.DeleteAllPartsAsync(bucketName, key, request.UploadId, cancellationToken);

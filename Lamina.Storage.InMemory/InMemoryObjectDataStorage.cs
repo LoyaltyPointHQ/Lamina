@@ -10,7 +10,10 @@ namespace Lamina.Storage.InMemory;
 
 public class InMemoryObjectDataStorage : IObjectDataStorage
 {
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte[]>> _data = new();
+    private record StoredObject(byte[] Data, DateTime LastModified);
+
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, StoredObject>> _data = new();
+    private readonly ConcurrentDictionary<string, byte[]> _pendingData = new();
     private readonly IChunkedDataParser _chunkedDataParser;
 
     public InMemoryObjectDataStorage(IChunkedDataParser chunkedDataParser)
@@ -18,34 +21,25 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         _chunkedDataParser = chunkedDataParser;
     }
 
-
-
-    public async Task<StorageResult<(long size, string etag, Dictionary<string, string> checksums)>> StoreDataAsync(
+    public async Task<StorageResult<PreparedData>> PrepareDataAsync(
         string bucketName,
         string key,
         PipeReader dataReader,
         IChunkSignatureValidator? chunkValidator,
         ChecksumRequest? checksumRequest,
-        CancellationToken cancellationToken = default
-    )
+        CancellationToken cancellationToken = default)
     {
-        var bucketData = _data.GetOrAdd(bucketName, _ => new ConcurrentDictionary<string, byte[]>());
-
         byte[] combinedData;
         long bytesWritten;
 
-        // Handle chunked data with validation if validator is provided
         if (chunkValidator != null)
         {
-            // Parse AWS chunked encoding and write decoded data to memory stream
             using var memoryStream = new MemoryStream();
             var parseResult = await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken);
 
-            // Check if validation succeeded
             if (!parseResult.Success)
             {
-                // Invalid chunk signature
-                return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
+                return StorageResult<PreparedData>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
             }
 
             combinedData = memoryStream.ToArray();
@@ -53,15 +47,12 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         }
         else
         {
-            // Standard read without chunked encoding
             combinedData = await PipeReaderHelper.ReadAllBytesAsync(dataReader, false, cancellationToken);
             bytesWritten = combinedData.Length;
         }
 
         var etag = ETagHelper.ComputeETag(combinedData);
-        bucketData[key] = combinedData;
 
-        // Calculate checksums if requested
         var checksums = new Dictionary<string, string>();
         if (checksumRequest != null)
         {
@@ -73,32 +64,61 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
 
                 if (!result.IsValid)
                 {
-                    // Checksum validation failed - clean up and return error
-                    bucketData.TryRemove(key, out _);
-                    return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
+                    return StorageResult<PreparedData>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
                 }
 
                 checksums = result.CalculatedChecksums;
             }
         }
 
-        return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Success((bytesWritten, etag, checksums));
+        // Store in pending — not yet visible
+        var pendingKey = GetPendingKey(bucketName, key);
+        _pendingData[pendingKey] = combinedData;
+
+        var preparedData = new PreparedData
+        {
+            BucketName = bucketName,
+            Key = key,
+            Size = bytesWritten,
+            ETag = etag,
+            Checksums = checksums
+        };
+        preparedData.SetDisposeAction(() => _pendingData.TryRemove(pendingKey, out _));
+
+        return StorageResult<PreparedData>.Success(preparedData);
     }
 
-    public async Task<(long size, string etag)> StoreMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
+    public Task CommitPreparedDataAsync(PreparedData preparedData, CancellationToken cancellationToken = default)
     {
-        var bucketData = _data.GetOrAdd(bucketName, _ => new ConcurrentDictionary<string, byte[]>());
+        var pendingKey = GetPendingKey(preparedData.BucketName, preparedData.Key);
+        if (!_pendingData.TryRemove(pendingKey, out var data))
+        {
+            throw new InvalidOperationException($"No pending data found for {preparedData.BucketName}/{preparedData.Key}");
+        }
 
+        var bucketData = _data.GetOrAdd(preparedData.BucketName, _ => new ConcurrentDictionary<string, StoredObject>());
+        bucketData[preparedData.Key] = new StoredObject(data, DateTime.UtcNow);
+
+        return Task.CompletedTask;
+    }
+
+    public Task AbortPreparedDataAsync(PreparedData preparedData, CancellationToken cancellationToken = default)
+    {
+        var pendingKey = GetPendingKey(preparedData.BucketName, preparedData.Key);
+        _pendingData.TryRemove(pendingKey, out _);
+        return Task.CompletedTask;
+    }
+
+    public async Task<PreparedData> PrepareMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
+    {
         var allSegments = new List<byte[]>();
 
-        // Read all parts
         foreach (var reader in partReaders)
         {
             var partData = await PipeReaderHelper.ReadAllBytesAsync(reader, true, cancellationToken);
             allSegments.Add(partData);
         }
 
-        // Combine all segments into one array
         var totalSize = allSegments.Sum(s => s.Length);
         var combinedData = new byte[totalSize];
         var offset = 0;
@@ -109,34 +129,72 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         }
 
         var etag = ETagHelper.ComputeETag(combinedData);
-        bucketData[key] = combinedData;
 
-        return (totalSize, etag);
+        var pendingKey = GetPendingKey(bucketName, key);
+        _pendingData[pendingKey] = combinedData;
+
+        var preparedData = new PreparedData
+        {
+            BucketName = bucketName,
+            Key = key,
+            Size = totalSize,
+            ETag = etag,
+            Checksums = new Dictionary<string, string>()
+        };
+        preparedData.SetDisposeAction(() => _pendingData.TryRemove(pendingKey, out _));
+
+        return preparedData;
+    }
+
+    public Task<PreparedData?> PrepareCopyDataAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, CancellationToken cancellationToken = default)
+    {
+        if (!_data.TryGetValue(sourceBucketName, out var sourceBucketData) ||
+            !sourceBucketData.TryGetValue(sourceKey, out var sourceStored))
+        {
+            return Task.FromResult<PreparedData?>(null);
+        }
+
+        var copiedData = new byte[sourceStored.Data.Length];
+        Buffer.BlockCopy(sourceStored.Data, 0, copiedData, 0, sourceStored.Data.Length);
+
+        var etag = ETagHelper.ComputeETag(copiedData);
+
+        var pendingKey = GetPendingKey(destBucketName, destKey);
+        _pendingData[pendingKey] = copiedData;
+
+        var preparedData = new PreparedData
+        {
+            BucketName = destBucketName,
+            Key = destKey,
+            Size = copiedData.Length,
+            ETag = etag,
+            Checksums = new Dictionary<string, string>()
+        };
+        preparedData.SetDisposeAction(() => _pendingData.TryRemove(pendingKey, out _));
+
+        return Task.FromResult<PreparedData?>(preparedData);
     }
 
     public async Task<bool> WriteDataToPipeAsync(string bucketName, string key, PipeWriter writer, long? byteRangeStart = null, long? byteRangeEnd = null, CancellationToken cancellationToken = default)
     {
         if (!_data.TryGetValue(bucketName, out var bucketData) ||
-            !bucketData.TryGetValue(key, out var data))
+            !bucketData.TryGetValue(key, out var stored))
         {
             return false;
         }
 
-        // Calculate the actual byte range to write
+        var data = stored.Data;
         long startPosition = byteRangeStart ?? 0;
         long endPosition = byteRangeEnd ?? (data.Length - 1);
 
-        // Validate range
         if (startPosition < 0 || endPosition >= data.Length || startPosition > endPosition)
         {
             return false;
         }
 
-        // Calculate length to write
         int length = (int)(endPosition - startPosition + 1);
         int offset = (int)startPosition;
 
-        // Write only the requested byte range
         await writer.WriteAsync(new ReadOnlyMemory<byte>(data, offset, length), cancellationToken);
         await writer.CompleteAsync();
         return true;
@@ -160,9 +218,9 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
     public Task<(long size, DateTime lastModified)?> GetDataInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         if (_data.TryGetValue(bucketName, out var bucketData) &&
-            bucketData.TryGetValue(key, out var data))
+            bucketData.TryGetValue(key, out var stored))
         {
-            return Task.FromResult<(long size, DateTime lastModified)?>((data.Length, DateTime.UtcNow));
+            return Task.FromResult<(long size, DateTime lastModified)?>((stored.Data.Length, stored.LastModified));
         }
 
         return Task.FromResult<(long size, DateTime lastModified)?>(null);
@@ -185,25 +243,20 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
             return Task.FromResult(result);
         }
 
-        // Sort keys lexicographically for General Purpose buckets only
-        // Directory buckets should maintain insertion/enumeration order (non-lexicographical)
         IEnumerable<string> keys = bucketType == BucketType.GeneralPurpose
             ? bucketData.Keys.OrderBy(k => k, StringComparer.Ordinal)
             : bucketData.Keys;
 
-        // Apply prefix filter
         if (!string.IsNullOrEmpty(prefix))
         {
             keys = keys.Where(k => k.StartsWith(prefix));
         }
 
-        // Apply startAfter filter (marker/continuation token)
         if (!string.IsNullOrEmpty(startAfter))
         {
             keys = keys.Where(k => string.Compare(k, startAfter, StringComparison.Ordinal) > 0);
         }
 
-        // If no delimiter, return keys with pagination
         if (string.IsNullOrEmpty(delimiter))
         {
             keys = keys.Take(maxKeys);
@@ -211,7 +264,6 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
             return Task.FromResult(result);
         }
 
-        // Process keys with delimiter and pagination
         var prefixLength = prefix?.Length ?? 0;
         var commonPrefixSet = new HashSet<string>();
         var resultKeys = new List<string>();
@@ -224,15 +276,11 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
                 break;
             }
 
-            // Get the part after the prefix
             var remainingKey = key.Substring(prefixLength);
-
-            // Look for delimiter in the remaining key
             var delimiterIndex = remainingKey.IndexOf(delimiter, StringComparison.Ordinal);
 
             if (delimiterIndex >= 0)
             {
-                // Found delimiter - this represents a "directory"
                 var commonPrefix = key.Substring(0, prefixLength + delimiterIndex + delimiter.Length);
                 if (commonPrefixSet.Add(commonPrefix))
                 {
@@ -241,7 +289,6 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
             }
             else
             {
-                // No delimiter found - this is a direct key at this level
                 resultKeys.Add(key);
                 totalItems++;
             }
@@ -257,37 +304,14 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
     public Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         if (_data.TryGetValue(bucketName, out var bucketData) &&
-            bucketData.TryGetValue(key, out var data))
+            bucketData.TryGetValue(key, out var stored))
         {
-            // Use ETagHelper to compute hash
-            var etag = ETagHelper.ComputeETag(data);
+            var etag = ETagHelper.ComputeETag(stored.Data);
             return Task.FromResult<string?>(etag);
         }
 
         return Task.FromResult<string?>(null);
     }
 
-    public Task<(long size, string etag)?> CopyDataAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, CancellationToken cancellationToken = default)
-    {
-        if (!_data.TryGetValue(sourceBucketName, out var sourceBucketData) ||
-            !sourceBucketData.TryGetValue(sourceKey, out var sourceData))
-        {
-            return Task.FromResult<(long size, string etag)?>(null);
-        }
-
-        // Create destination bucket if it doesn't exist
-        var destBucketData = _data.GetOrAdd(destBucketName, _ => new ConcurrentDictionary<string, byte[]>());
-
-        // Copy the byte array (create a new copy, not a reference)
-        var copiedData = new byte[sourceData.Length];
-        Buffer.BlockCopy(sourceData, 0, copiedData, 0, sourceData.Length);
-
-        // Store in destination
-        destBucketData[destKey] = copiedData;
-
-        // Compute ETag of the copied data
-        var etag = ETagHelper.ComputeETag(copiedData);
-
-        return Task.FromResult<(long size, string etag)?>((copiedData.Length, etag));
-    }
+    private static string GetPendingKey(string bucketName, string key) => $"{bucketName}/{key}";
 }

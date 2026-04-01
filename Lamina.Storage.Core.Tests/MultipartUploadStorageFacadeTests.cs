@@ -226,8 +226,12 @@ public class MultipartUploadStorageFacadeTests
             .ReturnsAsync(partReaders);
 
         _mockObjectDataStorage
-            .Setup(x => x.StoreMultipartDataAsync(bucketName, key, It.IsAny<IEnumerable<PipeReader>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((100L, "final-etag"));
+            .Setup(x => x.PrepareMultipartDataAsync(bucketName, key, It.IsAny<IEnumerable<PipeReader>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PreparedData { BucketName = bucketName, Key = key, Size = 100L, ETag = "final-etag", Checksums = new Dictionary<string, string>() });
+
+        _mockObjectDataStorage
+            .Setup(x => x.CommitPreparedDataAsync(It.IsAny<PreparedData>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
 
         _mockObjectMetadataStorage
             .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
@@ -320,8 +324,12 @@ public class MultipartUploadStorageFacadeTests
             .ReturnsAsync(partReaders);
 
         _mockObjectDataStorage
-            .Setup(x => x.StoreMultipartDataAsync(bucketName, key, It.IsAny<IEnumerable<PipeReader>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((100L, "final-etag"));
+            .Setup(x => x.PrepareMultipartDataAsync(bucketName, key, It.IsAny<IEnumerable<PipeReader>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PreparedData { BucketName = bucketName, Key = key, Size = 100L, ETag = "final-etag", Checksums = new Dictionary<string, string>() });
+
+        _mockObjectDataStorage
+            .Setup(x => x.CommitPreparedDataAsync(It.IsAny<PreparedData>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
 
         _mockObjectMetadataStorage
             .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
@@ -580,8 +588,12 @@ public class MultipartUploadStorageFacadeTests
             .ReturnsAsync(partReaders);
 
         _mockObjectDataStorage
-            .Setup(x => x.StoreMultipartDataAsync(bucketName, key, It.IsAny<IEnumerable<PipeReader>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((100L, "final-etag"));
+            .Setup(x => x.PrepareMultipartDataAsync(bucketName, key, It.IsAny<IEnumerable<PipeReader>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PreparedData { BucketName = bucketName, Key = key, Size = 100L, ETag = "final-etag", Checksums = new Dictionary<string, string>() });
+
+        _mockObjectDataStorage
+            .Setup(x => x.CommitPreparedDataAsync(It.IsAny<PreparedData>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
 
         _mockObjectMetadataStorage
             .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
@@ -661,8 +673,12 @@ public class MultipartUploadStorageFacadeTests
             .ReturnsAsync(partReaders);
 
         _mockObjectDataStorage
-            .Setup(x => x.StoreMultipartDataAsync(bucketName, key, It.IsAny<IEnumerable<PipeReader>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((1024L, "etag"));
+            .Setup(x => x.PrepareMultipartDataAsync(bucketName, key, It.IsAny<IEnumerable<PipeReader>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PreparedData { BucketName = bucketName, Key = key, Size = 1024L, ETag = "etag", Checksums = new Dictionary<string, string>() });
+
+        _mockObjectDataStorage
+            .Setup(x => x.CommitPreparedDataAsync(It.IsAny<PreparedData>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
 
         _mockObjectMetadataStorage
             .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))

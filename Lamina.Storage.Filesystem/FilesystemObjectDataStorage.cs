@@ -40,9 +40,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         _networkHelper.EnsureDirectoryExists(_dataDirectory);
     }
 
-
-
-    public async Task<StorageResult<(long size, string etag, Dictionary<string, string> checksums)>> StoreDataAsync(
+    public async Task<StorageResult<PreparedData>> PrepareDataAsync(
         string bucketName,
         string key,
         PipeReader dataReader,
@@ -51,7 +49,6 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         CancellationToken cancellationToken = default
     )
     {
-        // Validate that the key doesn't conflict with temporary files or metadata directories
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
             throw new InvalidOperationException(
@@ -62,10 +59,8 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         var dataDir = Path.GetDirectoryName(dataPath)!;
         await _networkHelper.EnsureDirectoryExistsAsync(dataDir, $"StoreObject-{bucketName}/{key}");
 
-        // Create a temporary file in the same directory to ensure atomic move
         var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
 
-        // Initialize checksum calculator if needed
         StreamingChecksumCalculator? checksumCalculator = null;
         if (checksumRequest != null)
         {
@@ -76,28 +71,23 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         {
             long bytesWritten;
 
-            // Handle chunked data with validation if validator is provided
             if (chunkValidator != null)
             {
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
-                // Parse AWS chunked encoding and write decoded data directly to file with signature validation
-                // If checksums are needed, calculate them inline during parsing
                 var parseResult = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
-                    dataReader, 
-                    fileStream, 
+                    dataReader,
+                    fileStream,
                     chunkValidator,
                     checksumCalculator?.HasChecksums == true ? data => checksumCalculator.Append(data) : null,
                     cancellationToken);
 
-                // Check if validation succeeded
                 if (!parseResult.Success)
                 {
-                    // Invalid chunk signature - clean up and return failure
                     await fileStream.FlushAsync(cancellationToken);
                     fileStream.Close();
                     File.Delete(tempPath);
-                    return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
+                    return StorageResult<PreparedData>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
                 }
 
                 bytesWritten = parseResult.TotalBytesWritten;
@@ -105,10 +95,8 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             }
             else
             {
-                // Standard write without chunked encoding
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
-                // Use helper to write and calculate checksums in one pass
                 bytesWritten = checksumCalculator?.HasChecksums == true
                     ? await ChecksumStreamHelper.WriteDataWithChecksumsAsync(dataReader, fileStream, checksumCalculator, cancellationToken)
                     : await PipeReaderHelper.CopyToAsync(dataReader, fileStream, false, cancellationToken);
@@ -116,7 +104,6 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                 await fileStream.FlushAsync(cancellationToken);
             }
 
-            // Finalize and validate checksums if they were calculated
             var checksums = new Dictionary<string, string>();
             if (checksumCalculator?.HasChecksums == true)
             {
@@ -124,25 +111,33 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
                 if (!result.IsValid)
                 {
-                    // Checksum validation failed - clean up and return error
                     File.Delete(tempPath);
-                    return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
+                    return StorageResult<PreparedData>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
                 }
 
                 checksums = result.CalculatedChecksums;
             }
 
-            // Now compute ETag from the temp file on disk with a new file handle
             var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
 
-            // Atomically move the temp file to the final location
-            await _networkHelper.AtomicMoveAsync(tempPath, dataPath, overwrite: true);
+            var preparedData = new PreparedData
+            {
+                BucketName = bucketName,
+                Key = key,
+                Size = bytesWritten,
+                ETag = etag,
+                Checksums = checksums,
+                Tag = tempPath
+            };
+            preparedData.SetDisposeAction(() =>
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* ignore */ }
+            });
 
-            return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Success((bytesWritten, etag, checksums));
+            return StorageResult<PreparedData>.Success(preparedData);
         }
         catch
         {
-            // Clean up temp file if something went wrong
             try
             {
                 if (File.Exists(tempPath))
@@ -163,9 +158,24 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         }
     }
 
-    public async Task<(long size, string etag)> StoreMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
+    public async Task CommitPreparedDataAsync(PreparedData preparedData, CancellationToken cancellationToken = default)
     {
-        // Validate that the key doesn't conflict with temporary files or metadata directories
+        var tempPath = preparedData.Tag
+            ?? throw new InvalidOperationException($"PreparedData for {preparedData.BucketName}/{preparedData.Key} has no temp path");
+
+        var dataPath = GetDataPath(preparedData.BucketName, preparedData.Key);
+        await _networkHelper.AtomicMoveAsync(tempPath, dataPath, overwrite: true);
+    }
+
+    public Task AbortPreparedDataAsync(PreparedData preparedData, CancellationToken cancellationToken = default)
+    {
+        // Dispose will trigger the cleanup action which deletes the temp file
+        preparedData.Dispose();
+        return Task.CompletedTask;
+    }
+
+    public async Task<PreparedData> PrepareMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
+    {
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
             throw new InvalidOperationException(
@@ -176,13 +186,11 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         var dataDir = Path.GetDirectoryName(dataPath)!;
         await _networkHelper.EnsureDirectoryExistsAsync(dataDir, $"StoreMultipartObject-{bucketName}/{key}");
 
-        // Create a temporary file in the same directory to ensure atomic move
         var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
         long totalBytesWritten = 0;
 
         try
         {
-            // Write all parts to the temp file, ensuring proper disposal before computing ETag
             {
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
@@ -193,19 +201,28 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                 }
 
                 await fileStream.FlushAsync(cancellationToken);
-            } // FileStream is fully disposed here
+            }
 
-            // Now compute ETag from the completed temp file with a new file handle
             var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
 
-            // Atomically move the temp file to the final location
-            await _networkHelper.AtomicMoveAsync(tempPath, dataPath, overwrite: true);
+            var preparedData = new PreparedData
+            {
+                BucketName = bucketName,
+                Key = key,
+                Size = totalBytesWritten,
+                ETag = etag,
+                Checksums = new Dictionary<string, string>(),
+                Tag = tempPath
+            };
+            preparedData.SetDisposeAction(() =>
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* ignore */ }
+            });
 
-            return (totalBytesWritten, etag);
+            return preparedData;
         }
         catch
         {
-            // Clean up temp file if something went wrong
             try
             {
                 if (File.Exists(tempPath))
@@ -222,12 +239,78 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         }
     }
 
+    public async Task<PreparedData?> PrepareCopyDataAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, CancellationToken cancellationToken = default)
+    {
+        if (FilesystemStorageHelper.IsKeyForbidden(sourceKey, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName) ||
+            FilesystemStorageHelper.IsKeyForbidden(destKey, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return null;
+        }
+
+        var sourcePath = GetDataPath(sourceBucketName, sourceKey);
+        if (!File.Exists(sourcePath))
+        {
+            return null;
+        }
+
+        var sourceFileName = Path.GetFileName(sourcePath);
+        if (FilesystemStorageHelper.IsTemporaryFile(sourceFileName, _tempFilePrefix))
+        {
+            return null;
+        }
+
+        var destPath = GetDataPath(destBucketName, destKey);
+        var destDir = Path.GetDirectoryName(destPath)!;
+        await _networkHelper.EnsureDirectoryExistsAsync(destDir, $"CopyObject-{destBucketName}/{destKey}");
+
+        var tempPath = Path.Combine(destDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
+        try
+        {
+            await _networkHelper.ExecuteWithRetryAsync(() =>
+                {
+                    File.Copy(sourcePath, tempPath, overwrite: false);
+                    return Task.FromResult(true);
+                },
+                "CopyFile");
+
+            var fileInfo = new FileInfo(tempPath);
+            var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
+
+            var preparedData = new PreparedData
+            {
+                BucketName = destBucketName,
+                Key = destKey,
+                Size = fileInfo.Length,
+                ETag = etag,
+                Checksums = new Dictionary<string, string>(),
+                Tag = tempPath
+            };
+            preparedData.SetDisposeAction(() =>
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* ignore */ }
+            });
+
+            return preparedData;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error copying data from {SourceBucket}/{SourceKey} to {DestBucket}/{DestKey}",
+                sourceBucketName, sourceKey, destBucketName, destKey);
+
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { /* ignore */ }
+            }
+
+            return null;
+        }
+    }
+
     public async Task<bool> WriteDataToPipeAsync(string bucketName, string key, PipeWriter writer, long? byteRangeStart = null, long? byteRangeEnd = null, CancellationToken cancellationToken = default)
     {
-        // Validate that the key doesn't conflict with temporary files or metadata directories
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            return false; // Return false to indicate object not found
+            return false;
         }
 
         var dataPath = GetDataPath(bucketName, key);
@@ -237,28 +320,24 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             return false;
         }
 
-        // Check if this is a temporary file
         var fileName = Path.GetFileName(dataPath);
         if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
         {
-            return false; // Temporary files should be invisible
+            return false;
         }
 
         await using var fileStream = File.OpenRead(dataPath);
-        
-        // Calculate the actual byte range to read
+
         long startPosition = byteRangeStart ?? 0;
         long endPosition = byteRangeEnd ?? (fileStream.Length - 1);
         long bytesToRead = endPosition - startPosition + 1;
 
-        // Validate range
         if (startPosition < 0 || endPosition >= fileStream.Length || startPosition > endPosition)
         {
             _logger.LogWarning("Invalid byte range requested: {Start}-{End} for file size {Size}", startPosition, endPosition, fileStream.Length);
             return false;
         }
 
-        // Seek to the start position if needed
         if (startPosition > 0)
         {
             fileStream.Seek(startPosition, SeekOrigin.Begin);
@@ -272,18 +351,18 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         {
             var remainingBytes = bytesToRead - totalBytesRead;
             var bytesToReadNow = (int)Math.Min(bufferSize, remainingBytes);
-            
+
             var bytesRead = await fileStream.ReadAsync(buffer.AsMemory(0, bytesToReadNow), cancellationToken);
             if (bytesRead == 0)
             {
-                break; // End of file reached
+                break;
             }
 
             var memory = writer.GetMemory(bytesRead);
             buffer.AsMemory(0, bytesRead).CopyTo(memory);
             writer.Advance(bytesRead);
             await writer.FlushAsync(cancellationToken);
-            
+
             totalBytesRead += bytesRead;
         }
 
@@ -293,10 +372,9 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public async Task<bool> DeleteDataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        // Validate that the key doesn't conflict with temporary files or metadata directories
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            return false; // Cannot delete forbidden paths
+            return false;
         }
 
         var dataPath = GetDataPath(bucketName, key);
@@ -305,11 +383,10 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             return false;
         }
 
-        // Check if this is a temporary file
         var fileName = Path.GetFileName(dataPath);
         if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
         {
-            return false; // Temporary files should be invisible
+            return false;
         }
 
         await _networkHelper.ExecuteWithRetryAsync(() =>
@@ -319,7 +396,6 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             },
             "DeleteFile");
 
-        // Clean up empty directories, but preserve the bucket directory
         try
         {
             var bucketDirectory = Path.Combine(_dataDirectory, bucketName);
@@ -330,7 +406,6 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                 directory != _dataDirectory &&
                 directory != bucketDirectory)
             {
-                // Use helper for directory cleanup with network filesystem support
                 await _networkHelper.DeleteDirectoryIfEmptyAsync(directory, bucketDirectory);
             }
         }
@@ -344,7 +419,6 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public Task<bool> DataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        // Validate that the key doesn't conflict with temporary files or metadata directories
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
             return Task.FromResult(false);
@@ -356,11 +430,10 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             return Task.FromResult(false);
         }
 
-        // Check if this is a temporary file
         var fileName = Path.GetFileName(dataPath);
         if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
         {
-            return Task.FromResult(false); // Temporary files should be invisible
+            return Task.FromResult(false);
         }
 
         return Task.FromResult(true);
@@ -368,7 +441,6 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
 
     public Task<(long size, DateTime lastModified)?> GetDataInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        // Validate that the key doesn't conflict with temporary files or metadata directories
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
             return Task.FromResult<(long size, DateTime lastModified)?>(null);
@@ -380,11 +452,10 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             return Task.FromResult<(long size, DateTime lastModified)?>(null);
         }
 
-        // Check if this is a temporary file
         var fileName = Path.GetFileName(dataPath);
         if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
         {
-            return Task.FromResult<(long size, DateTime lastModified)?>(null); // Temporary files should be invisible
+            return Task.FromResult<(long size, DateTime lastModified)?>(null);
         }
 
         var fileInfo = new FileInfo(dataPath);
@@ -409,7 +480,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         }
 
         var config = CreateTraversalConfiguration(bucketType, prefix, delimiter);
-        
+
         var result = DoDirectoryTraversal(
             validationResult.Path,
             bucketName,
@@ -422,9 +493,30 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         return Task.FromResult(result);
     }
 
+    public Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return Task.FromResult<string?>(null);
+        }
+
+        var dataPath = GetDataPath(bucketName, key);
+        if (!File.Exists(dataPath))
+        {
+            return Task.FromResult<string?>(null);
+        }
+
+        var fileName = Path.GetFileName(dataPath);
+        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
+        {
+            return Task.FromResult<string?>(null);
+        }
+
+        return ETagHelper.ComputeETagFromFileAsync(dataPath)!;
+    }
+
     private (bool IsValid, string Path) ValidateAndPreparePath(string bucketName, string? prefix)
     {
-        // Validate bucket name
         if (FilesystemStorageHelper.IsKeyForbidden(bucketName, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
             return (false, string.Empty);
@@ -489,7 +581,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                      .SkipWhile(x => !string.IsNullOrEmpty(startAfter) && EntryNameToKey(path, x) != startAfter))
         {
             prefix ??= "";
-            
+
             if (ShouldSkipEntry(entryName, bucketName, prefix, config.NeedsFilter, out var key))
                 continue;
 
@@ -524,7 +616,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
     private bool ShouldSkipEntry(string entryName, string bucketName, string prefix, bool needsFilter, out string key)
     {
         key = string.Empty;
-        
+
         if (IsEntryNameForbidden(entryName))
             return true;
 
@@ -542,10 +634,10 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
     }
 
     private void ProcessFileSystemEntry(
-        string entryName, 
-        string key, 
-        string prefix, 
-        string? delimiter, 
+        string entryName,
+        string key,
+        string prefix,
+        string? delimiter,
         bool allRecursive,
         TraversalState state)
     {
@@ -628,119 +720,17 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
     private bool IsEntryNameForbidden(string entryName)
     {
         var fileName = Path.GetFileName(entryName);
-        // Skip temporary files
         if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
         {
             return true;
         }
 
-        // Skip inline metadata directories
         if (FilesystemStorageHelper.IsMetadataPath(entryName, _metadataMode, _inlineMetadataDirectoryName))
         {
             return true;
         }
 
         return false;
-    }
-
-
-    public async Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default)
-    {
-        // Validate that the key doesn't conflict with temporary files or metadata directories
-        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
-        {
-            return null;
-        }
-
-        var dataPath = GetDataPath(bucketName, key);
-        if (!File.Exists(dataPath))
-        {
-            return null;
-        }
-
-        // Check if this is a temporary file
-        var fileName = Path.GetFileName(dataPath);
-        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
-        {
-            return null; // Temporary files should be invisible
-        }
-
-        // Use ETagHelper which efficiently computes hash without loading entire file into memory
-        return await ETagHelper.ComputeETagFromFileAsync(dataPath);
-    }
-
-    public async Task<(long size, string etag)?> CopyDataAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, CancellationToken cancellationToken = default)
-    {
-        // Validate keys
-        if (FilesystemStorageHelper.IsKeyForbidden(sourceKey, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName) ||
-            FilesystemStorageHelper.IsKeyForbidden(destKey, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
-        {
-            return null;
-        }
-
-        var sourcePath = GetDataPath(sourceBucketName, sourceKey);
-        if (!File.Exists(sourcePath))
-        {
-            return null;
-        }
-
-        // Check if source is a temporary file
-        var sourceFileName = Path.GetFileName(sourcePath);
-        if (FilesystemStorageHelper.IsTemporaryFile(sourceFileName, _tempFilePrefix))
-        {
-            return null; // Temporary files should be invisible
-        }
-
-        var destPath = GetDataPath(destBucketName, destKey);
-        var destDir = Path.GetDirectoryName(destPath)!;
-        await _networkHelper.EnsureDirectoryExistsAsync(destDir, $"CopyObject-{destBucketName}/{destKey}");
-
-        // Use a temporary file for atomic copy
-        var tempPath = Path.Combine(destDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
-        try
-        {
-            // Copy the file
-            await _networkHelper.ExecuteWithRetryAsync(() =>
-                {
-                    File.Copy(sourcePath, tempPath, overwrite: false);
-                    return Task.FromResult(true);
-                },
-                "CopyFile");
-
-            // Move temp file to final destination atomically
-            await _networkHelper.ExecuteWithRetryAsync(() =>
-                {
-                    File.Move(tempPath, destPath, overwrite: true);
-                    return Task.FromResult(true);
-                },
-                "MoveFile");
-
-            // Get the size and compute ETag of the destination file
-            var fileInfo = new FileInfo(destPath);
-            var etag = await ETagHelper.ComputeETagFromFileAsync(destPath);
-
-            return (fileInfo.Length, etag);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error copying data from {SourceBucket}/{SourceKey} to {DestBucket}/{DestKey}",
-                sourceBucketName, sourceKey, destBucketName, destKey);
-
-            // Clean up temp file if it exists
-            if (File.Exists(tempPath))
-            {
-                try
-                {
-                    File.Delete(tempPath);
-                }
-                catch
-                {
-                    // Ignore cleanup errors
-                }
-            }
-
-            return null;
-        }
     }
 
     private string GetDataPath(string bucketName, string key)

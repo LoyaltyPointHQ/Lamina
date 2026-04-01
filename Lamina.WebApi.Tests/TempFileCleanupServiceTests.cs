@@ -139,7 +139,7 @@ public class TempFileCleanupServiceTests : IDisposable
             x => x.Log(
                 LogLevel.Warning,
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Data directory does not exist")),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("does not exist")),
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.Once);
@@ -253,13 +253,14 @@ public class TempFileCleanupServiceTests : IDisposable
     }
 
     [Fact]
-    public void ExecuteAsync_DisabledWhenNoFilesystemSettings()
+    public async Task ExecuteAsync_DisabledWhenNoFilesystemSettings()
     {
         // Arrange
         var service = new TempFileCleanupService(_mockLogger.Object, _configuration, null);
 
-        // Act
-        _ = service.StartAsync(CancellationToken.None);
+        // Act - start and wait for ExecuteAsync to complete (it returns immediately when disabled)
+        await service.StartAsync(CancellationToken.None);
+        await service.StopAsync(CancellationToken.None);
 
         // Assert - Should log that service is disabled
         _mockLogger.Verify(
@@ -301,5 +302,111 @@ public class TempFileCleanupServiceTests : IDisposable
         Assert.True(File.Exists(regularFile), "Regular file should be preserved");
         Assert.True(File.Exists(tempLikeFile), "Temp-like file with wrong prefix should be preserved");
         Assert.False(File.Exists(validTempFile), "Valid temp file should be deleted");
+    }
+
+    [Fact]
+    public async Task CleanupStaleTempFilesAsync_SeparateDirectoryMode_ScansMetadataDirectory()
+    {
+        // Arrange - create a separate metadata directory with stale temp files
+        var metadataDirectory = Path.Combine(Path.GetTempPath(), $"lamina-meta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(metadataDirectory);
+
+        try
+        {
+            var settings = new FilesystemStorageSettings
+            {
+                DataDirectory = _testDataDirectory,
+                MetadataDirectory = metadataDirectory,
+                MetadataMode = MetadataStorageMode.SeparateDirectory,
+                TempFilePrefix = _tempFilePrefix
+            };
+
+            // Create stale temp file in metadata directory
+            var metaTempFile = Path.Combine(metadataDirectory, "bucket", $"{_tempFilePrefix}stale-meta");
+            Directory.CreateDirectory(Path.GetDirectoryName(metaTempFile)!);
+            await File.WriteAllTextAsync(metaTempFile, "stale metadata temp");
+            File.SetLastWriteTimeUtc(metaTempFile, DateTime.UtcNow.AddMinutes(-5));
+
+            // Create stale temp file in data directory
+            var dataTempFile = Path.Combine(_testDataDirectory, $"{_tempFilePrefix}stale-data");
+            await File.WriteAllTextAsync(dataTempFile, "stale data temp");
+            File.SetLastWriteTimeUtc(dataTempFile, DateTime.UtcNow.AddMinutes(-5));
+
+            var options = Options.Create(settings);
+            var service = new TempFileCleanupService(_mockLogger.Object, _configuration, options);
+
+            // Act
+            var method = typeof(TempFileCleanupService).GetMethod("CleanupStaleTempFilesAsync",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            method!.Invoke(service, new object[] { CancellationToken.None });
+
+            // Assert - both temp files should be cleaned up
+            Assert.False(File.Exists(dataTempFile), "Stale temp file in data directory should be deleted");
+            Assert.False(File.Exists(metaTempFile), "Stale temp file in metadata directory should be deleted");
+        }
+        finally
+        {
+            if (Directory.Exists(metadataDirectory))
+                Directory.Delete(metadataDirectory, true);
+        }
+    }
+
+    [Fact]
+    public async Task CleanupStaleTempFilesAsync_InlineMode_ScansInlineMetadataSubdirectories()
+    {
+        // Arrange - inline mode stores metadata in .lamina-meta/ subdirectories within DataDirectory
+        var settings = new FilesystemStorageSettings
+        {
+            DataDirectory = _testDataDirectory,
+            MetadataMode = MetadataStorageMode.Inline,
+            InlineMetadataDirectoryName = ".lamina-meta",
+            TempFilePrefix = _tempFilePrefix
+        };
+
+        // Create stale temp file in .lamina-meta/ subdirectory
+        var inlineMetaDir = Path.Combine(_testDataDirectory, "bucket", ".lamina-meta");
+        Directory.CreateDirectory(inlineMetaDir);
+        var inlineMetaTempFile = Path.Combine(inlineMetaDir, $"{_tempFilePrefix}stale-inline-meta");
+        await File.WriteAllTextAsync(inlineMetaTempFile, "stale inline metadata temp");
+        File.SetLastWriteTimeUtc(inlineMetaTempFile, DateTime.UtcNow.AddMinutes(-5));
+
+        var options = Options.Create(settings);
+        var service = new TempFileCleanupService(_mockLogger.Object, _configuration, options);
+
+        // Act
+        var method = typeof(TempFileCleanupService).GetMethod("CleanupStaleTempFilesAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        method!.Invoke(service, new object[] { CancellationToken.None });
+
+        // Assert - temp file in .lamina-meta/ should be cleaned up (already scanned as part of DataDirectory)
+        Assert.False(File.Exists(inlineMetaTempFile), "Stale temp file in inline metadata directory should be deleted");
+    }
+
+    [Fact]
+    public async Task CleanupStaleTempFilesAsync_SeparateDirectoryMode_DoesNotDuplicateScan_WhenSameAsDataDirectory()
+    {
+        // Arrange - metadata directory same as data directory (no duplicate scan needed)
+        var settings = new FilesystemStorageSettings
+        {
+            DataDirectory = _testDataDirectory,
+            MetadataDirectory = _testDataDirectory, // Same as DataDirectory
+            MetadataMode = MetadataStorageMode.SeparateDirectory,
+            TempFilePrefix = _tempFilePrefix
+        };
+
+        var tempFile = Path.Combine(_testDataDirectory, $"{_tempFilePrefix}stale");
+        await File.WriteAllTextAsync(tempFile, "stale temp");
+        File.SetLastWriteTimeUtc(tempFile, DateTime.UtcNow.AddMinutes(-5));
+
+        var options = Options.Create(settings);
+        var service = new TempFileCleanupService(_mockLogger.Object, _configuration, options);
+
+        // Act
+        var method = typeof(TempFileCleanupService).GetMethod("CleanupStaleTempFilesAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        method!.Invoke(service, new object[] { CancellationToken.None });
+
+        // Assert - file should be cleaned up (scanned once, not twice)
+        Assert.False(File.Exists(tempFile), "Stale temp file should be deleted");
     }
 }
