@@ -126,13 +126,45 @@ affinity: {}
 config: {}
 
 # Secrets configuration for sensitive data
-# When secrets.create=true, sensitive fields from config (AccessKeyId, SecretAccessKey, Redis passwords)
-# are automatically moved to Kubernetes Secrets and removed from ConfigMaps
+# When secrets.create=true, inline (string) sensitive fields from config
+# (AccessKeyId, SecretAccessKey, Redis passwords) are automatically moved to a
+# generated Kubernetes Secret and removed from ConfigMaps.
+#
+# Per-user credentials may also reference arbitrary externally managed secrets.
+# In config.Authentication.Users each AccessKeyId / SecretAccessKey can be either:
+#   - a string (inline)                  -> stored in the generated secret
+#   - an object { secretName?, secretKey } -> referenced from any secret on the cluster
+# If secretName is omitted, the default secret is used (either `existingSecret`
+# below, or the chart-generated one). This allows users to be spread across
+# multiple independently managed secrets.
+#
+# Example:
+# config:
+#   Authentication:
+#     Users:
+#       - AccessKeyId: "inline-key"                     # inline (dev)
+#         SecretAccessKey: "inline-secret"
+#         BucketPermissions: [...]
+#       - AccessKeyId:
+#           secretName: team-a-creds
+#           secretKey: access-key
+#         SecretAccessKey:
+#           secretName: team-a-creds
+#           secretKey: secret-key
+#         BucketPermissions: [...]
+#       - AccessKeyId:
+#           secretKey: AWS_ACCESS_KEY_ID                # secretName omitted -> default secret
+#         SecretAccessKey:
+#           secretKey: AWS_SECRET_ACCESS_KEY
+#         BucketPermissions: [...]
 secrets:
-  # Create a new secret (set to false to use existingSecret)
+  # Create a new secret for inline credentials and Redis password.
+  # Can stay true even when some users reference external secrets — the generated
+  # secret will only contain entries for users with inline string credentials.
   create: true
 
-  # Use an existing secret instead of creating a new one
+  # Default secret used as fallback when a user's AccessKeyId/SecretAccessKey
+  # object omits `secretName`. If empty, the chart-generated secret is used.
   existingSecret: ""
 
 
