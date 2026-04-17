@@ -3,6 +3,7 @@ using System;
 using Lamina.Storage.Sql.Context;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,12 +11,14 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Lamina.Migrations.Sqlite
 {
     [DbContext(typeof(LaminaDbContext))]
-    partial class LaminaDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260417224406_AddObjectTagsJson")]
+    partial class AddObjectTagsJson
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "9.0.0");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.5");
 
             modelBuilder.Entity("Lamina.Storage.Sql.Entities.BucketEntity", b =>
                 {
@@ -86,10 +89,6 @@ namespace Lamina.Migrations.Sqlite
                         .HasColumnType("TEXT");
 
                     b.Property<string>("PartsMetadataJson")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("TagsJson")
-                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.HasKey("UploadId");
@@ -166,6 +165,10 @@ namespace Lamina.Migrations.Sqlite
 
                     b.Property<long>("Size")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("TagsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
 
                     b.HasKey("Id");
 

@@ -8,6 +8,7 @@ using Lamina.WebApi.Authorization;
 using Lamina.WebApi.Configuration;
 using Lamina.WebApi.Controllers.Attributes;
 using Lamina.WebApi.Controllers.Base;
+using Lamina.WebApi.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
@@ -177,6 +178,22 @@ public class S3MultipartController : S3ControllerBase
             return S3Error("InvalidArgument", $"Invalid checksum algorithm: {checksumAlgorithmValue}. Valid values are: CRC32, CRC32C, SHA1, SHA256, CRC64NVME", $"/{bucketName}/{key}", 400);
         }
 
+        Dictionary<string, string>? tagsFromHeader = null;
+        if (Request.Headers.TryGetValue("x-amz-tagging", out var taggingHeader) && !string.IsNullOrEmpty(taggingHeader.ToString()))
+        {
+            var parseResult = TaggingHeaderParser.Parse(taggingHeader.ToString());
+            if (!parseResult.IsSuccess)
+            {
+                return S3Error("InvalidArgument", parseResult.ErrorMessage!, $"/{bucketName}/{key}", 400);
+            }
+            var validation = TagValidator.Validate(parseResult.Tags);
+            if (!validation.IsValid)
+            {
+                return S3Error("InvalidTag", validation.ErrorMessage!, $"/{bucketName}/{key}", 400);
+            }
+            tagsFromHeader = parseResult.Tags;
+        }
+
         var request = new InitiateMultipartUploadRequest
         {
             Key = key,
@@ -184,6 +201,7 @@ public class S3MultipartController : S3ControllerBase
             Metadata = Request.Headers
                 .Where(h => h.Key.StartsWith("x-amz-meta-", StringComparison.OrdinalIgnoreCase))
                 .ToDictionary(h => h.Key.Substring(11), h => h.Value.ToString()),
+            Tags = tagsFromHeader,
             ChecksumAlgorithm = string.IsNullOrEmpty(checksumAlgorithmValue) ? null : checksumAlgorithmValue
         };
 

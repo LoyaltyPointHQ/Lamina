@@ -27,6 +27,7 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
             ETag = etag,
             ContentType = request?.ContentType ?? "application/octet-stream",
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),
+            Tags = request?.Tags ?? new Dictionary<string, string>(),
             OwnerId = request?.OwnerId,
             OwnerDisplayName = request?.OwnerDisplayName
         };
@@ -78,6 +79,7 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
             Size = s3Object.Size,
             ContentType = s3Object.ContentType,
             Metadata = s3Object.Metadata,
+            Tags = s3Object.Tags,
             OwnerId = s3Object.OwnerId,
             OwnerDisplayName = s3Object.OwnerDisplayName,
             ChecksumCRC32 = s3Object.ChecksumCRC32,
@@ -121,4 +123,36 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
     }
 
     public bool IsValidObjectKey(string key) => true;
+
+    public Task<Dictionary<string, string>?> GetObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        if (!_metadata.TryGetValue(bucketName, out var bucketMetadata) ||
+            !bucketMetadata.TryGetValue(key, out var s3Object))
+        {
+            return Task.FromResult<Dictionary<string, string>?>(null);
+        }
+        return Task.FromResult<Dictionary<string, string>?>(new Dictionary<string, string>(s3Object.Tags));
+    }
+
+    public Task<bool> SetObjectTagsAsync(string bucketName, string key, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
+    {
+        if (!_metadata.TryGetValue(bucketName, out var bucketMetadata) ||
+            !bucketMetadata.TryGetValue(key, out var s3Object))
+        {
+            return Task.FromResult(false);
+        }
+        s3Object.Tags = new Dictionary<string, string>(tags);
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> DeleteObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        if (!_metadata.TryGetValue(bucketName, out var bucketMetadata) ||
+            !bucketMetadata.TryGetValue(key, out var s3Object))
+        {
+            return Task.FromResult(false);
+        }
+        s3Object.Tags = new Dictionary<string, string>();
+        return Task.FromResult(true);
+    }
 }

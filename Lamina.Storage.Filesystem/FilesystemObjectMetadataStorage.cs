@@ -84,6 +84,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             LastModified = fileInfo.LastWriteTimeUtc,
             ContentType = request?.ContentType ?? "application/octet-stream",
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),
+            Tags = request?.Tags ?? new Dictionary<string, string>(),
             OwnerId = request?.OwnerId,
             OwnerDisplayName = request?.OwnerDisplayName
         };
@@ -125,6 +126,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             ETag = etag,
             ContentType = metadata.ContentType,
             Metadata = metadata.Metadata,
+            Tags = metadata.Tags,
             OwnerId = metadata.OwnerId,
             OwnerDisplayName = metadata.OwnerDisplayName,
             ChecksumCRC32 = metadata.ChecksumCRC32,
@@ -143,6 +145,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             ETag = etag,
             ContentType = metadata.ContentType,
             Metadata = metadata.Metadata,
+            Tags = metadata.Tags,
             OwnerId = metadata.OwnerId,
             OwnerDisplayName = metadata.OwnerDisplayName,
             ChecksumCRC32 = metadata.ChecksumCRC32,
@@ -265,6 +268,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             Size = fileInfo.Length,
             ContentType = metadata.ContentType,
             Metadata = metadata.Metadata,
+            Tags = metadata.Tags,
             OwnerId = metadata.OwnerId,
             OwnerDisplayName = metadata.OwnerDisplayName,
             ChecksumCRC32 = metadata.ChecksumCRC32,
@@ -614,6 +618,73 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         return $"object:{bucketName}:{key}";
     }
 
+    public async Task<Dictionary<string, string>?> GetObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        var metadataPath = GetMetadataPath(bucketName, key);
+        if (!File.Exists(metadataPath))
+        {
+            return null;
+        }
+
+        var dataPath = GetDataPath(bucketName, key);
+        if (!File.Exists(dataPath))
+        {
+            return null;
+        }
+
+        var metadata = await _lockManager.ReadFileAsync(metadataPath, content =>
+            Task.FromResult(JsonSerializer.Deserialize<S3ObjectMetadata>(content)), cancellationToken);
+
+        if (metadata == null)
+        {
+            return null;
+        }
+
+        return new Dictionary<string, string>(metadata.Tags);
+    }
+
+    public async Task<bool> SetObjectTagsAsync(string bucketName, string key, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
+    {
+        var metadataPath = GetMetadataPath(bucketName, key);
+        var dataPath = GetDataPath(bucketName, key);
+
+        if (!File.Exists(dataPath))
+        {
+            return false;
+        }
+
+        var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+
+        var updated = await _lockManager.UpdateFileAsync(metadataPath, current =>
+        {
+            if (string.IsNullOrEmpty(current))
+            {
+                return Task.FromResult<string?>(null);
+            }
+
+            var metadata = JsonSerializer.Deserialize<S3ObjectMetadata>(current);
+            if (metadata == null)
+            {
+                return Task.FromResult<string?>(null);
+            }
+
+            metadata.Tags = new Dictionary<string, string>(tags);
+            return Task.FromResult<string?>(JsonSerializer.Serialize(metadata, jsonOptions));
+        }, cancellationToken);
+
+        if (updated)
+        {
+            InvalidateCache(bucketName, key);
+        }
+
+        return updated;
+    }
+
+    public Task<bool> DeleteObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        return SetObjectTagsAsync(bucketName, key, new Dictionary<string, string>(), cancellationToken);
+    }
+
     private class CachedObjectInfo
     {
         public required S3ObjectInfo ObjectInfo { get; init; }
@@ -658,6 +729,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         public DateTime LastModified { get; set; }
         public string ContentType { get; set; } = "application/octet-stream";
         public Dictionary<string, string> Metadata { get; set; } = new();
+        public Dictionary<string, string> Tags { get; set; } = new();
         public string? OwnerId { get; set; }
         public string? OwnerDisplayName { get; set; }
         public string? ChecksumCRC32 { get; set; }

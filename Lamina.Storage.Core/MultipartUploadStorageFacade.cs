@@ -190,7 +190,8 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         {
             Key = key,
             ContentType = uploadMetadata?.ContentType ?? "application/octet-stream",
-            Metadata = uploadMetadata?.Metadata ?? new Dictionary<string, string>()
+            Metadata = uploadMetadata?.Metadata ?? new Dictionary<string, string>(),
+            Tags = uploadMetadata?.Tags ?? new Dictionary<string, string>()
         };
 
         // Phase 5: Compute proper multipart ETag from individual part ETags

@@ -42,6 +42,18 @@ public class MultipartUploadEntity
     }
 
     [Column(TypeName = "TEXT")]
+    public string TagsJson { get; set; } = "{}";
+
+    [NotMapped]
+    public Dictionary<string, string> Tags
+    {
+        get => string.IsNullOrEmpty(TagsJson)
+            ? new Dictionary<string, string>()
+            : JsonSerializer.Deserialize<Dictionary<string, string>>(TagsJson) ?? new Dictionary<string, string>();
+        set => TagsJson = JsonSerializer.Serialize(value);
+    }
+
+    [Column(TypeName = "TEXT")]
     public string? PartsMetadataJson { get; set; }
 
     [NotMapped]
@@ -63,6 +75,7 @@ public class MultipartUploadEntity
             Initiated = upload.Initiated,
             ContentType = upload.ContentType,
             Metadata = upload.Metadata,
+            Tags = upload.Tags,
             ChecksumAlgorithm = upload.ChecksumAlgorithm,
             Parts = upload.Parts
         };
@@ -78,6 +91,7 @@ public class MultipartUploadEntity
             Initiated = Initiated,
             ContentType = ContentType,
             Metadata = Metadata,
+            Tags = Tags,
             ChecksumAlgorithm = ChecksumAlgorithm,
             Parts = Parts
         };

@@ -168,7 +168,7 @@ public class S3ObjectsController : S3ControllerBase
     }
 
     [HttpPut("{*key}")]
-    [RequireNoQueryParameters("partNumber", "uploadId")]
+    [RequireNoQueryParameters("partNumber", "uploadId", "tagging")]
     [DisableRequestSizeLimit]
     [S3Authorize(S3Operations.Write, S3ResourceType.Object)]
     public async Task<IActionResult> PutObject(
@@ -237,6 +237,22 @@ public class S3ObjectsController : S3ControllerBase
             return S3Error("InvalidArgument", $"Invalid checksum algorithm: {checksumAlgorithmValue}. Valid values are: CRC32, CRC32C, SHA1, SHA256, CRC64NVME", $"/{bucketName}/{key}", 400);
         }
 
+        Dictionary<string, string>? tagsFromHeader = null;
+        if (Request.Headers.TryGetValue("x-amz-tagging", out var taggingHeader) && !string.IsNullOrEmpty(taggingHeader.ToString()))
+        {
+            var parseResult = TaggingHeaderParser.Parse(taggingHeader.ToString());
+            if (!parseResult.IsSuccess)
+            {
+                return S3Error("InvalidArgument", parseResult.ErrorMessage!, key, 400);
+            }
+            var validation = TagValidator.Validate(parseResult.Tags);
+            if (!validation.IsValid)
+            {
+                return S3Error("InvalidTag", validation.ErrorMessage!, key, 400);
+            }
+            tagsFromHeader = parseResult.Tags;
+        }
+
         var putRequest = new PutObjectRequest
         {
             Key = key,
@@ -244,6 +260,7 @@ public class S3ObjectsController : S3ControllerBase
             Metadata = Request.Headers
                 .Where(h => h.Key.StartsWith("x-amz-meta-", StringComparison.OrdinalIgnoreCase))
                 .ToDictionary(h => h.Key[11..], h => h.Value.ToString()),
+            Tags = tagsFromHeader,
             OwnerId = authenticatedUser?.AccessKeyId ?? "anonymous",
             OwnerDisplayName = authenticatedUser?.Name ?? "anonymous",
             ChecksumAlgorithm = string.IsNullOrEmpty(checksumAlgorithmValue) ? null : checksumAlgorithmValue,
@@ -385,6 +402,30 @@ public class S3ObjectsController : S3ControllerBase
             };
         }
 
+        // Handle tagging directive independently of metadata directive
+        Request.Headers.TryGetValue("x-amz-tagging-directive", out var taggingDirective);
+        if (taggingDirective.ToString().Equals("REPLACE", StringComparison.OrdinalIgnoreCase))
+        {
+            if (Request.Headers.TryGetValue("x-amz-tagging", out var taggingHeader) && !string.IsNullOrEmpty(taggingHeader.ToString()))
+            {
+                var parseResult = TaggingHeaderParser.Parse(taggingHeader.ToString());
+                if (!parseResult.IsSuccess)
+                {
+                    return S3Error("InvalidArgument", parseResult.ErrorMessage!, key, 400);
+                }
+                var validation = TagValidator.Validate(parseResult.Tags);
+                if (!validation.IsValid)
+                {
+                    return S3Error("InvalidTag", validation.ErrorMessage!, key, 400);
+                }
+                putRequest.Tags = parseResult.Tags;
+            }
+            else
+            {
+                putRequest.Tags = new Dictionary<string, string>();
+            }
+        }
+
         // Perform the copy
         var copiedObject = await _objectStorage.CopyObjectAsync(
             sourceBucketName,
@@ -393,6 +434,7 @@ public class S3ObjectsController : S3ControllerBase
             key,
             metadataDirective.ToString(),
             putRequest,
+            taggingDirective.ToString(),
             cancellationToken
         );
 
@@ -424,7 +466,7 @@ public class S3ObjectsController : S3ControllerBase
     }
 
     [HttpGet("{*key}")]
-    [RequireNoQueryParameters("uploadId")]
+    [RequireNoQueryParameters("uploadId", "tagging")]
     [S3Authorize(S3Operations.Read, S3ResourceType.Object)]
     public async Task<IActionResult> GetObject(
         string bucketName,
@@ -524,6 +566,11 @@ public class S3ObjectsController : S3ControllerBase
             Response.Headers.Append($"x-amz-meta-{metadataItem.Key}", metadataItem.Value);
         }
 
+        if (metadata.Tags.Count > 0)
+        {
+            Response.Headers.Append("x-amz-tagging-count", metadata.Tags.Count.ToString());
+        }
+
         // Add checksum headers if present
         if (!string.IsNullOrEmpty(metadata.ChecksumCRC32))
             Response.Headers.Append("x-amz-checksum-crc32", metadata.ChecksumCRC32);
@@ -575,7 +622,7 @@ public class S3ObjectsController : S3ControllerBase
     }
 
     [HttpDelete("{*key}")]
-    [RequireNoQueryParameters("uploadId")]
+    [RequireNoQueryParameters("uploadId", "tagging")]
     [S3Authorize(S3Operations.Delete, S3ResourceType.Object)]
     public async Task<IActionResult> DeleteObject(
         string bucketName,
@@ -615,6 +662,11 @@ public class S3ObjectsController : S3ControllerBase
         foreach (var metadata in objectInfo.Metadata)
         {
             Response.Headers.Append($"x-amz-meta-{metadata.Key}", metadata.Value);
+        }
+
+        if (objectInfo.Tags.Count > 0)
+        {
+            Response.Headers.Append("x-amz-tagging-count", objectInfo.Tags.Count.ToString());
         }
 
         // Add checksum headers if present
@@ -794,5 +846,118 @@ public class S3ObjectsController : S3ControllerBase
             _logger.LogError(ex, "Failed to deserialize S3 user from claims");
             return null;
         }
+    }
+
+    [HttpPut("{*key}")]
+    [RequireQueryParameter("tagging")]
+    [S3Authorize(S3Operations.Write, S3ResourceType.Object)]
+    public async Task<IActionResult> PutObjectTagging(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
+        }
+
+        if (!await _objectStorage.ObjectExistsAsync(bucketName, key, cancellationToken))
+        {
+            return S3Error("NoSuchKey", "The specified key does not exist.", key, 404);
+        }
+
+        string xmlContent;
+        try
+        {
+            xmlContent = await PipeReaderHelper.ReadAllTextAsync(Request.BodyReader, false, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to read tagging body for {Bucket}/{Key}", bucketName, key);
+            return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", key, 400);
+        }
+
+        TaggingXml? taggingXml;
+        try
+        {
+            var serializer = new XmlSerializer(typeof(TaggingXml));
+            using var reader = new StringReader(xmlContent);
+            taggingXml = serializer.Deserialize(reader) as TaggingXml;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to deserialize Tagging XML for {Bucket}/{Key}", bucketName, key);
+            return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", key, 400);
+        }
+
+        if (taggingXml == null)
+        {
+            return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", key, 400);
+        }
+
+        var tagDict = new Dictionary<string, string>();
+        foreach (var tag in taggingXml.TagSet)
+        {
+            if (tagDict.ContainsKey(tag.Key))
+            {
+                return S3Error("InvalidTag", "Cannot provide multiple tags with the same key", key, 400);
+            }
+            tagDict[tag.Key] = tag.Value;
+        }
+
+        var validation = TagValidator.Validate(tagDict);
+        if (!validation.IsValid)
+        {
+            return S3Error("InvalidTag", validation.ErrorMessage!, key, 400);
+        }
+
+        var set = await _objectStorage.SetObjectTagsAsync(bucketName, key, tagDict, cancellationToken);
+        if (!set)
+        {
+            return S3Error("NoSuchKey", "The specified key does not exist.", key, 404);
+        }
+
+        return Ok();
+    }
+
+    [HttpGet("{*key}")]
+    [RequireQueryParameter("tagging")]
+    [S3Authorize(S3Operations.Read, S3ResourceType.Object)]
+    public async Task<IActionResult> GetObjectTagging(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
+        }
+
+        var tags = await _objectStorage.GetObjectTagsAsync(bucketName, key, cancellationToken);
+        if (tags == null)
+        {
+            return S3Error("NoSuchKey", "The specified key does not exist.", key, 404);
+        }
+
+        var result = new TaggingXml
+        {
+            TagSet = tags.Select(kvp => new TagXml { Key = kvp.Key, Value = kvp.Value }).ToList()
+        };
+
+        Response.ContentType = "application/xml";
+        return Ok(result);
+    }
+
+    [HttpDelete("{*key}")]
+    [RequireQueryParameter("tagging")]
+    [S3Authorize(S3Operations.Write, S3ResourceType.Object)]
+    public async Task<IActionResult> DeleteObjectTagging(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
+        }
+
+        var deleted = await _objectStorage.DeleteObjectTagsAsync(bucketName, key, cancellationToken);
+        if (!deleted)
+        {
+            return S3Error("NoSuchKey", "The specified key does not exist.", key, 404);
+        }
+
+        return NoContent();
     }
 }

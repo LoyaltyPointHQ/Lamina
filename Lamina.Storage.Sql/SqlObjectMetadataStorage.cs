@@ -44,6 +44,7 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
             ETag = etag,
             ContentType = request?.ContentType ?? "application/octet-stream",
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),
+            Tags = request?.Tags ?? new Dictionary<string, string>(),
             Data = Array.Empty<byte>(), // SQL storage doesn't store data directly
             OwnerId = request?.OwnerId,
             OwnerDisplayName = request?.OwnerDisplayName
@@ -77,6 +78,7 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
             existing.ETag = etag;
             existing.ContentType = s3Object.ContentType;
             existing.Metadata = s3Object.Metadata;
+            existing.Tags = s3Object.Tags;
             existing.OwnerId = s3Object.OwnerId;
             existing.OwnerDisplayName = s3Object.OwnerDisplayName;
             existing.ChecksumCRC32 = s3Object.ChecksumCRC32;
@@ -227,5 +229,39 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
 
         // Return empty dictionary which will cause all checksums to be set to null
         return (etag, new Dictionary<string, string>());
+    }
+
+    public async Task<Dictionary<string, string>?> GetObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(bucketName);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+
+        var entity = await _context.Objects
+            .FirstOrDefaultAsync(o => o.BucketName == bucketName && o.Key == key, cancellationToken);
+
+        return entity?.Tags;
+    }
+
+    public async Task<bool> SetObjectTagsAsync(string bucketName, string key, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(bucketName);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+
+        var entity = await _context.Objects
+            .FirstOrDefaultAsync(o => o.BucketName == bucketName && o.Key == key, cancellationToken);
+
+        if (entity == null)
+        {
+            return false;
+        }
+
+        entity.Tags = tags;
+        await _context.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    public Task<bool> DeleteObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        return SetObjectTagsAsync(bucketName, key, new Dictionary<string, string>(), cancellationToken);
     }
 }

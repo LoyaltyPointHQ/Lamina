@@ -7,6 +7,7 @@ public class MultipartUpload
     public string Key { get; set; } = string.Empty;
     public DateTime Initiated { get; set; }
     public Dictionary<string, string> Metadata { get; set; } = new();
+    public Dictionary<string, string> Tags { get; set; } = new();
     public string? ContentType { get; set; }
     public string? ChecksumAlgorithm { get; set; }
 
@@ -45,6 +46,7 @@ public class InitiateMultipartUploadRequest
     public string Key { get; set; } = string.Empty;
     public string? ContentType { get; set; }
     public Dictionary<string, string>? Metadata { get; set; }
+    public Dictionary<string, string>? Tags { get; set; }
     public string? ChecksumAlgorithm { get; set; }
 }
 

@@ -36,6 +36,9 @@ public class ObjectEntity
     [Column(TypeName = "TEXT")]
     public string MetadataJson { get; set; } = "{}";
 
+    [Column(TypeName = "TEXT")]
+    public string TagsJson { get; set; } = "{}";
+
     [MaxLength(256)]
     public string? OwnerId { get; set; }
 
@@ -66,6 +69,15 @@ public class ObjectEntity
         set => MetadataJson = JsonSerializer.Serialize(value);
     }
 
+    [NotMapped]
+    public Dictionary<string, string> Tags
+    {
+        get => string.IsNullOrEmpty(TagsJson)
+            ? new Dictionary<string, string>()
+            : JsonSerializer.Deserialize<Dictionary<string, string>>(TagsJson) ?? new Dictionary<string, string>();
+        set => TagsJson = JsonSerializer.Serialize(value);
+    }
+
     public static ObjectEntity FromS3Object(S3Object s3Object)
     {
         return new ObjectEntity
@@ -77,6 +89,7 @@ public class ObjectEntity
             ETag = s3Object.ETag,
             ContentType = s3Object.ContentType,
             Metadata = s3Object.Metadata,
+            Tags = s3Object.Tags,
             OwnerId = s3Object.OwnerId,
             OwnerDisplayName = s3Object.OwnerDisplayName,
             ChecksumCRC32 = s3Object.ChecksumCRC32,
@@ -98,6 +111,7 @@ public class ObjectEntity
             ETag = objectInfo.ETag,
             ContentType = objectInfo.ContentType,
             Metadata = objectInfo.Metadata,
+            Tags = objectInfo.Tags,
             OwnerId = objectInfo.OwnerId,
             OwnerDisplayName = objectInfo.OwnerDisplayName,
             ChecksumCRC32 = objectInfo.ChecksumCRC32,
@@ -118,6 +132,7 @@ public class ObjectEntity
             ETag = ETag,
             ContentType = ContentType,
             Metadata = Metadata,
+            Tags = Tags,
             OwnerId = OwnerId,
             OwnerDisplayName = OwnerDisplayName,
             ChecksumCRC32 = ChecksumCRC32,

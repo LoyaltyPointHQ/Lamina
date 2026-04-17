@@ -93,6 +93,10 @@ namespace Lamina.Migrations.PostgreSql
                     b.Property<string>("PartsMetadataJson")
                         .HasColumnType("text");
 
+                    b.Property<string>("TagsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
                     b.HasKey("UploadId");
 
                     b.HasIndex("BucketName");
@@ -169,6 +173,10 @@ namespace Lamina.Migrations.PostgreSql
 
                     b.Property<long>("Size")
                         .HasColumnType("bigint");
+
+                    b.Property<string>("TagsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
 
                     b.HasKey("Id");
 

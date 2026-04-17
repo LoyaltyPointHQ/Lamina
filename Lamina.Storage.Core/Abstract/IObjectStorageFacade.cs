@@ -16,6 +16,10 @@ public interface IObjectStorageFacade
     Task<bool> ObjectExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     bool IsValidObjectKey(string key);
     Task<DeleteMultipleObjectsResponse> DeleteMultipleObjectsAsync(string bucketName, List<ObjectIdentifier> objectsToDelete, bool quiet = false, CancellationToken cancellationToken = default);
-    Task<S3Object?> CopyObjectAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, string? metadataDirective = null, PutObjectRequest? request = null, CancellationToken cancellationToken = default);
+    Task<S3Object?> CopyObjectAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, string? metadataDirective = null, PutObjectRequest? request = null, string? taggingDirective = null, CancellationToken cancellationToken = default);
     Task<UploadPart?> CopyObjectPartAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, string uploadId, int partNumber, long? byteRangeStart = null, long? byteRangeEnd = null, ChecksumRequest? checksumRequest = null, CancellationToken cancellationToken = default);
+
+    Task<Dictionary<string, string>?> GetObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    Task<bool> SetObjectTagsAsync(string bucketName, string key, Dictionary<string, string> tags, CancellationToken cancellationToken = default);
+    Task<bool> DeleteObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
 }

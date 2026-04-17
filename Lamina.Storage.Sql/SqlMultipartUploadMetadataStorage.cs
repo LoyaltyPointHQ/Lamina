@@ -29,7 +29,8 @@ public class SqlMultipartUploadMetadataStorage : IMultipartUploadMetadataStorage
             Key = key,
             Initiated = DateTime.UtcNow,
             ContentType = request.ContentType,
-            Metadata = request.Metadata ?? new Dictionary<string, string>()
+            Metadata = request.Metadata ?? new Dictionary<string, string>(),
+            Tags = request.Tags ?? new Dictionary<string, string>()
         };
 
         var entity = MultipartUploadEntity.FromMultipartUpload(upload);

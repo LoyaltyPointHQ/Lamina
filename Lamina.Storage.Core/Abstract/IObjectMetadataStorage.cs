@@ -10,4 +10,8 @@ public interface IObjectMetadataStorage
     Task<bool> MetadataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     IAsyncEnumerable<(string bucketName, string key)> ListAllMetadataKeysAsync(CancellationToken cancellationToken = default);
     bool IsValidObjectKey(string key);
+
+    Task<Dictionary<string, string>?> GetObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    Task<bool> SetObjectTagsAsync(string bucketName, string key, Dictionary<string, string> tags, CancellationToken cancellationToken = default);
+    Task<bool> DeleteObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
 }

@@ -19,6 +19,7 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
     private const string ETagAttributeName = "etag";
     private const string ContentTypeAttributeName = "content-type";
     private const string MetadataPrefix = "metadata";
+    private const string TagPrefix = "tag";
     private const string OwnerIdAttributeName = "owner-id";
     private const string OwnerDisplayNameAttributeName = "owner-display-name";
 
@@ -89,6 +90,12 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
                 StoreUserMetadata(dataPath, request.Metadata, key, bucketName);
             }
 
+            // Store tags
+            if (request?.Tags != null)
+            {
+                StoreTags(dataPath, request.Tags, key, bucketName);
+            }
+
             // Get the actual last modified time from the filesystem
             var fileInfo = new FileInfo(dataPath);
 
@@ -101,6 +108,7 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
                 ETag = etag,
                 ContentType = contentType,
                 Metadata = request?.Metadata ?? new Dictionary<string, string>(),
+                Tags = request?.Tags ?? new Dictionary<string, string>(),
                 OwnerId = request?.OwnerId,
                 OwnerDisplayName = request?.OwnerDisplayName
             };
@@ -157,6 +165,9 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
             // Get user metadata
             var userMetadata = GetUserMetadata(dataPath);
 
+            // Get tags
+            var tags = GetTags(dataPath);
+
             // Always get size and last modified from filesystem
             var fileInfo = new FileInfo(dataPath);
 
@@ -168,6 +179,7 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
                 Size = fileInfo.Length,
                 ContentType = contentType,
                 Metadata = userMetadata,
+                Tags = tags,
                 OwnerId = ownerId,
                 OwnerDisplayName = ownerDisplayName
             });
@@ -331,5 +343,111 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
     private string GetDataPath(string bucketName, string key)
     {
         return Path.Combine(_dataDirectory, bucketName, key);
+    }
+
+    public Task<Dictionary<string, string>?> GetObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        var dataPath = GetDataPath(bucketName, key);
+        if (!File.Exists(dataPath))
+        {
+            return Task.FromResult<Dictionary<string, string>?>(null);
+        }
+
+        var etag = _xattrHelper.GetAttribute(dataPath, ETagAttributeName);
+        if (string.IsNullOrEmpty(etag))
+        {
+            return Task.FromResult<Dictionary<string, string>?>(null);
+        }
+
+        return Task.FromResult<Dictionary<string, string>?>(GetTags(dataPath));
+    }
+
+    public Task<bool> SetObjectTagsAsync(string bucketName, string key, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
+    {
+        var dataPath = GetDataPath(bucketName, key);
+        if (!File.Exists(dataPath))
+        {
+            return Task.FromResult(false);
+        }
+
+        var etag = _xattrHelper.GetAttribute(dataPath, ETagAttributeName);
+        if (string.IsNullOrEmpty(etag))
+        {
+            return Task.FromResult(false);
+        }
+
+        RemoveAllTags(dataPath);
+        StoreTags(dataPath, tags, key, bucketName);
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> DeleteObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        return SetObjectTagsAsync(bucketName, key, new Dictionary<string, string>(), cancellationToken);
+    }
+
+    private void StoreTags(string dataPath, Dictionary<string, string> tags, string key, string bucketName)
+    {
+        foreach (var kvp in tags)
+        {
+            var attributeName = $"{TagPrefix}.{kvp.Key}";
+            var success = _xattrHelper.SetAttribute(dataPath, attributeName, kvp.Value);
+            if (!success)
+            {
+                _logger.LogWarning("Failed to store tag attribute {AttributeName} for {Key} in bucket {BucketName}",
+                    attributeName, key, bucketName);
+            }
+        }
+    }
+
+    private Dictionary<string, string> GetTags(string dataPath)
+    {
+        var tags = new Dictionary<string, string>();
+
+        try
+        {
+            var attributes = _xattrHelper.ListAttributes(dataPath);
+            var tagPrefixDot = $"{TagPrefix}.";
+
+            foreach (var attr in attributes)
+            {
+                if (attr.StartsWith(tagPrefixDot))
+                {
+                    var tagKey = attr[tagPrefixDot.Length..];
+                    var value = _xattrHelper.GetAttribute(dataPath, attr);
+                    if (value != null)
+                    {
+                        tags[tagKey] = value;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to retrieve tags from {DataPath}", dataPath);
+        }
+
+        return tags;
+    }
+
+    private void RemoveAllTags(string dataPath)
+    {
+        try
+        {
+            var attributes = _xattrHelper.ListAttributes(dataPath);
+            var tagPrefixDot = $"{TagPrefix}.";
+
+            foreach (var attr in attributes)
+            {
+                if (attr.StartsWith(tagPrefixDot))
+                {
+                    _xattrHelper.RemoveAttribute(dataPath, attr);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to remove tags from {DataPath}", dataPath);
+        }
     }
 }

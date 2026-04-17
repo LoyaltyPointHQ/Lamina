@@ -383,6 +383,40 @@ Lamina implements S3-compliant checksum validation for data integrity:
 - **API Compliance**: Full support for `x-amz-checksum-*` headers and `x-amz-checksum-algorithm` parameter
 - **Performance**: Single-pass chunked checksum calculation to minimize memory usage
 
+### Object Tagging
+
+Lamina supports S3 Object Tagging - a separate concept from user-metadata (`x-amz-meta-*`). Tags are mutable without re-uploading the object and are used for fine-grained policies, lifecycle filters, and categorization.
+
+**Endpoints:**
+- `PUT /{bucket}/{key}?tagging` - `PutObjectTagging` (XML body with `Tagging`/`TagSet`/`Tag`)
+- `GET /{bucket}/{key}?tagging` - `GetObjectTagging`
+- `DELETE /{bucket}/{key}?tagging` - `DeleteObjectTagging`
+
+**Integration with existing operations:**
+- `PutObject` accepts `x-amz-tagging: k1=v1&k2=v2` URL-encoded header
+- `CreateMultipartUpload` accepts `x-amz-tagging` header (tags applied on Complete)
+- `CopyObject` supports `x-amz-tagging-directive: COPY|REPLACE` (default: `COPY` - copies from source)
+- `GetObject` / `HeadObject` return `x-amz-tagging-count` header with number of tags
+
+**Limits (S3 spec):**
+- Max 10 tags per object
+- Key: 1-128 Unicode characters (case-sensitive)
+- Value: 0-256 Unicode characters (case-sensitive)
+- Each key must be unique per object
+
+**Errors:**
+- `InvalidTag` (400) - limits exceeded, empty key, duplicate keys
+- `MalformedXML` (400) - unparseable XML body
+- `NoSuchKey` (404) - object does not exist
+
+**Storage:**
+- SQL: `TagsJson` column on `ObjectEntity` and `MultipartUploadEntity` (TEXT for SQLite, jsonb for PostgreSQL)
+- Filesystem: Tags stored in metadata blob (all modes: SeparateDirectory, Inline, Xattr)
+- InMemory: `Dictionary<string,string>` on `S3Object`
+
+**Not supported:**
+- `s3:PutObjectVersionTagging` - Lamina has no versioning
+
 ### ETag Handling
 
 - MD5 hash for S3 compatibility (centralized in `ETagHelper`)

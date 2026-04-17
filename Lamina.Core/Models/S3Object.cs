@@ -9,6 +9,7 @@ public class S3Object
     public string ETag { get; set; } = string.Empty;
     public string ContentType { get; set; } = "application/octet-stream";
     public Dictionary<string, string> Metadata { get; set; } = new();
+    public Dictionary<string, string> Tags { get; set; } = new();
     public byte[] Data { get; set; } = Array.Empty<byte>();
     public string? OwnerId { get; set; }
     public string? OwnerDisplayName { get; set; }
@@ -54,6 +55,7 @@ public class S3ObjectInfo
     public string ETag { get; set; } = string.Empty;
     public string ContentType { get; set; } = string.Empty;
     public Dictionary<string, string> Metadata { get; set; } = new();
+    public Dictionary<string, string> Tags { get; set; } = new();
     public string? OwnerId { get; set; }
     public string? OwnerDisplayName { get; set; }
     public string? ChecksumCRC32 { get; set; }
@@ -68,6 +70,7 @@ public class PutObjectRequest
     public string Key { get; set; } = string.Empty;
     public string? ContentType { get; set; }
     public Dictionary<string, string>? Metadata { get; set; }
+    public Dictionary<string, string>? Tags { get; set; }
     public string? OwnerId { get; set; }
     public string? OwnerDisplayName { get; set; }
     public string? ChecksumCRC32 { get; set; }

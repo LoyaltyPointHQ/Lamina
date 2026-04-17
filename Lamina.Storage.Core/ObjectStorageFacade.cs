@@ -437,6 +437,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
         string destKey,
         string? metadataDirective = null,
         PutObjectRequest? request = null,
+        string? taggingDirective = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -494,6 +495,17 @@ public class ObjectStorageFacade : IObjectStorageFacade
                     ChecksumSHA256 = sourceInfo.ChecksumSHA256,
                     ChecksumCRC64NVME = sourceInfo.ChecksumCRC64NVME
                 };
+            }
+
+            // Tagging directive: default COPY per S3 spec. REPLACE uses request.Tags.
+            var tagDirective = taggingDirective?.ToUpperInvariant() ?? "COPY";
+            if (tagDirective == "REPLACE")
+            {
+                effectiveRequest.Tags = request?.Tags ?? new Dictionary<string, string>();
+            }
+            else
+            {
+                effectiveRequest.Tags = new Dictionary<string, string>(sourceInfo.Tags);
             }
 
             // Phase 2: Store metadata BEFORE committing data
@@ -645,5 +657,20 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 sourceBucketName, sourceKey, destBucketName, destKey, partNumber);
             return null;
         }
+    }
+
+    public Task<Dictionary<string, string>?> GetObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        return _metadataStorage.GetObjectTagsAsync(bucketName, key, cancellationToken);
+    }
+
+    public Task<bool> SetObjectTagsAsync(string bucketName, string key, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
+    {
+        return _metadataStorage.SetObjectTagsAsync(bucketName, key, tags, cancellationToken);
+    }
+
+    public Task<bool> DeleteObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        return _metadataStorage.DeleteObjectTagsAsync(bucketName, key, cancellationToken);
     }
 }

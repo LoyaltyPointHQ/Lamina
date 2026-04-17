@@ -85,6 +85,54 @@ public class RedisLockManager : IFileSystemLockManager
         }
     }
 
+    public async Task<bool> UpdateFileAsync(string filePath, Func<string?, Task<string?>> transform, CancellationToken cancellationToken = default)
+    {
+        var lockName = GetLockName(filePath);
+        var rwLock = new RedisDistributedReaderWriterLock(lockName, _database);
+
+        var timeout = TimeSpan.FromMilliseconds(_settings.RetryDelayMs * _settings.RetryCount);
+
+        await using var handle = await rwLock.TryAcquireWriteLockAsync(timeout, cancellationToken);
+
+        if (handle == null)
+        {
+            _logger.LogWarning("Failed to acquire update lock for path: {FilePath}", filePath);
+            throw new InvalidOperationException($"Failed to acquire update lock for path: {filePath}");
+        }
+
+        _logger.LogDebug("Acquired update lock for path: {FilePath}", filePath);
+
+        string? current = null;
+        if (File.Exists(filePath))
+        {
+            current = await File.ReadAllTextAsync(filePath, cancellationToken);
+        }
+
+        var updated = await transform(current);
+        if (updated == null)
+        {
+            return false;
+        }
+
+        var directory = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+
+        var tempPath = Path.Combine(directory ?? ".", $".lamina-tmp-{Guid.NewGuid():N}");
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, updated, cancellationToken);
+            File.Move(tempPath, filePath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tempPath); } catch { /* ignore cleanup errors */ }
+            throw;
+        }
+
+        return true;
+    }
+
     public async Task<bool> DeleteFile(string filePath)
     {
         var lockName = GetLockName(filePath);

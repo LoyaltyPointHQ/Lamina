@@ -82,6 +82,46 @@ public class InMemoryLockManager : IFileSystemLockManager
         }
     }
 
+    public async Task<bool> UpdateFileAsync(string filePath, Func<string?, Task<string?>> transform, CancellationToken cancellationToken = default)
+    {
+        var lockKey = GetNormalizedPath(filePath);
+        using var lockInfo = AcquireLockInfo(lockKey);
+
+        using var writeLock = await lockInfo.Lock.WriterLockAsync();
+
+        string? current = null;
+        if (File.Exists(filePath))
+        {
+            current = await File.ReadAllTextAsync(filePath, cancellationToken);
+        }
+
+        var updated = await transform(current);
+        if (updated == null)
+        {
+            return false;
+        }
+
+        var directory = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var tempPath = Path.Combine(directory ?? ".", $".lamina-tmp-{Guid.NewGuid():N}");
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, updated, cancellationToken);
+            File.Move(tempPath, filePath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tempPath); } catch { /* ignore cleanup errors */ }
+            throw;
+        }
+
+        return true;
+    }
+
     public async Task<bool> DeleteFile(string filePath)
     {
         var lockKey = GetNormalizedPath(filePath);

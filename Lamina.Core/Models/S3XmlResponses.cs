@@ -587,3 +587,21 @@ public class DeleteError
     [XmlElement("VersionId")]
     public string? VersionId { get; set; }
 }
+
+[XmlRoot("Tagging", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class TaggingXml
+{
+    [XmlArray("TagSet")]
+    [XmlArrayItem("Tag")]
+    public List<TagXml> TagSet { get; set; } = new();
+}
+
+[XmlRoot("Tag")]
+public class TagXml
+{
+    [XmlElement("Key")]
+    public string Key { get; set; } = string.Empty;
+
+    [XmlElement("Value")]
+    public string Value { get; set; } = string.Empty;
+}

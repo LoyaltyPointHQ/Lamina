@@ -64,8 +64,16 @@ public class LaminaDbContext : DbContext
                 .Property(e => e.MetadataJson)
                 .HasColumnType("TEXT");
 
+            modelBuilder.Entity<ObjectEntity>()
+                .Property(e => e.TagsJson)
+                .HasColumnType("TEXT");
+
             modelBuilder.Entity<MultipartUploadEntity>()
                 .Property(e => e.MetadataJson)
+                .HasColumnType("TEXT");
+
+            modelBuilder.Entity<MultipartUploadEntity>()
+                .Property(e => e.TagsJson)
                 .HasColumnType("TEXT");
         }
         else if (Database.ProviderName == "Npgsql.EntityFrameworkCore.PostgreSQL")
@@ -79,8 +87,16 @@ public class LaminaDbContext : DbContext
                 .Property(e => e.MetadataJson)
                 .HasColumnType("jsonb");
 
+            modelBuilder.Entity<ObjectEntity>()
+                .Property(e => e.TagsJson)
+                .HasColumnType("jsonb");
+
             modelBuilder.Entity<MultipartUploadEntity>()
                 .Property(e => e.MetadataJson)
+                .HasColumnType("jsonb");
+
+            modelBuilder.Entity<MultipartUploadEntity>()
+                .Property(e => e.TagsJson)
                 .HasColumnType("jsonb");
         }
     }
