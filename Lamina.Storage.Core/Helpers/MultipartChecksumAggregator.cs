@@ -114,27 +114,34 @@ public static class MultipartChecksumAggregator
     }
 
     /// <summary>
-    /// Aggregates CRC64NVME checksums from multiple parts.
+    /// Aggregates CRC-64/NVME part checksums into the full-object checksum of the
+    /// concatenated parts using GF(2) linearization (CRC combine). S3 spec
+    /// (https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html)
+    /// states CRC-64/NVME in multipart uploads supports full-object checksum only,
+    /// not the composite (checksum-of-checksums) variant used for CRC32/CRC32C.
     /// </summary>
-    public static string? AggregateCrc64Nvme(IEnumerable<string?> partChecksums)
+    /// <param name="parts">Sequence of (base64 part checksum, part size in bytes) pairs in part order.</param>
+    public static string? AggregateCrc64NvmeFullObject(IEnumerable<(string? Checksum, long Size)> parts)
     {
-        var checksums = partChecksums.Where(c => !string.IsNullOrEmpty(c)).ToList();
-        if (checksums.Count == 0) return null;
+        ulong combined = 0UL;
+        bool any = false;
+        Span<byte> partBytes = stackalloc byte[8];
 
-        // Decode all part checksums and concatenate
-        var concatenated = new List<byte>();
-        foreach (var checksum in checksums)
+        foreach (var (checksum, size) in parts)
         {
-            var decoded = Convert.FromBase64String(checksum!);
-            concatenated.AddRange(decoded);
+            if (string.IsNullOrEmpty(checksum)) continue;
+            if (!Convert.TryFromBase64String(checksum, partBytes, out var written) || written != 8)
+                throw new FormatException($"Invalid CRC-64/NVME part checksum (expected 8-byte base64): '{checksum}'");
+
+            var partCrc = BinaryPrimitives.ReadUInt64BigEndian(partBytes);
+            combined = any ? Crc64Nvme.Combine(combined, partCrc, size) : partCrc;
+            any = true;
         }
 
-        // Compute CRC64NVME of the concatenated checksums using System.IO.Hashing.Crc64
-        var crc64 = new Crc64();
-        crc64.Append(concatenated.ToArray());
-        var hash = crc64.GetCurrentHash();
+        if (!any) return null;
 
-        // Encode to base64
-        return Convert.ToBase64String(hash);
+        Span<byte> outBytes = stackalloc byte[8];
+        BinaryPrimitives.WriteUInt64BigEndian(outBytes, combined);
+        return Convert.ToBase64String(outBytes);
     }
 }

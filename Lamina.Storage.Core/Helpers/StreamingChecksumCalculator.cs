@@ -1,6 +1,5 @@
-using System.Buffers.Binary;
-using System.IO.Hashing;
 using System.Security.Cryptography;
+using System.Buffers.Binary;
 using Force.Crc32;
 
 namespace Lamina.Storage.Core.Helpers;
@@ -19,7 +18,7 @@ public class StreamingChecksumCalculator : IDisposable
     private IncrementalHash? _sha256;
     private uint? _crc32Hash;
     private uint? _crc32CHash;
-    private Crc64? _crc64;
+    private Crc64Nvme? _crc64;
 
     // Buffer for CRC algorithms (CRC32, CRC32C, CRC64NVME require buffering with Force.Crc32 library)
 
@@ -88,7 +87,7 @@ public class StreamingChecksumCalculator : IDisposable
 
         if (_requestedAlgorithms.Contains("CRC64NVME"))
         {
-            _crc64 = new Crc64();
+            _crc64 = new Crc64Nvme();
         }
 
         if (_requestedAlgorithms.Contains("SHA1"))
@@ -147,7 +146,8 @@ public class StreamingChecksumCalculator : IDisposable
 
         if (_crc64 != null)
         {
-            var hash = _crc64.GetCurrentHash();
+            Span<byte> hash = stackalloc byte[8];
+            _crc64.GetCurrentHash(hash);
             calculated["CRC64NVME"] = Convert.ToBase64String(hash);
         }
 

@@ -208,7 +208,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         var aggregatedCRC32C = MultipartChecksumAggregator.AggregateCrc32C(orderedStoredParts.Select(p => p.ChecksumCRC32C));
         var aggregatedSHA1 = MultipartChecksumAggregator.AggregateSha1(orderedStoredParts.Select(p => p.ChecksumSHA1));
         var aggregatedSHA256 = MultipartChecksumAggregator.AggregateSha256(orderedStoredParts.Select(p => p.ChecksumSHA256));
-        var aggregatedCRC64NVME = MultipartChecksumAggregator.AggregateCrc64Nvme(orderedStoredParts.Select(p => p.ChecksumCRC64NVME));
+        var aggregatedCRC64NVME = MultipartChecksumAggregator.AggregateCrc64NvmeFullObject(orderedStoredParts.Select(p => (p.ChecksumCRC64NVME, p.Size)));
 
         // Build checksums dictionary for storage
         var aggregatedChecksums = new Dictionary<string, string>();

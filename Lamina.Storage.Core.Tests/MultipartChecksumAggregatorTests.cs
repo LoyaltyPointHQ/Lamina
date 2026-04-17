@@ -100,20 +100,47 @@ public class MultipartChecksumAggregatorTests
     }
 
     [Fact]
-    public void AggregateCrc64Nvme_WithValidChecksums_ReturnsAggregatedChecksum()
+    public void AggregateCrc64NvmeFullObject_TwoParts_EqualsCrcOfConcatenation()
     {
-        // Arrange - Using valid base64 checksums
-        var part1Checksum = "AAAAAAAAAAA="; // 8 bytes base64
-        var part2Checksum = "AQEBAQEBAQE="; // 8 bytes base64
-        var partChecksums = new[] { part1Checksum, part2Checksum };
+        // S3 spec: CRC-64/NVME for multipart is full-object (linearization), not composite.
+        // For parts P1 and P2: aggregated CRC == CRC(P1 || P2).
+        var rng = new Random(7);
+        var p1 = new byte[1024];
+        var p2 = new byte[2048];
+        rng.NextBytes(p1);
+        rng.NextBytes(p2);
 
-        // Act
-        var result = MultipartChecksumAggregator.AggregateCrc64Nvme(partChecksums);
+        var crcP1 = ComputeNvme(p1);
+        var crcP2 = ComputeNvme(p2);
 
-        // Assert
-        Assert.NotNull(result);
-        Assert.NotEmpty(result);
-        Assert.Matches("^[A-Za-z0-9+/]+=*$", result);
+        var concat = new byte[p1.Length + p2.Length];
+        p1.CopyTo(concat, 0);
+        p2.CopyTo(concat, p1.Length);
+        var expectedCrc = ComputeNvme(concat);
+        var expectedBase64 = ToBase64BigEndian(expectedCrc);
+
+        var input = new[]
+        {
+            ((string?)ToBase64BigEndian(crcP1), (long)p1.Length),
+            ((string?)ToBase64BigEndian(crcP2), (long)p2.Length)
+        };
+        var result = MultipartChecksumAggregator.AggregateCrc64NvmeFullObject(input);
+
+        Assert.Equal(expectedBase64, result);
+    }
+
+    private static ulong ComputeNvme(byte[] data)
+    {
+        var crc = new Crc64Nvme();
+        crc.Append(data);
+        return crc.GetCurrentHash();
+    }
+
+    private static string ToBase64BigEndian(ulong value)
+    {
+        Span<byte> bytes = stackalloc byte[8];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(bytes, value);
+        return Convert.ToBase64String(bytes);
     }
 
     [Fact]
