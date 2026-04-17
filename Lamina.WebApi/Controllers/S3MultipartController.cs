@@ -3,10 +3,13 @@ using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
+using Lamina.WebApi.ActionResults;
 using Lamina.WebApi.Authorization;
+using Lamina.WebApi.Configuration;
 using Lamina.WebApi.Controllers.Attributes;
 using Lamina.WebApi.Controllers.Base;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Lamina.WebApi.Controllers;
 
@@ -17,18 +20,21 @@ public class S3MultipartController : S3ControllerBase
     private readonly IBucketStorageFacade _bucketStorage;
     private readonly IObjectStorageFacade _objectStorage;
     private readonly ILogger<S3MultipartController> _logger;
+    private readonly MultipartHeartbeatOptions _heartbeatOptions;
 
     public S3MultipartController(
         IMultipartUploadStorageFacade multipartStorage,
         IBucketStorageFacade bucketStorage,
         IObjectStorageFacade objectStorage,
-        ILogger<S3MultipartController> logger
+        ILogger<S3MultipartController> logger,
+        IOptions<MultipartHeartbeatOptions> heartbeatOptions
     )
     {
         _multipartStorage = multipartStorage;
         _bucketStorage = bucketStorage;
         _objectStorage = objectStorage;
         _logger = logger;
+        _heartbeatOptions = heartbeatOptions.Value;
     }
 
     private static XmlDeserializationResult<List<CompletedPart>> TryDeserializeCompleteRequest(string xmlContent)
@@ -616,39 +622,67 @@ public class S3MultipartController : S3ControllerBase
                 Parts = parts
             };
 
-            var storageResult = await _multipartStorage.CompleteMultipartUploadAsync(bucketName, key, completeRequest, cancellationToken);
+            return new S3HeartbeatedXmlResult(
+                ct => CompleteAndBuildPayloadAsync(bucketName, key, completeRequest, ct),
+                interval: TimeSpan.FromSeconds(_heartbeatOptions.IntervalSeconds),
+                enabled: _heartbeatOptions.Enabled,
+                logger: _logger);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error completing multipart upload {UploadId} for key {Key} in bucket {BucketName}", uploadId, key, bucketName);
+            return S3Error("InternalError", "We encountered an internal error. Please try again.", $"{bucketName}/{key}", 500);
+        }
+    }
 
-            if (!storageResult.IsSuccess)
+    private async Task<HeartbeatedXmlPayload> CompleteAndBuildPayloadAsync(
+        string bucketName,
+        string key,
+        CompleteMultipartUploadRequest request,
+        CancellationToken cancellationToken)
+    {
+        var storageResult = await _multipartStorage.CompleteMultipartUploadAsync(bucketName, key, request, cancellationToken);
+
+        if (!storageResult.IsSuccess)
+        {
+            var (status, code) = storageResult.ErrorCode switch
             {
-                return storageResult.ErrorCode switch
-                {
-                    "NoSuchUpload" => S3Error("NoSuchUpload", storageResult.ErrorMessage!, $"{bucketName}/{key}", 404),
-                    "InvalidPart" => S3Error("InvalidPart", storageResult.ErrorMessage!, $"{bucketName}/{key}", 400),
-                    "EntityTooSmall" => S3Error("EntityTooSmall", storageResult.ErrorMessage!, $"{bucketName}/{key}", 400),
-                    _ => S3Error("InternalError", storageResult.ErrorMessage!, $"{bucketName}/{key}", 500)
-                };
-            }
-
-            var completeResponse = storageResult.Value!;
-
-            // Use aggregated checksums from the storage response (checksum-of-checksums per S3 spec)
-            var result = new CompleteMultipartUploadResult
-            {
-                Location = $"http://{Request.Host}/{bucketName}/{key}",
-                Bucket = bucketName,
-                Key = key,
-                ETag = $"\"{completeResponse.ETag}\"",
-                ChecksumCRC32 = completeResponse.ChecksumCRC32,
-                ChecksumCRC32C = completeResponse.ChecksumCRC32C,
-                ChecksumCRC64NVME = completeResponse.ChecksumCRC64NVME,
-                ChecksumSHA1 = completeResponse.ChecksumSHA1,
-                ChecksumSHA256 = completeResponse.ChecksumSHA256
+                "NoSuchUpload" => (404, "NoSuchUpload"),
+                "InvalidPart" => (400, "InvalidPart"),
+                "EntityTooSmall" => (400, "EntityTooSmall"),
+                _ => (500, "InternalError")
             };
+            var s3Error = new S3Error
+            {
+                Code = code,
+                Message = storageResult.ErrorMessage!,
+                Resource = $"{bucketName}/{key}",
+                RequestId = GetRequestId(),
+                HostId = GetExtendedRequestId()
+            };
+            return new HeartbeatedXmlPayload(s3Error, FallbackStatusCode: status);
+        }
 
-            // Add S3-compliant response headers
+        var completeResponse = storageResult.Value!;
+        var result = new CompleteMultipartUploadResult
+        {
+            Location = $"http://{Request.Host}/{bucketName}/{key}",
+            Bucket = bucketName,
+            Key = key,
+            ETag = $"\"{completeResponse.ETag}\"",
+            ChecksumCRC32 = completeResponse.ChecksumCRC32,
+            ChecksumCRC32C = completeResponse.ChecksumCRC32C,
+            ChecksumCRC64NVME = completeResponse.ChecksumCRC64NVME,
+            ChecksumSHA1 = completeResponse.ChecksumSHA1,
+            ChecksumSHA256 = completeResponse.ChecksumSHA256
+        };
+
+        // Headers can only be added before the response body has started.
+        // When heartbeat is active and has already ticked, HasStarted == true and the
+        // checksum/version-id headers are omitted (clients still get checksums in XML body).
+        if (!Response.HasStarted)
+        {
             Response.Headers.Append("x-amz-version-id", "null");
-
-            // Add aggregated checksum headers if present
             if (!string.IsNullOrEmpty(completeResponse.ChecksumCRC32))
                 Response.Headers.Append("x-amz-checksum-crc32", completeResponse.ChecksumCRC32);
             if (!string.IsNullOrEmpty(completeResponse.ChecksumCRC32C))
@@ -659,15 +693,9 @@ public class S3MultipartController : S3ControllerBase
                 Response.Headers.Append("x-amz-checksum-sha256", completeResponse.ChecksumSHA256);
             if (!string.IsNullOrEmpty(completeResponse.ChecksumCRC64NVME))
                 Response.Headers.Append("x-amz-checksum-crc64nvme", completeResponse.ChecksumCRC64NVME);
+        }
 
-            Response.ContentType = "application/xml";
-            return Ok(result);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Unexpected error completing multipart upload {UploadId} for key {Key} in bucket {BucketName}", uploadId, key, bucketName);
-            return S3Error("InternalError", "We encountered an internal error. Please try again.", $"{bucketName}/{key}", 500);
-        }
+        return new HeartbeatedXmlPayload(result);
     }
 
     [HttpDelete("{*key}")]

@@ -79,6 +79,10 @@ builder.Services.Configure<AutoBucketCreationSettings>(
 builder.Services.Configure<BucketDefaultsSettings>(
     builder.Configuration.GetSection("BucketDefaults"));
 
+// Configure multipart upload heartbeat (whitespace keep-alive during CompleteMultipartUpload)
+builder.Services.Configure<MultipartHeartbeatOptions>(
+    builder.Configuration.GetSection(MultipartHeartbeatOptions.SectionName));
+
 // Register authentication service
 builder.Services.AddSingleton<IAuthenticationService, AuthenticationService>();
 builder.Services.AddSingleton<IStreamingAuthenticationService, StreamingAuthenticationService>();
