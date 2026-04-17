@@ -298,4 +298,54 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
             _logger.LogWarning(ex, "Failed to remove tag attributes from {BucketPath}", bucketPath);
         }
     }
+
+    public async Task<LifecycleConfiguration?> GetLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
+    {
+        if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return null;
+        }
+
+        var path = GetLifecyclePath(bucketName);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        var content = await File.ReadAllTextAsync(path, cancellationToken);
+        return string.IsNullOrWhiteSpace(content)
+            ? null
+            : System.Text.Json.JsonSerializer.Deserialize<LifecycleConfiguration>(content);
+    }
+
+    public async Task<bool> SetLifecycleConfigurationAsync(string bucketName, LifecycleConfiguration configuration, CancellationToken cancellationToken = default)
+    {
+        if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return false;
+        }
+
+        var path = GetLifecyclePath(bucketName);
+        _networkHelper.EnsureDirectoryExists(Path.GetDirectoryName(path)!);
+        var json = System.Text.Json.JsonSerializer.Serialize(configuration, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        await File.WriteAllTextAsync(path, json, cancellationToken);
+        return true;
+    }
+
+    public Task<bool> DeleteLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
+    {
+        var path = GetLifecyclePath(bucketName);
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+            return Task.FromResult(true);
+        }
+        return Task.FromResult(false);
+    }
+
+    private string GetLifecyclePath(string bucketName)
+    {
+        // Xattr mode: store lifecycle JSON as a hidden file in bucket root directory.
+        return Path.Combine(_dataDirectory, bucketName, ".lamina-lifecycle.json");
+    }
 }

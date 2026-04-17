@@ -371,4 +371,52 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
     {
         return $"bucket:{bucketName}";
     }
+
+    public async Task<LifecycleConfiguration?> GetLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
+    {
+        if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return null;
+        }
+
+        var path = GetLifecyclePath(bucketName);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        return await _lockManager.ReadFileAsync(path, content =>
+            Task.FromResult(JsonSerializer.Deserialize<LifecycleConfiguration>(content)), cancellationToken);
+    }
+
+    public async Task<bool> SetLifecycleConfigurationAsync(string bucketName, LifecycleConfiguration configuration, CancellationToken cancellationToken = default)
+    {
+        if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return false;
+        }
+
+        var path = GetLifecyclePath(bucketName);
+        var directory = Path.GetDirectoryName(path)!;
+        await _networkHelper.EnsureDirectoryExistsAsync(directory, $"SetLifecycle-{bucketName}");
+
+        var json = JsonSerializer.Serialize(configuration, new JsonSerializerOptions { WriteIndented = true });
+        await _lockManager.WriteFileAsync(path, json, cancellationToken);
+        return true;
+    }
+
+    public async Task<bool> DeleteLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
+    {
+        var path = GetLifecyclePath(bucketName);
+        return await _lockManager.DeleteFile(path);
+    }
+
+    private string GetLifecyclePath(string bucketName)
+    {
+        if (_metadataMode == MetadataStorageMode.SeparateDirectory)
+        {
+            return Path.Combine(_metadataDirectory!, "_buckets", $"{bucketName}-lifecycle.json");
+        }
+        return Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_buckets", $"{bucketName}-lifecycle.json");
+    }
 }

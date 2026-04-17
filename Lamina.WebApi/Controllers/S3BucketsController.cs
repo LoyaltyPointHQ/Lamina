@@ -2,6 +2,7 @@ using System.Text.Json;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Configuration;
+using Lamina.Storage.Core.Helpers;
 using Lamina.WebApi.Authorization;
 using Lamina.WebApi.Controllers.Attributes;
 using Lamina.WebApi.Controllers.Base;
@@ -32,6 +33,7 @@ public class S3BucketsController : S3ControllerBase
     }
 
     [HttpPut("{bucketName}")]
+    [RequireNoQueryParameters("lifecycle")]
     [S3Authorize(S3Operations.Write, S3ResourceType.Bucket)]
     public async Task<IActionResult> CreateBucket(string bucketName, CancellationToken cancellationToken = default)
     {
@@ -147,7 +149,7 @@ public class S3BucketsController : S3ControllerBase
 
     [HttpGet("{bucketName}")]
     [RequireQueryParameter("location")]
-    [RequireNoQueryParameters("versioning")]
+    [RequireNoQueryParameters("versioning", "lifecycle")]
     [S3Authorize(S3Operations.Read, S3ResourceType.Bucket)]
     public async Task<IActionResult> GetBucketLocation(string bucketName, CancellationToken cancellationToken = default)
     {
@@ -173,7 +175,7 @@ public class S3BucketsController : S3ControllerBase
 
     [HttpGet("{bucketName}")]
     [RequireQueryParameter("versioning")]
-    [RequireNoQueryParameters("location")]
+    [RequireNoQueryParameters("location", "lifecycle")]
     [S3Authorize(S3Operations.Read, S3ResourceType.Bucket)]
     public async Task<IActionResult> GetBucketVersioning(string bucketName, CancellationToken cancellationToken = default)
     {
@@ -197,6 +199,7 @@ public class S3BucketsController : S3ControllerBase
     }
 
     [HttpDelete("{bucketName}")]
+    [RequireNoQueryParameters("lifecycle")]
     [S3Authorize(S3Operations.Delete, S3ResourceType.Bucket)]
     public async Task<IActionResult> DeleteBucket(string bucketName, CancellationToken cancellationToken = default)
     {
@@ -258,5 +261,79 @@ public class S3BucketsController : S3ControllerBase
             _logger.LogError(ex, "Failed to deserialize S3 user from claims");
             return null;
         }
+    }
+
+    [HttpPut("{bucketName}")]
+    [RequireQueryParameter("lifecycle")]
+    [S3Authorize(S3Operations.Write, S3ResourceType.Bucket)]
+    public async Task<IActionResult> PutBucketLifecycleConfiguration(string bucketName, CancellationToken cancellationToken = default)
+    {
+        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
+        }
+
+        string xmlContent;
+        try
+        {
+            xmlContent = await PipeReaderHelper.ReadAllTextAsync(Request.BodyReader, false, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to read lifecycle body for {Bucket}", bucketName);
+            return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", bucketName, 400);
+        }
+
+        var parseResult = LifecycleConfigurationParser.Parse(xmlContent);
+        if (!parseResult.IsSuccess)
+        {
+            return parseResult.IsNotImplemented
+                ? S3Error("NotImplemented", parseResult.ErrorMessage!, bucketName, 501)
+                : S3Error("MalformedXML", parseResult.ErrorMessage!, bucketName, 400);
+        }
+
+        var set = await _bucketStorage.SetLifecycleConfigurationAsync(bucketName, parseResult.Configuration!, cancellationToken);
+        if (!set)
+        {
+            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
+        }
+
+        return Ok();
+    }
+
+    [HttpGet("{bucketName}")]
+    [RequireQueryParameter("lifecycle")]
+    [RequireNoQueryParameters("location", "versioning")]
+    [S3Authorize(S3Operations.Read, S3ResourceType.Bucket)]
+    public async Task<IActionResult> GetBucketLifecycleConfiguration(string bucketName, CancellationToken cancellationToken = default)
+    {
+        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
+        }
+
+        var config = await _bucketStorage.GetLifecycleConfigurationAsync(bucketName, cancellationToken);
+        if (config == null)
+        {
+            return S3Error("NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist.", bucketName, 404);
+        }
+
+        var result = LifecycleConfigurationXmlMapper.ToXml(config);
+        Response.ContentType = "application/xml";
+        return Ok(result);
+    }
+
+    [HttpDelete("{bucketName}")]
+    [RequireQueryParameter("lifecycle")]
+    [S3Authorize(S3Operations.Write, S3ResourceType.Bucket)]
+    public async Task<IActionResult> DeleteBucketLifecycle(string bucketName, CancellationToken cancellationToken = default)
+    {
+        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
+        {
+            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
+        }
+
+        await _bucketStorage.DeleteLifecycleConfigurationAsync(bucketName, cancellationToken);
+        return NoContent();
     }
 }

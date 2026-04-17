@@ -108,4 +108,54 @@ public class SqlBucketMetadataStorage : IBucketMetadataStorage
         await _context.SaveChangesAsync(cancellationToken);
         return entity.ToBucket();
     }
+
+    public async Task<LifecycleConfiguration?> GetLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(bucketName);
+
+        var entity = await _context.Buckets
+            .FirstOrDefaultAsync(b => b.Name == bucketName, cancellationToken);
+
+        if (entity == null || string.IsNullOrEmpty(entity.LifecycleConfigurationJson))
+        {
+            return null;
+        }
+
+        return System.Text.Json.JsonSerializer.Deserialize<LifecycleConfiguration>(entity.LifecycleConfigurationJson);
+    }
+
+    public async Task<bool> SetLifecycleConfigurationAsync(string bucketName, LifecycleConfiguration configuration, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(bucketName);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var entity = await _context.Buckets
+            .FirstOrDefaultAsync(b => b.Name == bucketName, cancellationToken);
+
+        if (entity == null)
+        {
+            return false;
+        }
+
+        entity.LifecycleConfigurationJson = System.Text.Json.JsonSerializer.Serialize(configuration);
+        await _context.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    public async Task<bool> DeleteLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(bucketName);
+
+        var entity = await _context.Buckets
+            .FirstOrDefaultAsync(b => b.Name == bucketName, cancellationToken);
+
+        if (entity == null || string.IsNullOrEmpty(entity.LifecycleConfigurationJson))
+        {
+            return false;
+        }
+
+        entity.LifecycleConfigurationJson = null;
+        await _context.SaveChangesAsync(cancellationToken);
+        return true;
+    }
 }

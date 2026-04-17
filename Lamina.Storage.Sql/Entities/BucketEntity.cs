@@ -24,6 +24,9 @@ public class BucketEntity
     [Column(TypeName = "TEXT")]
     public string TagsJson { get; set; } = "{}";
 
+    [Column(TypeName = "TEXT")]
+    public string? LifecycleConfigurationJson { get; set; }
+
     [MaxLength(256)]
     public string? OwnerId { get; set; }
 

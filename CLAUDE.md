@@ -383,6 +383,61 @@ Lamina implements S3-compliant checksum validation for data integrity:
 - **API Compliance**: Full support for `x-amz-checksum-*` headers and `x-amz-checksum-algorithm` parameter
 - **Performance**: Single-pass chunked checksum calculation to minimize memory usage
 
+### Lifecycle Management
+
+Lamina supports S3 Bucket Lifecycle Configuration for automatic per-bucket object expiration and stale multipart upload cleanup.
+
+**Endpoints:**
+- `PUT /{bucket}?lifecycle` - `PutBucketLifecycleConfiguration` (XML body)
+- `GET /{bucket}?lifecycle` - `GetBucketLifecycleConfiguration` (returns XML, 404 `NoSuchLifecycleConfiguration` if unset)
+- `DELETE /{bucket}?lifecycle` - `DeleteBucketLifecycle`
+
+**Supported actions:**
+- `Expiration.Days` - delete objects N days after creation (rounded up to next midnight UTC per AWS spec)
+- `Expiration.Date` - delete objects after specific ISO 8601 date
+- `AbortIncompleteMultipartUpload.DaysAfterInitiation` - abort stale multipart uploads (per-bucket, overrides global cleanup timeout)
+
+**Supported filters:**
+- `Prefix` (both Filter.Prefix and legacy Rule.Prefix formats)
+- `Tag` (single tag match against object tags)
+- `ObjectSizeGreaterThan` / `ObjectSizeLessThan`
+- `And` (combination of prefix + tags + size)
+
+**Not supported (returns 501 NotImplemented):**
+- `Transition` / `NoncurrentVersionTransition` - no storage class tiers
+- `NoncurrentVersionExpiration` - no versioning
+- `ExpiredObjectDeleteMarker` - no delete markers
+
+Validation errors on supported elements (malformed XML, `Days=0`, >1000 rules, missing action) still return `400 MalformedXML`.
+
+**Limits (S3 spec):**
+- Max 1000 rules per configuration
+- Rule ID max 255 characters
+- `Expiration` requires exactly one of `Days` or `Date`; `Days > 0`
+- `AbortIncompleteMultipartUpload.DaysAfterInitiation > 0`
+- `Filter` must contain exactly one top-level criterion (Prefix/Tag/ObjectSize*/And)
+
+**Execution:**
+- `LifecycleExpirationService` (`BackgroundService`) runs periodically (`LifecycleExpiration:CheckIntervalMinutes`, default 60)
+- For each bucket: loads config → evaluates every Enabled rule against every object → deletes matching objects
+- AbortIncompleteMultipartUpload iterates multipart uploads (tag filter is ignored per AWS spec)
+- Expiration is asynchronous - there may be a delay between eligibility and actual deletion
+
+**Configuration:**
+```json
+{
+  "LifecycleExpiration": {
+    "Enabled": true,
+    "CheckIntervalMinutes": 60
+  }
+}
+```
+
+**Storage:**
+- SQL: `LifecycleConfigurationJson` column on `BucketEntity` (TEXT for SQLite, jsonb for PostgreSQL, nullable)
+- Filesystem: JSON file alongside bucket metadata (all modes)
+- InMemory: `ConcurrentDictionary<string, LifecycleConfiguration>`
+
 ### Object Tagging
 
 Lamina supports S3 Object Tagging - a separate concept from user-metadata (`x-amz-meta-*`). Tags are mutable without re-uploading the object and are used for fine-grained policies, lifecycle filters, and categorization.

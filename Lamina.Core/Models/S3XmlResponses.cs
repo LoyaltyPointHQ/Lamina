@@ -605,3 +605,110 @@ public class TagXml
     [XmlElement("Value")]
     public string Value { get; set; } = string.Empty;
 }
+
+[XmlRoot("LifecycleConfiguration", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class LifecycleConfigurationXml
+{
+    [XmlElement("Rule")]
+    public List<LifecycleRuleXml> Rules { get; set; } = new();
+}
+
+[XmlRoot("Rule")]
+public class LifecycleRuleXml
+{
+    [XmlElement("ID")]
+    public string? Id { get; set; }
+
+    [XmlElement("Status")]
+    public string Status { get; set; } = "Enabled";
+
+    [XmlElement("Filter")]
+    public LifecycleFilterXml? Filter { get; set; }
+
+    [XmlElement("Prefix")]
+    public string? Prefix { get; set; }
+
+    [XmlElement("Expiration")]
+    public LifecycleExpirationXml? Expiration { get; set; }
+
+    [XmlElement("AbortIncompleteMultipartUpload")]
+    public LifecycleAbortIncompleteMultipartUploadXml? AbortIncompleteMultipartUpload { get; set; }
+
+    [XmlElement("Transition")]
+    public object? Transition { get; set; }
+
+    [XmlElement("NoncurrentVersionExpiration")]
+    public object? NoncurrentVersionExpiration { get; set; }
+
+    [XmlElement("NoncurrentVersionTransition")]
+    public object? NoncurrentVersionTransition { get; set; }
+
+    public bool ShouldSerializeTransition() => false;
+    public bool ShouldSerializeNoncurrentVersionExpiration() => false;
+    public bool ShouldSerializeNoncurrentVersionTransition() => false;
+}
+
+[XmlRoot("Filter")]
+public class LifecycleFilterXml
+{
+    [XmlElement("Prefix")]
+    public string? Prefix { get; set; }
+
+    [XmlElement("Tag")]
+    public TagXml? Tag { get; set; }
+
+    [XmlElement("ObjectSizeGreaterThan")]
+    public long? ObjectSizeGreaterThan { get; set; }
+
+    [XmlElement("ObjectSizeLessThan")]
+    public long? ObjectSizeLessThan { get; set; }
+
+    [XmlElement("And")]
+    public LifecycleAndOperatorXml? And { get; set; }
+
+    public bool ShouldSerializeObjectSizeGreaterThan() => ObjectSizeGreaterThan.HasValue;
+    public bool ShouldSerializeObjectSizeLessThan() => ObjectSizeLessThan.HasValue;
+}
+
+[XmlRoot("And")]
+public class LifecycleAndOperatorXml
+{
+    [XmlElement("Prefix")]
+    public string? Prefix { get; set; }
+
+    [XmlElement("Tag")]
+    public List<TagXml> Tags { get; set; } = new();
+
+    [XmlElement("ObjectSizeGreaterThan")]
+    public long? ObjectSizeGreaterThan { get; set; }
+
+    [XmlElement("ObjectSizeLessThan")]
+    public long? ObjectSizeLessThan { get; set; }
+
+    public bool ShouldSerializeObjectSizeGreaterThan() => ObjectSizeGreaterThan.HasValue;
+    public bool ShouldSerializeObjectSizeLessThan() => ObjectSizeLessThan.HasValue;
+}
+
+[XmlRoot("Expiration")]
+public class LifecycleExpirationXml
+{
+    [XmlElement("Days")]
+    public int? Days { get; set; }
+
+    [XmlElement("Date")]
+    public DateTime? Date { get; set; }
+
+    [XmlElement("ExpiredObjectDeleteMarker")]
+    public bool? ExpiredObjectDeleteMarker { get; set; }
+
+    public bool ShouldSerializeDays() => Days.HasValue;
+    public bool ShouldSerializeDate() => Date.HasValue;
+    public bool ShouldSerializeExpiredObjectDeleteMarker() => ExpiredObjectDeleteMarker.HasValue;
+}
+
+[XmlRoot("AbortIncompleteMultipartUpload")]
+public class LifecycleAbortIncompleteMultipartUploadXml
+{
+    [XmlElement("DaysAfterInitiation")]
+    public int DaysAfterInitiation { get; set; }
+}

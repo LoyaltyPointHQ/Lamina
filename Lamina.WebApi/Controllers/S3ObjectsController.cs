@@ -35,7 +35,7 @@ public class S3ObjectsController : S3ControllerBase
     }
 
     [HttpGet("")]
-    [RequireNoQueryParameters("location", "uploads", "versioning")]
+    [RequireNoQueryParameters("location", "uploads", "versioning", "lifecycle")]
     [S3Authorize(S3Operations.List, S3ResourceType.Object)]
     public async Task<IActionResult> ListObjects(
         string bucketName,

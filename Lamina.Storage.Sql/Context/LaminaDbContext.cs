@@ -83,6 +83,10 @@ public class LaminaDbContext : DbContext
                 .Property(e => e.TagsJson)
                 .HasColumnType("jsonb");
 
+            modelBuilder.Entity<BucketEntity>()
+                .Property(e => e.LifecycleConfigurationJson)
+                .HasColumnType("jsonb");
+
             modelBuilder.Entity<ObjectEntity>()
                 .Property(e => e.MetadataJson)
                 .HasColumnType("jsonb");

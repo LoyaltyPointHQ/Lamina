@@ -122,4 +122,19 @@ public class BucketStorageFacade : IBucketStorageFacade
 
         return true;
     }
+
+    public Task<LifecycleConfiguration?> GetLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
+    {
+        return _metadataStorage.GetLifecycleConfigurationAsync(bucketName, cancellationToken);
+    }
+
+    public Task<bool> SetLifecycleConfigurationAsync(string bucketName, LifecycleConfiguration configuration, CancellationToken cancellationToken = default)
+    {
+        return _metadataStorage.SetLifecycleConfigurationAsync(bucketName, configuration, cancellationToken);
+    }
+
+    public Task<bool> DeleteLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
+    {
+        return _metadataStorage.DeleteLifecycleConfigurationAsync(bucketName, cancellationToken);
+    }
 }

@@ -273,6 +273,13 @@ if (tempFileCleanupEnabled && storageType.Equals("Filesystem", StringComparison.
     builder.Services.AddHostedService<TempFileCleanupService>();
 }
 
+// Register lifecycle expiration service if enabled
+var lifecycleExpirationEnabled = builder.Configuration.GetValue<bool>("LifecycleExpiration:Enabled", true);
+if (lifecycleExpirationEnabled)
+{
+    builder.Services.AddHostedService<LifecycleExpirationService>();
+}
+
 var app = builder.Build();
 
 // Run database migrations if SQL metadata storage is enabled
