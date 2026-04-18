@@ -50,7 +50,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
                     Algorithm = request.ChecksumAlgorithm,
                     ProvidedChecksums = new Dictionary<string, string>()
                 };
-                
+
                 if (!string.IsNullOrEmpty(request.ChecksumCRC32))
                     checksumRequest.ProvidedChecksums["CRC32"] = request.ChecksumCRC32;
                 if (!string.IsNullOrEmpty(request.ChecksumCRC32C))
@@ -61,6 +61,14 @@ public class ObjectStorageFacade : IObjectStorageFacade
                     checksumRequest.ProvidedChecksums["SHA1"] = request.ChecksumSHA1;
                 if (!string.IsNullOrEmpty(request.ChecksumSHA256))
                     checksumRequest.ProvidedChecksums["SHA256"] = request.ChecksumSHA256;
+
+                // Pre-register any algorithms the client will deliver via chunked trailer so the
+                // streaming calculator activates their hash state from byte 0. The actual trailer
+                // value is merged into the calculator inside the storage chunked path.
+                if (request.ExpectedChecksumTrailers.Count > 0)
+                {
+                    checksumRequest = TrailerChecksumMerger.RegisterExpectedTrailers(request.ExpectedChecksumTrailers, checksumRequest);
+                }
             }
 
             // Phase 1: Prepare data (process to temp storage, not yet visible)

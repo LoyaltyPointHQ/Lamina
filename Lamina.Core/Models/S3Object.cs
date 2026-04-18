@@ -79,4 +79,12 @@ public class PutObjectRequest
     public string? ChecksumSHA1 { get; set; }
     public string? ChecksumSHA256 { get; set; }
     public string? ChecksumAlgorithm { get; set; }
+
+    /// <summary>
+    /// Trailer header names advertised via <c>x-amz-trailer</c>. AWS CLI v2 default checksum
+    /// flow delivers the integrity value (CRC64NVME etc.) in a chunked trailer rather than a
+    /// request header - the facade activates the matching hash state upfront so the server
+    /// can compare client-supplied vs computed once the trailer is parsed.
+    /// </summary>
+    public List<string> ExpectedChecksumTrailers { get; set; } = new();
 }

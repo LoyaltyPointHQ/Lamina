@@ -22,7 +22,12 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
     // uploadId (aws s3 cp fires ~10 parallel parts). Without this lock, Get→Mutate→Update racing
     // produces IndexOutOfRangeException / NullReferenceException during dictionary resize and can
     // silently drop entries under last-writer-wins.
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _uploadLocks = new();
+    //
+    // MUST be static: the facade is registered as Scoped, so concurrent requests for the same
+    // upload get different instances. A non-static lock dictionary would give each request its
+    // own SemaphoreSlim and defeat the whole point. Making the dictionary static makes the lock
+    // pool process-wide, which is what we actually need.
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> _uploadLocks = new();
 
     public MultipartUploadStorageFacade(
         IMultipartUploadDataStorage dataStorage,

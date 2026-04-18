@@ -80,7 +80,11 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         // For in-memory storage, using MemoryStream is acceptable
         using var memoryStream = new MemoryStream();
 
-        var parseResult = await chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken);
+        // Use the trailer-aware parser when the validator signals trailers are coming, otherwise
+        // client-supplied CRC64NVME (delivered via x-amz-trailer) would be silently dropped.
+        var parseResult = chunkValidator.ExpectsTrailers
+            ? await chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken)
+            : await chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken);
 
         // Check if validation succeeded
         if (!parseResult.Success)
@@ -113,6 +117,11 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
             if (calculator.HasChecksums)
             {
                 calculator.Append(combinedData);
+                // Merge client-delivered trailer checksums so Finish can validate them.
+                if (parseResult.Trailers.Count > 0)
+                {
+                    TrailerChecksumMerger.MergeIntoCalculator(parseResult.Trailers, calculator);
+                }
                 var result = calculator.Finish();
 
                 if (!result.IsValid)

@@ -31,11 +31,16 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
     {
         byte[] combinedData;
         long bytesWritten;
+        ChunkedDataResult? parseResult = null;
 
         if (chunkValidator != null)
         {
             using var memoryStream = new MemoryStream();
-            var parseResult = await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken);
+            // Use trailer-aware parser when the client signalled chunked trailers (AWS CLI v2
+            // default checksum flow) so parseResult.Trailers carries through.
+            parseResult = chunkValidator.ExpectsTrailers
+                ? await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken)
+                : await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken);
 
             if (!parseResult.Success)
             {
@@ -60,6 +65,11 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
             if (calculator.HasChecksums)
             {
                 calculator.Append(combinedData);
+                // Merge client-delivered trailer checksums so Finish can validate them.
+                if (parseResult?.Trailers.Count > 0)
+                {
+                    TrailerChecksumMerger.MergeIntoCalculator(parseResult.Trailers, calculator);
+                }
                 var result = calculator.Finish();
 
                 if (!result.IsValid)

@@ -171,17 +171,28 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage,
         {
             ChunkedDataResult parseResult;
 
-            // Write validated chunks directly to temp file
+            // Write validated chunks directly to temp file. When the validator expects trailers
+            // (AWS CLI v2 default mode: client delivers CRC64NVME in a trailer signalled by
+            // x-amz-trailer), use the trailer-aware parser variant so parseResult.Trailers is
+            // populated - otherwise the client-supplied checksum value is silently lost and we'd
+            // store only the server auto-computed digest, which later mismatches at GetObject.
             {
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
-                parseResult = await chunkedDataParser.ParseChunkedDataToStreamAsync(
-                    dataReader, 
-                    fileStream, 
-                    chunkValidator,
-                    checksumCalculator?.HasChecksums == true ? data => checksumCalculator.Append(data) : null,
-                    cancellationToken);
+                var onDataWritten = checksumCalculator?.HasChecksums == true
+                    ? (Action<ReadOnlySpan<byte>>)(data => checksumCalculator.Append(data))
+                    : null;
+                parseResult = chunkValidator.ExpectsTrailers
+                    ? await chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(dataReader, fileStream, chunkValidator, onDataWritten, cancellationToken)
+                    : await chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, onDataWritten, cancellationToken);
                 await fileStream.FlushAsync(cancellationToken);
             } // FileStream is fully disposed here
+
+            // Feed client-delivered trailer checksums into the calculator so Finish() below can
+            // compare them against the server-computed hashes.
+            if (checksumCalculator != null && parseResult.Trailers.Count > 0)
+            {
+                TrailerChecksumMerger.MergeIntoCalculator(parseResult.Trailers, checksumCalculator);
+            }
 
             // Check if validation succeeded
             if (!parseResult.Success)

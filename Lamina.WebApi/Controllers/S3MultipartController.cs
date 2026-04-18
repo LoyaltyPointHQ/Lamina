@@ -329,6 +329,16 @@ public class S3MultipartController : S3ControllerBase
                 checksumRequest.ProvidedChecksums["CRC64NVME"] = checksumCrc64nvme.ToString();
         }
 
+        // The x-amz-trailer header signals which checksum (AWS CLI v2 default CRC64NVME) arrives
+        // as a chunked trailer rather than a request header. Pre-register the algorithm so the
+        // streaming calculator activates its hash state from byte 0; the real value is injected
+        // from the parsed trailer by the storage layer just before Finish.
+        if (Request.Headers.TryGetValue("x-amz-trailer", out var trailerHeader) && !string.IsNullOrEmpty(trailerHeader.ToString()))
+        {
+            var trailerNames = trailerHeader.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            checksumRequest = TrailerChecksumMerger.RegisterExpectedTrailers(trailerNames, checksumRequest);
+        }
+
         try
         {
             // Use PipeReader from the request body

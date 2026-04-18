@@ -164,9 +164,16 @@ public class StreamingChecksumCalculator : IDisposable
             calculated["SHA256"] = Convert.ToBase64String(hash);
         }
 
-        // Validate against provided checksums
+        // Validate against provided checksums. Empty values are placeholders registered upfront so
+        // the algorithm is activated; the real value is supplied later via SetProvidedChecksum
+        // (e.g. from chunked trailers). Skip empty placeholders so they don't spuriously trip the
+        // mismatch path when no trailer ever arrives.
         foreach (var (algorithm, providedValue) in _providedChecksums)
         {
+            if (string.IsNullOrEmpty(providedValue))
+            {
+                continue;
+            }
             var normalizedAlgorithm = algorithm.ToUpperInvariant();
             if (calculated.TryGetValue(normalizedAlgorithm, out var calculatedValue))
             {
@@ -193,6 +200,21 @@ public class StreamingChecksumCalculator : IDisposable
     /// Returns true if any checksums are being calculated.
     /// </summary>
     public bool HasChecksums => _requestedAlgorithms.Count > 0;
+
+    /// <summary>
+    /// Registers a provided checksum value after the calculator was constructed - used when the
+    /// client delivers the integrity value in an AWS chunked trailer (parsed after stream ingest)
+    /// rather than in a request header. The algorithm must already have been activated via the
+    /// constructor so that Append() has been feeding the matching hash state.
+    /// </summary>
+    public void SetProvidedChecksum(string algorithm, string base64Value)
+    {
+        if (string.IsNullOrEmpty(algorithm))
+        {
+            return;
+        }
+        _providedChecksums[algorithm.ToUpperInvariant()] = base64Value ?? string.Empty;
+    }
 
     public void Dispose()
     {

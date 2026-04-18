@@ -271,6 +271,12 @@ public class S3ObjectsController : S3ControllerBase
             ChecksumCRC64NVME = string.IsNullOrEmpty(checksumCrc64nvme.ToString()) ? null : checksumCrc64nvme.ToString()
         };
 
+        if (Request.Headers.TryGetValue("x-amz-trailer", out var trailerHeader) && !string.IsNullOrEmpty(trailerHeader.ToString()))
+        {
+            putRequest.ExpectedChecksumTrailers.AddRange(
+                trailerHeader.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        }
+
         // Use PipeReader from the request body
         var reader = Request.BodyReader;
 

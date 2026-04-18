@@ -81,12 +81,15 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
             {
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
-                var parseResult = await _chunkedDataParser.ParseChunkedDataToStreamAsync(
-                    dataReader,
-                    fileStream,
-                    chunkValidator,
-                    checksumCalculator?.HasChecksums == true ? data => checksumCalculator.Append(data) : null,
-                    cancellationToken);
+                // AWS CLI v2 default checksum mode ships the integrity value (CRC64NVME etc.) in
+                // a trailer. Pick the trailer-aware parser when the validator signals trailers, so
+                // we actually capture parseResult.Trailers instead of silently ignoring them.
+                var onDataWritten = checksumCalculator?.HasChecksums == true
+                    ? (Action<ReadOnlySpan<byte>>)(data => checksumCalculator.Append(data))
+                    : null;
+                var parseResult = chunkValidator.ExpectsTrailers
+                    ? await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(dataReader, fileStream, chunkValidator, onDataWritten, cancellationToken)
+                    : await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, onDataWritten, cancellationToken);
 
                 if (!parseResult.Success)
                 {
@@ -94,6 +97,13 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
                     fileStream.Close();
                     File.Delete(tempPath);
                     return StorageResult<PreparedData>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
+                }
+
+                // Feed trailer-delivered checksum values into the calculator so Finish() compares
+                // client-provided vs server-computed below.
+                if (checksumCalculator != null && parseResult.Trailers.Count > 0)
+                {
+                    TrailerChecksumMerger.MergeIntoCalculator(parseResult.Trailers, checksumCalculator);
                 }
 
                 bytesWritten = parseResult.TotalBytesWritten;
