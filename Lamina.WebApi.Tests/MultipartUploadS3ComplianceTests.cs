@@ -909,4 +909,63 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         Assert.True(retryStopwatch.Elapsed.TotalSeconds < 1,
             $"Idempotent retry took {retryStopwatch.Elapsed.TotalMilliseconds:F2}ms, expected < 1000ms");
     }
+
+    [Fact]
+    public async Task CompleteMultipartUpload_ThenGetAndHead_PreserveMultipartETag()
+    {
+        // Per AWS S3 spec, multipart object ETag is "MD5-of-MD5s-<N>" and cannot be
+        // reconstructed from the merged file (it depends on individual part MD5s and count).
+        // GET/HEAD must return the same ETag that CompleteMultipartUpload returned - not
+        // an MD5 of the full file.
+        var bucketName = await CreateTestBucketAsync();
+        var key = "multipart-etag-preservation.bin";
+
+        var initResponse = await Client.PostAsync($"/{bucketName}/{key}?uploads", null);
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(await initResponse.Content.ReadAsStringAsync());
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        var part1Content = new string('A', 5 * 1024 * 1024 + 17);
+        var part2Content = new string('B', 32);
+
+        var part1Response = await Client.PutAsync(
+            $"/{bucketName}/{key}?partNumber=1&uploadId={initResult.UploadId}",
+            new StringContent(part1Content, Encoding.UTF8));
+        Assert.Equal(HttpStatusCode.OK, part1Response.StatusCode);
+        var part1ETag = part1Response.Headers.GetValues("ETag").First().Trim('"');
+
+        var part2Response = await Client.PutAsync(
+            $"/{bucketName}/{key}?partNumber=2&uploadId={initResult.UploadId}",
+            new StringContent(part2Content, Encoding.UTF8));
+        Assert.Equal(HttpStatusCode.OK, part2Response.StatusCode);
+        var part2ETag = part2Response.Headers.GetValues("ETag").First().Trim('"');
+
+        var completeXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<CompleteMultipartUpload>
+    <Part><PartNumber>1</PartNumber><ETag>{part1ETag}</ETag></Part>
+    <Part><PartNumber>2</PartNumber><ETag>{part2ETag}</ETag></Part>
+</CompleteMultipartUpload>";
+        var completeResponse = await Client.PostAsync(
+            $"/{bucketName}/{key}?uploadId={initResult.UploadId}",
+            new StringContent(completeXml, Encoding.UTF8, "application/xml"));
+        Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
+
+        var completeSerializer = new XmlSerializer(typeof(CompleteMultipartUploadResult));
+        using var completeReader = new StringReader(await completeResponse.Content.ReadAsStringAsync());
+        var completeResult = (CompleteMultipartUploadResult?)completeSerializer.Deserialize(completeReader);
+        Assert.NotNull(completeResult);
+        var expectedETag = completeResult.ETag.Trim('"');
+        Assert.EndsWith("-2", expectedETag);
+
+        var head = await Client.SendAsync(new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}/{key}"));
+        Assert.Equal(HttpStatusCode.OK, head.StatusCode);
+        var headETag = head.Headers.GetValues("ETag").First().Trim('"');
+        Assert.Equal(expectedETag, headETag);
+
+        var get = await Client.GetAsync($"/{bucketName}/{key}");
+        Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+        var getETag = get.Headers.GetValues("ETag").First().Trim('"');
+        Assert.Equal(expectedETag, getETag);
+    }
 }

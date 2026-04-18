@@ -506,8 +506,13 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         if (!string.IsNullOrEmpty(metadata.ChecksumSHA256))
             algorithmsToCompute.Add("SHA256");
 
-        // Always recompute ETag (it's cheap and essential)
-        var etag = await ETagHelper.ComputeETagFromFileAsync(dataPath);
+        // Preserve multipart ETags ("{hex32}-{N}"): they are a function of individual part MD5s
+        // and part count, not derivable from the merged file. Recomputing them from disk would
+        // yield MD5-of-full-file, silently corrupting the persisted multipart ETag. For all
+        // non-multipart ETags (single-PUT objects, copies), recompute from file.
+        var etag = ETagHelper.IsMultipartETag(metadata.ETag)
+            ? metadata.ETag
+            : await ETagHelper.ComputeETagFromFileAsync(dataPath);
 
         // Recompute only the checksums that were originally stored
         Dictionary<string, string> checksums;

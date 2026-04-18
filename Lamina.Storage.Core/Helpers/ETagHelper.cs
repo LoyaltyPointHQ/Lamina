@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 
 namespace Lamina.Storage.Core.Helpers;
 
@@ -64,6 +65,22 @@ public static class ETagHelper
             return false;
         }
         return etagBytes.AsSpan().SequenceEqual(expectedMd5);
+    }
+
+    private static readonly Regex MultipartETagPattern = new(@"^[0-9a-fA-F]{32}-\d+$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// True if the ETag is in AWS S3 multipart format "{32-hex-MD5}-{partCount}". Multipart
+    /// ETags are functions of individual part MD5s and cannot be reconstructed from the merged
+    /// file bytes, so callers must preserve them rather than recompute from disk.
+    /// </summary>
+    public static bool IsMultipartETag(string? etag)
+    {
+        if (string.IsNullOrEmpty(etag))
+        {
+            return false;
+        }
+        return MultipartETagPattern.IsMatch(etag.Trim('"'));
     }
 
     /// <summary>

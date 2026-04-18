@@ -727,6 +727,66 @@ public class MultipartUploadStorageFacadeTests
     }
 
     [Fact]
+    public async Task CompleteMultipartUploadAsync_CommitsDataBeforeStoringMetadata()
+    {
+        // Filesystem metadata storage reads FileInfo.LastWriteTimeUtc from the data path when
+        // persisting metadata. On a not-yet-committed data file, that returns Windows epoch
+        // (1601-01-01 UTC) and the persisted LastModified is DateTime.MinValue, which later
+        // triggers stale-metadata detection on every GET/HEAD. The fix is to commit data
+        // before storing metadata so the mtime is real. This test pins the ordering.
+        const string bucketName = "test-bucket";
+        const string key = "test-key";
+        const string uploadId = "upload-order";
+        var request = new CompleteMultipartUploadRequest
+        {
+            UploadId = uploadId,
+            Parts = new List<CompletedPart>
+            {
+                new() { PartNumber = 1, ETag = "d41d8cd98f00b204e9800998ecf8427e" }
+            }
+        };
+        var storedParts = new List<UploadPart>
+        {
+            new() { PartNumber = 1, ETag = "d41d8cd98f00b204e9800998ecf8427e" }
+        };
+        _mockMetadataStorage
+            .Setup(x => x.GetUploadMetadataAsync(bucketName, key, uploadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MultipartUpload?)null);
+        _mockDataStorage
+            .Setup(x => x.GetStoredPartsAsync(bucketName, key, uploadId, It.IsAny<IReadOnlyDictionary<int, PartMetadata>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(storedParts);
+        _mockDataStorage
+            .Setup(x => x.GetPartReadersAsync(bucketName, key, uploadId, request.Parts, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PipeReader> { CreatePipeReader("p1") });
+        _mockObjectDataStorage
+            .Setup(x => x.PrepareMultipartDataAsync(bucketName, key, It.IsAny<IEnumerable<PipeReader>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PreparedData { BucketName = bucketName, Key = key, Size = 1, ETag = "e", Checksums = new Dictionary<string, string>() });
+        _mockDataStorage
+            .Setup(x => x.DeleteAllPartsAsync(bucketName, key, uploadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mockMetadataStorage
+            .Setup(x => x.DeleteUploadMetadataAsync(bucketName, key, uploadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var callOrder = new List<string>();
+        _mockObjectDataStorage
+            .Setup(x => x.CommitPreparedDataAsync(It.IsAny<PreparedData>(), It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add(nameof(IObjectDataStorage.CommitPreparedDataAsync)))
+            .Returns(Task.CompletedTask);
+        _mockObjectMetadataStorage
+            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add(nameof(IObjectMetadataStorage.StoreMetadataAsync)))
+            .ReturnsAsync((S3Object?)null);
+
+        var result = await _facade.CompleteMultipartUploadAsync(bucketName, key, request);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(
+            new[] { nameof(IObjectDataStorage.CommitPreparedDataAsync), nameof(IObjectMetadataStorage.StoreMetadataAsync) },
+            callOrder);
+    }
+
+    [Fact]
     public async Task UploadPartAsync_ConcurrentCallsForSameUpload_PersistsAllPartMetadata()
     {
         // Simulates aws s3 cp firing parallel UploadPartAsync for the same upload. Without per-

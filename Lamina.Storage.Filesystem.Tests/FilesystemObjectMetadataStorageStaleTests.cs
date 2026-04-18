@@ -222,6 +222,34 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
         Assert.True(Math.Abs((result.LastModified - fileTimestamp).TotalSeconds) < 1);
     }
 
+    [Fact]
+    public async Task GetMetadataAsync_StaleWithMultipartETag_PreservesETag()
+    {
+        // Multipart ETags ("<32 hex>-<N>") are a function of individual part MD5s and the part
+        // count - they cannot be reconstructed from the merged file. If staleness triggers (e.g.
+        // external touch, clock skew, or the Phase 2/3 ordering bug), RecomputeStaleMetadataAsync
+        // must keep the persisted multipart ETag instead of overwriting it with MD5-of-full-file.
+        var bucketName = "test-bucket";
+        var key = "multipart.bin";
+        var testData = new byte[] { 0x01, 0x02, 0x03, 0x04 };
+
+        Directory.CreateDirectory(Path.Combine(_dataDirectory, bucketName));
+        var dataPath = Path.Combine(_dataDirectory, bucketName, key);
+        await File.WriteAllBytesAsync(dataPath, testData);
+
+        const string persistedMultipartETag = "deadbeefdeadbeefdeadbeefdeadbeef-7";
+        await _storage.StoreMetadataAsync(bucketName, key, persistedMultipartETag, testData.Length, null, null);
+
+        // Force staleness: bump data mtime past the persisted metadata LastModified.
+        await Task.Delay(100);
+        File.SetLastWriteTimeUtc(dataPath, DateTime.UtcNow);
+
+        var result = await _storage.GetMetadataAsync(bucketName, key);
+
+        Assert.NotNull(result);
+        Assert.Equal(persistedMultipartETag, result.ETag);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_testDirectory))

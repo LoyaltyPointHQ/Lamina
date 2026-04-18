@@ -281,11 +281,17 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         using var preparedData = prepared;
         var size = preparedData.Size;
 
-        // Phase 2: Store metadata BEFORE committing data
-        await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, aggregatedChecksums.Count > 0 ? aggregatedChecksums : null, cancellationToken);
-
-        // Phase 3: Commit data (make visible)
+        // Phase 2: Commit data first so its mtime is real before Phase 3 reads it. The filesystem
+        // metadata storage derives LastModified from FileInfo(dataPath).LastWriteTimeUtc; if the
+        // data file doesn't exist yet, that returns Windows epoch (1601-01-01 UTC) and persists
+        // DateTime.MinValue, which then triggers stale-metadata recompute on every GET/HEAD and
+        // silently rewrites the multipart ETag to MD5-of-full-file. The data-first architecture
+        // tolerates a crash between Phase 2 and Phase 3 (visible data without metadata is
+        // auto-regenerated on first read).
         await _objectDataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
+
+        // Phase 3: Store metadata, reading the now-real file mtime for LastModified.
+        await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, aggregatedChecksums.Count > 0 ? aggregatedChecksums : null, cancellationToken);
 
         // Clean up multipart upload
         await _dataStorage.DeleteAllPartsAsync(bucketName, key, request.UploadId, cancellationToken);
