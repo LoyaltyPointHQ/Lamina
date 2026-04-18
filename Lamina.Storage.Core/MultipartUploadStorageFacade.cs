@@ -281,17 +281,24 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         using var preparedData = prepared;
         var size = preparedData.Size;
 
-        // Phase 2: Commit data first so its mtime is real before Phase 3 reads it. The filesystem
-        // metadata storage derives LastModified from FileInfo(dataPath).LastWriteTimeUtc; if the
-        // data file doesn't exist yet, that returns Windows epoch (1601-01-01 UTC) and persists
-        // DateTime.MinValue, which then triggers stale-metadata recompute on every GET/HEAD and
-        // silently rewrites the multipart ETag to MD5-of-full-file. The data-first architecture
-        // tolerates a crash between Phase 2 and Phase 3 (visible data without metadata is
-        // auto-regenerated on first read).
-        await _objectDataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
+        // Default: write metadata first with an explicit LastModified (so a GET during the tiny
+        // in-between window returns 404 rather than 200 with an auto-generated full-file MD5 ETag).
+        // Xattr-style backends cannot persist metadata before the data file exists, so fall back
+        // to data-first for them; the resulting <1 ms window where a concurrent GET might see an
+        // auto-generated ETag is acceptable for that opt-in mode.
+        var storeMetadataFirst = _objectMetadataStorage is not IRequiresDataFileForMetadata;
+        var aggregatedChecksumsToStore = aggregatedChecksums.Count > 0 ? aggregatedChecksums : null;
 
-        // Phase 3: Store metadata, reading the now-real file mtime for LastModified.
-        await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, aggregatedChecksums.Count > 0 ? aggregatedChecksums : null, cancellationToken);
+        if (storeMetadataFirst)
+        {
+            await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, aggregatedChecksumsToStore, DateTime.UtcNow, cancellationToken);
+            await _objectDataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
+        }
+        else
+        {
+            await _objectDataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
+            await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, aggregatedChecksumsToStore, lastModified: null, cancellationToken);
+        }
 
         // Clean up multipart upload
         await _dataStorage.DeleteAllPartsAsync(bucketName, key, request.UploadId, cancellationToken);

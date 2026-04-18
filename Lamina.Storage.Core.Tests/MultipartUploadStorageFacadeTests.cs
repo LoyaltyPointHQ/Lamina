@@ -243,7 +243,7 @@ public class MultipartUploadStorageFacadeTests
             .Returns(Task.CompletedTask);
 
         _mockObjectMetadataStorage
-            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((S3Object?)null);
 
         _mockDataStorage
@@ -280,6 +280,7 @@ public class MultipartUploadStorageFacadeTests
                     req.Metadata != null &&
                     req.Metadata.Count == 0),
                 It.IsAny<Dictionary<string, string>?>(),
+                It.IsAny<DateTime?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -341,7 +342,7 @@ public class MultipartUploadStorageFacadeTests
             .Returns(Task.CompletedTask);
 
         _mockObjectMetadataStorage
-            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((S3Object?)null);
 
         _mockDataStorage
@@ -373,6 +374,7 @@ public class MultipartUploadStorageFacadeTests
                     req.Metadata["author"] == "John Doe" &&
                     req.Metadata["project"] == "Test Project"),
                 It.IsAny<Dictionary<string, string>?>(),
+                It.IsAny<DateTime?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -607,7 +609,7 @@ public class MultipartUploadStorageFacadeTests
             .Returns(Task.CompletedTask);
 
         _mockObjectMetadataStorage
-            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((S3Object?)null);
 
         _mockDataStorage
@@ -642,6 +644,7 @@ public class MultipartUploadStorageFacadeTests
                     req.Metadata != null &&
                     req.Metadata.Count == 0),
                 It.IsAny<Dictionary<string, string>?>(),
+                It.IsAny<DateTime?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -692,7 +695,7 @@ public class MultipartUploadStorageFacadeTests
             .Returns(Task.CompletedTask);
 
         _mockObjectMetadataStorage
-            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((S3Object?)null);
 
         _mockDataStorage
@@ -722,18 +725,20 @@ public class MultipartUploadStorageFacadeTests
                     req.Metadata != null &&
                     req.Metadata.Count == 0),
                 It.IsAny<Dictionary<string, string>?>(),
+                It.IsAny<DateTime?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
     [Fact]
-    public async Task CompleteMultipartUploadAsync_CommitsDataBeforeStoringMetadata()
+    public async Task CompleteMultipartUploadAsync_StoresMetadataBeforeCommittingData_WithExplicitLastModified()
     {
-        // Filesystem metadata storage reads FileInfo.LastWriteTimeUtc from the data path when
-        // persisting metadata. On a not-yet-committed data file, that returns Windows epoch
-        // (1601-01-01 UTC) and the persisted LastModified is DateTime.MinValue, which later
-        // triggers stale-metadata detection on every GET/HEAD. The fix is to commit data
-        // before storing metadata so the mtime is real. This test pins the ordering.
+        // Metadata must land before data becomes visible so a GET during the tiny window
+        // between the two calls returns 404 (data-first architecture: no data → not found)
+        // instead of a 200 with a full-file MD5 ETag auto-generated from the already-committed
+        // bytes. The metadata write carries an explicit non-MinValue LastModified so the
+        // staleness detector doesn't immediately trigger a recompute and overwrite the
+        // multipart ETag with MD5-of-full-file.
         const string bucketName = "test-bucket";
         const string key = "test-key";
         const string uploadId = "upload-order";
@@ -769,21 +774,31 @@ public class MultipartUploadStorageFacadeTests
             .ReturnsAsync(true);
 
         var callOrder = new List<string>();
+        DateTime? capturedLastModified = null;
         _mockObjectDataStorage
             .Setup(x => x.CommitPreparedDataAsync(It.IsAny<PreparedData>(), It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add(nameof(IObjectDataStorage.CommitPreparedDataAsync)))
             .Returns(Task.CompletedTask);
         _mockObjectMetadataStorage
-            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<CancellationToken>()))
-            .Callback(() => callOrder.Add(nameof(IObjectMetadataStorage.StoreMetadataAsync)))
+            .Setup(x => x.StoreMetadataAsync(bucketName, key, It.IsAny<string>(), It.IsAny<long>(), It.IsAny<PutObjectRequest>(), It.IsAny<Dictionary<string, string>?>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Callback((string _, string _, string _, long _, PutObjectRequest? _, Dictionary<string, string>? _, DateTime? lm, CancellationToken _) =>
+            {
+                callOrder.Add(nameof(IObjectMetadataStorage.StoreMetadataAsync));
+                capturedLastModified = lm;
+            })
             .ReturnsAsync((S3Object?)null);
 
+        var before = DateTime.UtcNow.AddSeconds(-5);
         var result = await _facade.CompleteMultipartUploadAsync(bucketName, key, request);
+        var after = DateTime.UtcNow.AddSeconds(5);
 
         Assert.True(result.IsSuccess);
         Assert.Equal(
-            new[] { nameof(IObjectDataStorage.CommitPreparedDataAsync), nameof(IObjectMetadataStorage.StoreMetadataAsync) },
+            new[] { nameof(IObjectMetadataStorage.StoreMetadataAsync), nameof(IObjectDataStorage.CommitPreparedDataAsync) },
             callOrder);
+        Assert.NotNull(capturedLastModified);
+        Assert.NotEqual(DateTime.MinValue, capturedLastModified!.Value);
+        Assert.InRange(capturedLastModified.Value, before, after);
     }
 
     [Fact]

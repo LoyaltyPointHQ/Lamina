@@ -24,7 +24,7 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, CancellationToken cancellationToken = default)
+    public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, DateTime? lastModified = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(bucketName);
         ArgumentException.ThrowIfNullOrEmpty(key);
@@ -40,7 +40,7 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
             Key = key,
             BucketName = bucketName,
             Size = size,
-            LastModified = DateTime.UtcNow,
+            LastModified = lastModified ?? DateTime.UtcNow,
             ETag = etag,
             ContentType = request?.ContentType ?? "application/octet-stream",
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),

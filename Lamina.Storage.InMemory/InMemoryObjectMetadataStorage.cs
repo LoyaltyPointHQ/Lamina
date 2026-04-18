@@ -13,7 +13,7 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
     {
     }
 
-    public Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, CancellationToken cancellationToken = default)
+    public Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, DateTime? lastModified = null, CancellationToken cancellationToken = default)
     {
         // Bucket existence validation is handled by the facade layer
         var bucketMetadata = _metadata.GetOrAdd(bucketName, _ => new ConcurrentDictionary<string, S3Object>());
@@ -23,7 +23,7 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
             Key = key,
             BucketName = bucketName,
             Size = size,
-            LastModified = DateTime.UtcNow,
+            LastModified = lastModified ?? DateTime.UtcNow,
             ETag = etag,
             ContentType = request?.ContentType ?? "application/octet-stream",
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),

@@ -9,7 +9,7 @@ using Microsoft.Extensions.Options;
 
 namespace Lamina.Storage.Filesystem;
 
-public class XattrObjectMetadataStorage : IObjectMetadataStorage
+public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataFileForMetadata
 {
     private readonly string _dataDirectory;
     private readonly IBucketStorageFacade _bucketStorage;
@@ -44,7 +44,7 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage
         Directory.CreateDirectory(_dataDirectory);
     }
 
-    public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, CancellationToken cancellationToken = default)
+    public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, DateTime? lastModified = null, CancellationToken cancellationToken = default)
     {
         if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
         {

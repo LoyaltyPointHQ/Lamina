@@ -59,7 +59,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         }
     }
 
-    public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, CancellationToken cancellationToken = default)
+    public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, DateTime? lastModified = null, CancellationToken cancellationToken = default)
     {
         // Invalidate cache before storing
         InvalidateCache(bucketName, key);
@@ -73,15 +73,18 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         var metadataDir = Path.GetDirectoryName(metadataPath)!;
         await _networkHelper.EnsureDirectoryExistsAsync(metadataDir, $"StoreMetadata-{bucketName}/{key}");
 
-        // Get the actual last modified time from the filesystem for comparison later
+        // Prefer an explicit LastModified (supplied by multipart Complete before the data file
+        // is committed) over FileInfo.LastWriteTimeUtc (which returns Windows epoch for a
+        // missing file and would make the persisted LastModified = DateTime.MinValue).
         var dataPath = GetDataPath(bucketName, key);
-        var fileInfo = new FileInfo(dataPath);
+        var resolvedLastModified = lastModified
+            ?? (File.Exists(dataPath) ? new FileInfo(dataPath).LastWriteTimeUtc : DateTime.UtcNow);
 
         var metadata = new S3ObjectMetadata
         {
             BucketName = bucketName,
             ETag = etag,
-            LastModified = fileInfo.LastWriteTimeUtc,
+            LastModified = resolvedLastModified,
             ContentType = request?.ContentType ?? "application/octet-stream",
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),
             Tags = request?.Tags ?? new Dictionary<string, string>(),
@@ -122,7 +125,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
             Key = key,
             BucketName = bucketName,
             Size = size,
-            LastModified = fileInfo.LastWriteTimeUtc,
+            LastModified = resolvedLastModified,
             ETag = etag,
             ContentType = metadata.ContentType,
             Metadata = metadata.Metadata,
@@ -141,7 +144,7 @@ public class FilesystemObjectMetadataStorage : IObjectMetadataStorage
         {
             Key = key,
             Size = size,
-            LastModified = fileInfo.LastWriteTimeUtc,
+            LastModified = resolvedLastModified,
             ETag = etag,
             ContentType = metadata.ContentType,
             Metadata = metadata.Metadata,

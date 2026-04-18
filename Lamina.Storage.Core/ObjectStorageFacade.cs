@@ -86,10 +86,12 @@ public class ObjectStorageFacade : IObjectStorageFacade
             var etag = preparedData.ETag;
             var checksums = preparedData.Checksums;
 
-            // Phase 2: Store metadata BEFORE committing data (metadata-before-data)
+            // Phase 2: Store metadata BEFORE committing data (metadata-before-data). Pass
+            // an explicit LastModified - FileInfo on the yet-uncommitted data path returns
+            // Windows epoch (1601-01-01 UTC), which would make GET stale-detect and recompute.
             if (ShouldStoreMetadata(key, request))
             {
-                var s3Object = await _metadataStorage.StoreMetadataAsync(bucketName, key, etag, size, request, checksums, cancellationToken);
+                var s3Object = await _metadataStorage.StoreMetadataAsync(bucketName, key, etag, size, request, checksums, DateTime.UtcNow, cancellationToken);
 
                 if (s3Object == null)
                 {
@@ -516,10 +518,12 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 effectiveRequest.Tags = new Dictionary<string, string>(sourceInfo.Tags);
             }
 
-            // Phase 2: Store metadata BEFORE committing data
+            // Phase 2: Store metadata BEFORE committing data. Pass an explicit LastModified -
+            // FileInfo on the yet-uncommitted dest path returns Windows epoch, which would make
+            // GET stale-detect and recompute the ETag from the full file bytes after commit.
             if (ShouldStoreMetadata(destKey, effectiveRequest))
             {
-                var s3Object = await _metadataStorage.StoreMetadataAsync(destBucketName, destKey, etag, size, effectiveRequest, null, cancellationToken);
+                var s3Object = await _metadataStorage.StoreMetadataAsync(destBucketName, destKey, etag, size, effectiveRequest, null, DateTime.UtcNow, cancellationToken);
 
                 if (s3Object == null)
                 {
