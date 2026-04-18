@@ -726,6 +726,61 @@ public class MultipartUploadStorageFacadeTests
             Times.Once);
     }
 
+    [Fact]
+    public async Task UploadPartAsync_ConcurrentCallsForSameUpload_PersistsAllPartMetadata()
+    {
+        // Simulates aws s3 cp firing parallel UploadPartAsync for the same upload. Without per-
+        // upload serialisation, Facade.PersistPartMetadataAsync races concurrently on a shared
+        // non-thread-safe Dictionary<int, PartMetadata>, causing NREs on resize or silently
+        // dropping entries (last-writer-wins on transient bucket array).
+        const string bucketName = "test-bucket";
+        const string key = "test-key";
+        const string uploadId = "upload-concurrent";
+        const int partCount = 50;
+
+        var sharedUpload = new MultipartUpload
+        {
+            UploadId = uploadId,
+            BucketName = bucketName,
+            Key = key
+        };
+
+        // Every concurrent call sees the same MultipartUpload instance (mimics the real filesystem
+        // backend, which returns the cached reference from IMemoryCache).
+        _mockMetadataStorage
+            .Setup(x => x.GetUploadMetadataAsync(bucketName, key, uploadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(sharedUpload);
+
+        _mockDataStorage
+            .Setup(x => x.StorePartDataAsync(
+                bucketName, key, uploadId,
+                It.IsAny<int>(),
+                It.IsAny<PipeReader>(),
+                It.IsAny<ChecksumRequest?>(),
+                It.IsAny<byte[]?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string _, string _, string _, int pn, PipeReader _, ChecksumRequest? _, byte[]? _, CancellationToken _) =>
+                StorageResult<UploadPart>.Success(new UploadPart { PartNumber = pn, ETag = $"etag-{pn}" }));
+
+        await Parallel.ForEachAsync(
+            Enumerable.Range(1, partCount),
+            new ParallelOptions { MaxDegreeOfParallelism = 16 },
+            async (partNumber, ct) =>
+            {
+                var pipe = new Pipe();
+                await pipe.Writer.CompleteAsync();
+                var result = await _facade.UploadPartAsync(bucketName, key, uploadId, partNumber, pipe.Reader, cancellationToken: ct);
+                Assert.True(result.IsSuccess);
+            });
+
+        Assert.Equal(partCount, sharedUpload.Parts.Count);
+        for (int i = 1; i <= partCount; i++)
+        {
+            Assert.True(sharedUpload.Parts.ContainsKey(i), $"Missing part {i} after concurrent uploads");
+            Assert.Equal($"etag-{i}", sharedUpload.Parts[i].ETag);
+        }
+    }
+
     private static PipeReader CreatePipeReader(string data)
     {
         var pipe = new Pipe();

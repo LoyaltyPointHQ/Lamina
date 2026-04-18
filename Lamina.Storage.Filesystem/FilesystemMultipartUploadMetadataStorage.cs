@@ -312,13 +312,20 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
                 }
             }
 
-            // Parts dictionary
+            // Parts dictionary - belt-and-braces snapshot: the facade should already serialise
+            // concurrent writers via the per-upload semaphore, but we never want cache sizing to
+            // crash on a dictionary mid-resize if a future path bypasses that lock.
             if (Upload.Parts != null)
             {
-                foreach (var part in Upload.Parts)
+                var partsSnapshot = Upload.Parts.ToList();
+                foreach (var part in partsSnapshot)
                 {
-                    size += 100; // PartMetadata overhead
                     var metadata = part.Value;
+                    if (metadata == null)
+                    {
+                        continue;
+                    }
+                    size += 100; // PartMetadata overhead
                     size += (metadata.ChecksumCRC32?.Length ?? 0) * 2;
                     size += (metadata.ChecksumCRC32C?.Length ?? 0) * 2;
                     size += (metadata.ChecksumCRC64NVME?.Length ?? 0) * 2;

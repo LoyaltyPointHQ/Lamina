@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
@@ -16,6 +17,13 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
     private readonly ILogger<MultipartUploadStorageFacade> _logger;
     private readonly IChunkedDataParser _chunkedDataParser;
 
+    // Per-upload serialisation for metadata mutations. MultipartUpload.Parts is a plain
+    // Dictionary<int, PartMetadata> shared across concurrent UploadPart requests for the same
+    // uploadId (aws s3 cp fires ~10 parallel parts). Without this lock, Get→Mutate→Update racing
+    // produces IndexOutOfRangeException / NullReferenceException during dictionary resize and can
+    // silently drop entries under last-writer-wins.
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _uploadLocks = new();
+
     public MultipartUploadStorageFacade(
         IMultipartUploadDataStorage dataStorage,
         IMultipartUploadMetadataStorage metadataStorage,
@@ -30,6 +38,26 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         _objectMetadataStorage = objectMetadataStorage;
         _logger = logger;
         _chunkedDataParser = chunkedDataParser;
+    }
+
+    private async Task<IDisposable> AcquireUploadLockAsync(string uploadId, CancellationToken cancellationToken)
+    {
+        var sem = _uploadLocks.GetOrAdd(uploadId, static _ => new SemaphoreSlim(1, 1));
+        await sem.WaitAsync(cancellationToken);
+        return new SemaphoreReleaser(sem);
+    }
+
+    private void ReleaseUploadLockResources(string uploadId)
+    {
+        if (_uploadLocks.TryRemove(uploadId, out var sem))
+        {
+            sem.Dispose();
+        }
+    }
+
+    private readonly struct SemaphoreReleaser(SemaphoreSlim sem) : IDisposable
+    {
+        public void Dispose() => sem.Release();
     }
 
     public async Task<MultipartUpload> InitiateMultipartUploadAsync(string bucketName, string key, InitiateMultipartUploadRequest request, CancellationToken cancellationToken = default)
@@ -86,6 +114,10 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             return;
         }
 
+        // Serialise the Get→Mutate→Update sequence against other concurrent UploadPart callers
+        // for the same uploadId so the shared MultipartUpload.Parts dictionary stays consistent.
+        using var _ = await AcquireUploadLockAsync(uploadId, cancellationToken);
+
         var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
         if (upload == null)
         {
@@ -115,6 +147,15 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         {
             return StorageResult<CompleteMultipartUploadResponse>.Error("NoSuchUpload", $"Upload '{request.UploadId}' not found");
         }
+
+        // Serialise against in-flight UploadPart metadata writers for the same upload: we're about
+        // to read Upload.Parts and must see a consistent snapshot. Acquired and released manually
+        // so the per-upload SemaphoreSlim can be freed (only) after a successful Complete; error
+        // paths leave it intact so subsequent retries still see a live lock.
+        var uploadLockReleaser = await AcquireUploadLockAsync(request.UploadId, cancellationToken);
+        var uploadCompleted = false;
+        try
+        {
 
         // Upload exists - load metadata up-front so we can hint GetStoredPartsAsync with persisted
         // part ETags and checksums, letting filesystem backends skip a full MD5 pass over every part.
@@ -245,7 +286,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         await _dataStorage.DeleteAllPartsAsync(bucketName, key, request.UploadId, cancellationToken);
         await _metadataStorage.DeleteUploadMetadataAsync(bucketName, key, request.UploadId, cancellationToken);
 
-        return StorageResult<CompleteMultipartUploadResponse>.Success(new CompleteMultipartUploadResponse
+        var response = StorageResult<CompleteMultipartUploadResponse>.Success(new CompleteMultipartUploadResponse
         {
             BucketName = bucketName,
             Key = key,
@@ -256,18 +297,44 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             ChecksumSHA256 = aggregatedSHA256,
             ChecksumCRC64NVME = aggregatedCRC64NVME
         });
+
+        uploadCompleted = true;
+        return response;
+        }
+        finally
+        {
+            uploadLockReleaser.Dispose();
+            if (uploadCompleted)
+            {
+                // Upload is gone (DeleteAllParts + DeleteUploadMetadata ran) - free the
+                // per-upload semaphore so it doesn't accumulate one entry per historical upload.
+                ReleaseUploadLockResources(request.UploadId);
+            }
+        }
     }
 
     public async Task<bool> AbortMultipartUploadAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
     {
-        var dataDeleted = await _dataStorage.DeleteAllPartsAsync(bucketName, key, uploadId, cancellationToken);
-        var metadataDeleted = await _metadataStorage.DeleteUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
+        bool dataDeleted;
+        bool metadataDeleted;
+        using (await AcquireUploadLockAsync(uploadId, cancellationToken))
+        {
+            dataDeleted = await _dataStorage.DeleteAllPartsAsync(bucketName, key, uploadId, cancellationToken);
+            metadataDeleted = await _metadataStorage.DeleteUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
+        }
+
+        // Upload is gone - free the per-upload semaphore.
+        ReleaseUploadLockResources(uploadId);
 
         return dataDeleted || metadataDeleted;
     }
 
     public async Task<List<UploadPart>> ListPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
     {
+        // Serialise against concurrent UploadPart writers - we read Upload.Parts and must not see
+        // it mid-resize.
+        using var _ = await AcquireUploadLockAsync(uploadId, cancellationToken);
+
         // Load metadata first so we can hint the data storage with persisted ETags (same perf reason
         // as Complete - filesystem backend can skip a full MD5 pass when metadata has the ETag).
         var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
