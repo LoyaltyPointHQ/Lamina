@@ -330,6 +330,46 @@ Each cache entry's size is estimated based on:
 
 The cache respects the configured size limit and evicts entries as needed.
 
+### Auto Bucket Creation
+
+Lamina can pre-create buckets (and apply lifecycle configurations) at startup.
+
+```json
+{
+  "AutoBucketCreation": {
+    "Enabled": true,
+    "Buckets": [
+      {
+        "Name": "logs",
+        "Type": "GeneralPurpose",
+        "Lifecycle": {
+          "Rules": [
+            {
+              "Id": "expire-logs-7d",
+              "Status": "Enabled",
+              "Filter": { "Prefix": "" },
+              "Expiration": { "Days": 7 }
+            },
+            {
+              "Id": "abort-stale-mpu",
+              "Status": "Enabled",
+              "Filter": { "Prefix": "" },
+              "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 3 }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
+```
+
+Behavior:
+- `Lifecycle` is optional; buckets without it are created plain
+- Lifecycle is applied both for newly-created buckets and for pre-existing ones (idempotent)
+- Invalid configurations (e.g. `Days=0`, missing action, >1000 rules) are logged and skipped — the bucket itself is still created
+- Uses the same domain validator (`LifecycleConfigurationValidator`) as the XML API path
+
 ## S3 Implementation Notes
 
 ### Routing

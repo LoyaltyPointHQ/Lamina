@@ -12,4 +12,5 @@ public class BucketConfiguration
 {
     public string Name { get; set; } = string.Empty;
     public BucketType? Type { get; set; }
+    public LifecycleConfiguration? Lifecycle { get; set; }
 }

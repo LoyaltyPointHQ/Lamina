@@ -1,5 +1,6 @@
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Helpers;
 using Lamina.WebApi.Configuration;
 using Microsoft.Extensions.Options;
 
@@ -59,12 +60,12 @@ public class AutoBucketCreationService : IAutoBucketCreationService
                 }
 
                 _logger.LogInformation("Creating bucket: {BucketName}", bucketConfig.Name);
-                
+
                 var bucket = await _bucketStorage.CreateBucketAsync(bucketConfig.Name, new CreateBucketRequest()
                 {
                     Type = bucketConfig.Type
                 }, cancellationToken);
-                
+
                 if (bucket == null)
                 {
                     _logger.LogInformation("Bucket {BucketName} already exists, skipping creation", bucketConfig.Name);
@@ -72,6 +73,11 @@ public class AutoBucketCreationService : IAutoBucketCreationService
                 else
                 {
                     _logger.LogInformation("Successfully created bucket: {BucketName}", bucketConfig.Name);
+                }
+
+                if (bucketConfig.Lifecycle != null)
+                {
+                    await ApplyLifecycleAsync(bucketConfig.Name, bucketConfig.Lifecycle, cancellationToken);
                 }
             }
             catch (Exception ex)
@@ -81,6 +87,27 @@ public class AutoBucketCreationService : IAutoBucketCreationService
         }
 
         _logger.LogInformation("Completed auto-creation of configured buckets");
+    }
+
+    private async Task ApplyLifecycleAsync(string bucketName, LifecycleConfiguration configuration, CancellationToken cancellationToken)
+    {
+        var validation = LifecycleConfigurationValidator.Validate(configuration);
+        if (!validation.IsValid)
+        {
+            _logger.LogError("Skipping lifecycle configuration for {BucketName}: {Error}", bucketName, validation.ErrorMessage);
+            return;
+        }
+
+        var applied = await _bucketStorage.SetLifecycleConfigurationAsync(bucketName, configuration, cancellationToken);
+        if (applied)
+        {
+            _logger.LogInformation("Applied lifecycle configuration to bucket {BucketName} ({RuleCount} rules)",
+                bucketName, configuration.Rules.Count);
+        }
+        else
+        {
+            _logger.LogWarning("Failed to apply lifecycle configuration to bucket {BucketName}", bucketName);
+        }
     }
 
     private static bool IsValidBucketName(string bucketName)

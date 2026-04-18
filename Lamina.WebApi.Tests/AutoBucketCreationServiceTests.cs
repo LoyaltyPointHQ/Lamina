@@ -284,8 +284,119 @@ public class AutoBucketCreationServiceTests
         _mockBucketStorage.Verify(x => x.CreateBucketAsync("failing-bucket", 
                                                            It.Is<CreateBucketRequest>(r => r.Type == BucketType.GeneralPurpose), 
                                                            It.IsAny<CancellationToken>()), Times.Once);
-        _mockBucketStorage.Verify(x => x.CreateBucketAsync("success-bucket", 
-                                                           It.Is<CreateBucketRequest>(r => r.Type == BucketType.GeneralPurpose), 
+        _mockBucketStorage.Verify(x => x.CreateBucketAsync("success-bucket",
+                                                           It.Is<CreateBucketRequest>(r => r.Type == BucketType.GeneralPurpose),
                                                            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateConfiguredBucketsAsync_WithLifecycle_AppliesConfiguration()
+    {
+        var lifecycle = new LifecycleConfiguration
+        {
+            Rules = new()
+            {
+                new LifecycleRule
+                {
+                    Id = "expire-logs",
+                    Status = LifecycleRuleStatus.Enabled,
+                    Filter = new LifecycleFilter { Prefix = "logs/" },
+                    Expiration = new LifecycleExpiration { Days = 7 }
+                }
+            }
+        };
+        var settings = new AutoBucketCreationSettings
+        {
+            Enabled = true,
+            Buckets = new()
+            {
+                new BucketConfiguration { Name = "lc-bucket", Lifecycle = lifecycle }
+            }
+        };
+        _mockBucketStorage.Setup(x => x.CreateBucketAsync("lc-bucket", It.IsAny<CreateBucketRequest?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Bucket { Name = "lc-bucket", CreationDate = DateTime.UtcNow });
+        _mockBucketStorage.Setup(x => x.SetLifecycleConfigurationAsync("lc-bucket", It.IsAny<LifecycleConfiguration>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        await CreateService(settings).CreateConfiguredBucketsAsync();
+
+        _mockBucketStorage.Verify(x => x.SetLifecycleConfigurationAsync(
+            "lc-bucket",
+            It.Is<LifecycleConfiguration>(c => c.Rules.Count == 1 && c.Rules[0].Id == "expire-logs"),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateConfiguredBucketsAsync_WithLifecycle_BucketAlreadyExists_StillApplies()
+    {
+        var lifecycle = new LifecycleConfiguration
+        {
+            Rules = new() { new LifecycleRule
+            {
+                Id = "r1",
+                Status = LifecycleRuleStatus.Enabled,
+                Filter = new LifecycleFilter { Prefix = "" },
+                Expiration = new LifecycleExpiration { Days = 1 }
+            }}
+        };
+        var settings = new AutoBucketCreationSettings
+        {
+            Enabled = true,
+            Buckets = new() { new BucketConfiguration { Name = "existing", Lifecycle = lifecycle } }
+        };
+        _mockBucketStorage.Setup(x => x.CreateBucketAsync("existing", It.IsAny<CreateBucketRequest?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Bucket?)null);
+        _mockBucketStorage.Setup(x => x.SetLifecycleConfigurationAsync("existing", It.IsAny<LifecycleConfiguration>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        await CreateService(settings).CreateConfiguredBucketsAsync();
+
+        _mockBucketStorage.Verify(x => x.SetLifecycleConfigurationAsync(
+            "existing", It.IsAny<LifecycleConfiguration>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateConfiguredBucketsAsync_InvalidLifecycle_SkippedAndLogged()
+    {
+        // Days=0 is invalid per S3 spec.
+        var lifecycle = new LifecycleConfiguration
+        {
+            Rules = new() { new LifecycleRule
+            {
+                Id = "bad",
+                Status = LifecycleRuleStatus.Enabled,
+                Filter = new LifecycleFilter { Prefix = "" },
+                Expiration = new LifecycleExpiration { Days = 0 }
+            }}
+        };
+        var settings = new AutoBucketCreationSettings
+        {
+            Enabled = true,
+            Buckets = new() { new BucketConfiguration { Name = "bad-bucket", Lifecycle = lifecycle } }
+        };
+        _mockBucketStorage.Setup(x => x.CreateBucketAsync("bad-bucket", It.IsAny<CreateBucketRequest?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Bucket { Name = "bad-bucket", CreationDate = DateTime.UtcNow });
+
+        await CreateService(settings).CreateConfiguredBucketsAsync();
+
+        _mockBucketStorage.Verify(x => x.SetLifecycleConfigurationAsync(
+            It.IsAny<string>(), It.IsAny<LifecycleConfiguration>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateConfiguredBucketsAsync_NoLifecycle_DoesNotTouchLifecycleStorage()
+    {
+        var settings = new AutoBucketCreationSettings
+        {
+            Enabled = true,
+            Buckets = new() { new BucketConfiguration { Name = "plain-bucket" } }
+        };
+        _mockBucketStorage.Setup(x => x.CreateBucketAsync("plain-bucket", It.IsAny<CreateBucketRequest?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Bucket { Name = "plain-bucket", CreationDate = DateTime.UtcNow });
+
+        await CreateService(settings).CreateConfiguredBucketsAsync();
+
+        _mockBucketStorage.Verify(x => x.SetLifecycleConfigurationAsync(
+            It.IsAny<string>(), It.IsAny<LifecycleConfiguration>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }
