@@ -324,4 +324,57 @@ public class ChecksumIntegrationTests : IntegrationTestBase
         var checksum = response.Headers.GetValues("x-amz-checksum-crc32").First();
         Assert.False(string.IsNullOrEmpty(checksum));
     }
+
+    [Fact]
+    public async Task GetObject_WithRange_DoesNotReturnFullObjectChecksumHeader()
+    {
+        // Per AWS S3 spec, for ranged GET the checksum header must be for the
+        // returned range, not the full object. Returning the full-object checksum
+        // makes AWS CRT clients with x-amz-checksum-mode=ENABLED fail validation
+        // (they compute the checksum on the received chunk bytes and compare
+        // against the header). Since we don't compute a per-range checksum, we
+        // must omit the header - the AWS spec allows this: "If the checksum
+        // isn't known for the byte range, Amazon S3 doesn't return the
+        // x-amz-checksum-* header".
+        var bucketName = await CreateTestBucketAsync();
+        var content = new StringContent("0123456789ABCDEFGHIJ", Encoding.UTF8, "text/plain");
+        var put = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/range-checksum.txt")
+        {
+            Content = content
+        };
+        put.Headers.Add("x-amz-checksum-algorithm", "CRC64NVME");
+        var putResponse = await Client.SendAsync(put);
+        Assert.Equal(HttpStatusCode.OK, putResponse.StatusCode);
+        Assert.True(putResponse.Headers.Contains("x-amz-checksum-crc64nvme"));
+
+        var get = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/range-checksum.txt");
+        get.Headers.Add("Range", "bytes=0-9");
+        var getResponse = await Client.SendAsync(get);
+
+        Assert.Equal(HttpStatusCode.PartialContent, getResponse.StatusCode);
+        Assert.False(
+            getResponse.Headers.Contains("x-amz-checksum-crc64nvme")
+                || getResponse.Content.Headers.Contains("x-amz-checksum-crc64nvme"),
+            "Range GET must not return a full-object checksum header - AWS CRT clients validate it per-chunk and fail.");
+    }
+
+    [Fact]
+    public async Task GetObject_WithoutRange_StillReturnsFullObjectChecksumHeader()
+    {
+        // Sanity/regression: non-range GET must continue to return the full-object
+        // checksum header (integrity verification for full downloads still works).
+        var bucketName = await CreateTestBucketAsync();
+        var content = new StringContent("0123456789ABCDEFGHIJ", Encoding.UTF8, "text/plain");
+        var put = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/full-checksum.txt")
+        {
+            Content = content
+        };
+        put.Headers.Add("x-amz-checksum-algorithm", "CRC64NVME");
+        await Client.SendAsync(put);
+
+        var getResponse = await Client.GetAsync($"/{bucketName}/full-checksum.txt");
+
+        Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
+        Assert.True(getResponse.Headers.Contains("x-amz-checksum-crc64nvme"));
+    }
 }

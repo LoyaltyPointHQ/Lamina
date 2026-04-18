@@ -577,17 +577,23 @@ public class S3ObjectsController : S3ControllerBase
             Response.Headers.Append("x-amz-tagging-count", metadata.Tags.Count.ToString());
         }
 
-        // Add checksum headers if present
-        if (!string.IsNullOrEmpty(metadata.ChecksumCRC32))
-            Response.Headers.Append("x-amz-checksum-crc32", metadata.ChecksumCRC32);
-        if (!string.IsNullOrEmpty(metadata.ChecksumCRC32C))
-            Response.Headers.Append("x-amz-checksum-crc32c", metadata.ChecksumCRC32C);
-        if (!string.IsNullOrEmpty(metadata.ChecksumSHA1))
-            Response.Headers.Append("x-amz-checksum-sha1", metadata.ChecksumSHA1);
-        if (!string.IsNullOrEmpty(metadata.ChecksumSHA256))
-            Response.Headers.Append("x-amz-checksum-sha256", metadata.ChecksumSHA256);
-        if (!string.IsNullOrEmpty(metadata.ChecksumCRC64NVME))
-            Response.Headers.Append("x-amz-checksum-crc64nvme", metadata.ChecksumCRC64NVME);
+        // AWS S3 spec: for ranged GET, the checksum header must be for the returned range,
+        // not the full object. Since we don't compute per-range checksums, omit the header.
+        // AWS CRT clients (default aws-cli v2 with x-amz-checksum-mode=ENABLED) verify the
+        // header against the bytes they received and fail if it doesn't match.
+        if (!isRangeRequest)
+        {
+            if (!string.IsNullOrEmpty(metadata.ChecksumCRC32))
+                Response.Headers.Append("x-amz-checksum-crc32", metadata.ChecksumCRC32);
+            if (!string.IsNullOrEmpty(metadata.ChecksumCRC32C))
+                Response.Headers.Append("x-amz-checksum-crc32c", metadata.ChecksumCRC32C);
+            if (!string.IsNullOrEmpty(metadata.ChecksumSHA1))
+                Response.Headers.Append("x-amz-checksum-sha1", metadata.ChecksumSHA1);
+            if (!string.IsNullOrEmpty(metadata.ChecksumSHA256))
+                Response.Headers.Append("x-amz-checksum-sha256", metadata.ChecksumSHA256);
+            if (!string.IsNullOrEmpty(metadata.ChecksumCRC64NVME))
+                Response.Headers.Append("x-amz-checksum-crc64nvme", metadata.ChecksumCRC64NVME);
+        }
 
         // Calculate content length and set status code
         long contentLength;
