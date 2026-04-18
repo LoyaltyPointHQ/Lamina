@@ -8,22 +8,26 @@ using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.Win32.SafeHandles;
 
 namespace Lamina.Storage.Filesystem;
 
-public class FilesystemObjectDataStorage : IObjectDataStorage
+public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObjectDataStorage
 {
     private readonly string _dataDirectory;
     private readonly MetadataStorageMode _metadataMode;
     private readonly string _inlineMetadataDirectoryName;
     private readonly string _tempFilePrefix;
+    private readonly bool _zeroCopyEnabled;
     private readonly NetworkFileSystemHelper _networkHelper;
+    private readonly LinuxZeroCopyHelper _zeroCopyHelper;
     private readonly ILogger<FilesystemObjectDataStorage> _logger;
     private readonly IChunkedDataParser _chunkedDataParser;
 
     public FilesystemObjectDataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
         NetworkFileSystemHelper networkHelper,
+        LinuxZeroCopyHelper zeroCopyHelper,
         ILogger<FilesystemObjectDataStorage> logger,
         IChunkedDataParser chunkedDataParser
     )
@@ -33,7 +37,9 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
         _metadataMode = settings.MetadataMode;
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
         _tempFilePrefix = settings.TempFilePrefix;
+        _zeroCopyEnabled = settings.UseZeroCopyCompleteMultipart;
         _networkHelper = networkHelper;
+        _zeroCopyHelper = zeroCopyHelper;
         _logger = logger;
         _chunkedDataParser = chunkedDataParser;
 
@@ -203,14 +209,17 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
                 await fileStream.FlushAsync(cancellationToken);
             }
 
-            var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
-
+            // Intentionally no ETag compute here: the multipart ETag is the MD5-of-MD5-of-part-ETags
+            // (AWS spec format "hash-N"), not MD5 of the assembled file. The facade computes that
+            // separately via ETagHelper.ComputeMultipartETag from the part ETag list and overrides
+            // this value, so re-reading the just-written tempfile here would be a wasted full-object
+            // read (equal to S bytes per Complete).
             var preparedData = new PreparedData
             {
                 BucketName = bucketName,
                 Key = key,
                 Size = totalBytesWritten,
-                ETag = etag,
+                ETag = string.Empty,
                 Checksums = new Dictionary<string, string>(),
                 Tag = tempPath
             };
@@ -236,6 +245,117 @@ public class FilesystemObjectDataStorage : IObjectDataStorage
             }
 
             throw;
+        }
+    }
+
+    public async Task<PreparedData?> PrepareMultipartDataFromFilesAsync(string bucketName, string key, IReadOnlyList<string> partPaths, CancellationToken cancellationToken = default)
+    {
+        // Opt-out escape hatch for deployments where kernel-side copy misbehaves.
+        if (!_zeroCopyEnabled)
+        {
+            return null;
+        }
+
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            throw new InvalidOperationException(
+                $"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
+        }
+
+        var dataPath = GetDataPath(bucketName, key);
+        var dataDir = Path.GetDirectoryName(dataPath)!;
+        await _networkHelper.EnsureDirectoryExistsAsync(dataDir, $"StoreMultipartObject-{bucketName}/{key}");
+
+        var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
+        long totalBytesWritten = 0;
+
+        try
+        {
+            using (var dstHandle = File.OpenHandle(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, FileOptions.Asynchronous))
+            {
+                foreach (var partPath in partPaths)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    totalBytesWritten += await AppendPartAsync(partPath, dstHandle, totalBytesWritten, cancellationToken);
+                }
+            }
+
+            var preparedData = new PreparedData
+            {
+                BucketName = bucketName,
+                Key = key,
+                Size = totalBytesWritten,
+                ETag = string.Empty,
+                Checksums = new Dictionary<string, string>(),
+                Tag = tempPath
+            };
+            preparedData.SetDisposeAction(() =>
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* ignore */ }
+            });
+
+            return preparedData;
+        }
+        catch
+        {
+            try
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to clean up temporary file: {TempPath}", tempPath);
+            }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Appends the entire contents of <paramref name="partPath"/> to <paramref name="dstHandle"/>
+    /// at <paramref name="dstOffset"/>. Prefers Linux copy_file_range (server-side / reflink copy);
+    /// on platforms or filesystems where that's unsupported, falls back to a userspace copy that
+    /// still avoids the PipeReader overhead of the classic path.
+    /// </summary>
+    private async Task<long> AppendPartAsync(string partPath, SafeFileHandle dstHandle, long dstOffset, CancellationToken cancellationToken)
+    {
+        using var srcHandle = File.OpenHandle(partPath, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.Asynchronous);
+        var length = RandomAccess.GetLength(srcHandle);
+        if (length == 0)
+        {
+            return 0;
+        }
+
+        if (_zeroCopyHelper.IsSupported && _zeroCopyHelper.TryCopyFileRange(srcHandle, dstHandle, length, cancellationToken))
+        {
+            return length;
+        }
+
+        // Fallback: buffered userspace copy via RandomAccess at explicit offsets - no pipes, no
+        // background tasks, same single-pass semantics as copy_file_range from the caller's view.
+        var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(81920);
+        try
+        {
+            long copied = 0;
+            long srcOffset = 0;
+            while (copied < length)
+            {
+                var read = await RandomAccess.ReadAsync(srcHandle, buffer.AsMemory(), srcOffset, cancellationToken);
+                if (read == 0)
+                {
+                    throw new IOException($"Unexpected EOF reading part {partPath} at offset {srcOffset}");
+                }
+                await RandomAccess.WriteAsync(dstHandle, buffer.AsMemory(0, read), dstOffset + copied, cancellationToken);
+                copied += read;
+                srcOffset += read;
+            }
+            return copied;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 

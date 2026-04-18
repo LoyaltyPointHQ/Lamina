@@ -267,6 +267,25 @@ public class S3MultipartController : S3ControllerBase
             return contentSha256Error;
         }
 
+        // Parse Content-MD5 header (optional). If present, AWS requires the server to validate the
+        // received body against it and return BadDigest on mismatch (AWS UploadPart docs, Data integrity).
+        byte[]? expectedMd5 = null;
+        if (Request.Headers.TryGetValue("Content-MD5", out var contentMd5Header) && !string.IsNullOrEmpty(contentMd5Header.ToString()))
+        {
+            try
+            {
+                expectedMd5 = Convert.FromBase64String(contentMd5Header.ToString());
+                if (expectedMd5.Length != 16)
+                {
+                    return S3Error("InvalidDigest", "The Content-MD5 you specified is not valid.", $"/{bucketName}/{key}", 400);
+                }
+            }
+            catch (FormatException)
+            {
+                return S3Error("InvalidDigest", "The Content-MD5 you specified is not valid.", $"/{bucketName}/{key}", 400);
+            }
+        }
+
         // Parse checksum headers
         Request.Headers.TryGetValue("x-amz-checksum-algorithm", out var checksumAlgorithm);
         Request.Headers.TryGetValue("x-amz-checksum-crc32", out var checksumCrc32);
@@ -319,12 +338,18 @@ public class S3MultipartController : S3ControllerBase
             var chunkValidator = HttpContext.Items["ChunkValidator"] as IChunkSignatureValidator;
 
             var partResult = chunkValidator != null
-                ? await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, chunkValidator, checksumRequest, cancellationToken)
-                : await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, checksumRequest, cancellationToken);
+                ? await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, chunkValidator, checksumRequest, expectedMd5, cancellationToken)
+                : await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, checksumRequest, expectedMd5, cancellationToken);
 
             if (!partResult.IsSuccess)
             {
                 // Handle specific error cases
+                if (partResult.ErrorCode == "BadDigest")
+                {
+                    _logger.LogWarning("Content-MD5 mismatch for part {PartNumber} of upload {UploadId}", partNumber, uploadId);
+                    return S3Error("BadDigest", partResult.ErrorMessage!, $"/{bucketName}/{key}", 400);
+                }
+
                 if (partResult.ErrorCode == "InvalidChecksum")
                 {
                     _logger.LogWarning("Checksum validation failed for part {PartNumber} of upload {UploadId}: {ErrorMessage}",

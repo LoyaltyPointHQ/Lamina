@@ -43,6 +43,30 @@ public static class ETagHelper
     }
 
     /// <summary>
+    /// Compares a computed ETag (lowercase hex MD5) against raw MD5 bytes. Used to validate
+    /// the client's Content-MD5 header against the server-computed digest of a part body.
+    /// </summary>
+    /// <returns>True if the 16-byte hashes match exactly.</returns>
+    public static bool EtagMatchesMd5(string etag, byte[] expectedMd5)
+    {
+        if (expectedMd5.Length != 16)
+        {
+            return false;
+        }
+        var cleanETag = etag.Trim('"');
+        byte[] etagBytes;
+        try
+        {
+            etagBytes = Convert.FromHexString(cleanETag);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+        return etagBytes.AsSpan().SequenceEqual(expectedMd5);
+    }
+
+    /// <summary>
     /// Computes a multipart ETag from individual part ETags according to S3 specification.
     /// The multipart ETag is computed by taking the MD5 of the concatenated binary MD5 hashes
     /// of each part, followed by a dash and the number of parts.

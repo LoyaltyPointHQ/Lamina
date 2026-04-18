@@ -193,6 +193,9 @@ if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
     // Register NetworkFileSystemHelper for CIFS/NFS support
     builder.Services.AddSingleton<NetworkFileSystemHelper>();
 
+    // Register LinuxZeroCopyHelper for kernel-side part assembly (copy_file_range)
+    builder.Services.AddSingleton<LinuxZeroCopyHelper>();
+
     // Register bucket data services
     builder.Services.AddSingleton<IBucketDataStorage, FilesystemBucketDataStorage>();
 

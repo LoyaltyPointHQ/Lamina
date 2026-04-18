@@ -6,6 +6,7 @@ using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.Filesystem.Locking;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 
@@ -65,6 +66,7 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
         _dataStorage = new FilesystemObjectDataStorage(
             Options.Create(settings),
             networkHelper,
+            new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance),
             dataLogger,
             chunkedDataParser);
     }

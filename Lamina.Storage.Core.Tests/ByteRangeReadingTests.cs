@@ -386,8 +386,9 @@ public class ByteRangeReadingTests
             bucketName, destKey, uploadId, partNumber,
             It.IsAny<PipeReader>(),
             It.IsAny<ChecksumRequest?>(),
+            It.IsAny<byte[]?>(),
             It.IsAny<CancellationToken>()))
-            .ReturnsAsync((string bn, string k, string uid, int pn, PipeReader reader, ChecksumRequest? cr, CancellationToken ct) =>
+            .ReturnsAsync((string bn, string k, string uid, int pn, PipeReader reader, ChecksumRequest? cr, byte[]? md5, CancellationToken ct) =>
             {
                 var readTask = Task.Run(async () =>
                 {

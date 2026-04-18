@@ -20,6 +20,10 @@ public class MultipartUpload
 
 public class PartMetadata
 {
+    // Server-computed MD5 of the part content, persisted to avoid recomputing it
+    // at Complete time (which would be a full re-read of every part - prohibitive
+    // on CIFS/NFS). Fallback to compute-from-file when empty.
+    public string ETag { get; set; } = string.Empty;
     public string? ChecksumCRC32 { get; set; }
     public string? ChecksumCRC32C { get; set; }
     public string? ChecksumCRC64NVME { get; set; }

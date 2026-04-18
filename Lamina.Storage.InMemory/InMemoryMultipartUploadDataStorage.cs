@@ -12,7 +12,7 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<int, UploadPart>> _uploadParts = new();
 
-    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
     {
         var uploadKey = $"{bucketName}/{key}/{uploadId}";
         var parts = _uploadParts.GetOrAdd(uploadKey, _ => new ConcurrentDictionary<int, UploadPart>());
@@ -20,6 +20,14 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         var combinedData = await PipeReaderHelper.ReadAllBytesAsync(dataReader, false, cancellationToken);
 
         var etag = ETagHelper.ComputeETag(combinedData);
+
+        // AWS: "Amazon S3 checks the part data against the provided MD5 value. If they do not
+        // match, Amazon S3 returns an error." We haven't inserted the part into the dict yet, so
+        // no cleanup is needed on mismatch.
+        if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
+        {
+            return StorageResult<UploadPart>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
+        }
 
         var part = new UploadPart
         {
@@ -64,7 +72,7 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         return StorageResult<UploadPart>.Success(part);
     }
 
-    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkedDataParser chunkedDataParser, IChunkSignatureValidator chunkValidator, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkedDataParser chunkedDataParser, IChunkSignatureValidator chunkValidator, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
     {
         var uploadKey = $"{bucketName}/{key}/{uploadId}";
         var parts = _uploadParts.GetOrAdd(uploadKey, _ => new ConcurrentDictionary<int, UploadPart>());
@@ -83,6 +91,11 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
 
         var combinedData = memoryStream.ToArray();
         var etag = ETagHelper.ComputeETag(combinedData);
+
+        if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
+        {
+            return StorageResult<UploadPart>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
+        }
 
         var part = new UploadPart
         {
@@ -165,8 +178,15 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         return Task.FromResult(_uploadParts.TryRemove(uploadKey, out _));
     }
 
-    public Task<List<UploadPart>> GetStoredPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
+    public Task<bool> HasAnyPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
     {
+        var uploadKey = $"{bucketName}/{key}/{uploadId}";
+        return Task.FromResult(_uploadParts.TryGetValue(uploadKey, out var parts) && !parts.IsEmpty);
+    }
+
+    public Task<List<UploadPart>> GetStoredPartsAsync(string bucketName, string key, string uploadId, IReadOnlyDictionary<int, PartMetadata>? knownMetadata = null, CancellationToken cancellationToken = default)
+    {
+        // knownMetadata is a perf hint for backends that must reopen files; in-memory already holds ETag.
         var uploadKey = $"{bucketName}/{key}/{uploadId}";
         if (_uploadParts.TryGetValue(uploadKey, out var parts))
         {

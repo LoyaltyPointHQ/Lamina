@@ -37,109 +37,99 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         return await _metadataStorage.InitiateUploadAsync(bucketName, key, request, cancellationToken);
     }
 
-    public async Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
     {
-        // Data-first approach: Store the part data without checking metadata
-        // This allows parts to be uploaded even if metadata was lost or corrupted
-        return await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, null, cancellationToken);
-    }
-
-    public async Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, CancellationToken cancellationToken = default)
-    {
-        // If no chunk validator, use the non-validating version
-        if (chunkValidator == null)
-        {
-            return await UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, cancellationToken);
-        }
-
-        // Data-first approach: Don't check metadata, just validate and store the part
-        // Use the specialized overload that handles validation and storage in a single pass
-        return await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, _chunkedDataParser, chunkValidator, null, cancellationToken);
-    }
-
-    public async Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
-    {
-        // Data-first approach: Store the part data without checking metadata
-        // This allows parts to be uploaded even if metadata was lost or corrupted
-        var result = await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, checksumRequest, cancellationToken);
-
-        // Store part checksums in upload metadata if upload succeeded and has checksums
-        if (result.IsSuccess && result.Value != null && HasChecksums(result.Value))
-        {
-            var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
-            if (upload != null)
-            {
-                upload.Parts[partNumber] = new PartMetadata
-                {
-                    ChecksumCRC32 = result.Value.ChecksumCRC32,
-                    ChecksumCRC32C = result.Value.ChecksumCRC32C,
-                    ChecksumCRC64NVME = result.Value.ChecksumCRC64NVME,
-                    ChecksumSHA1 = result.Value.ChecksumSHA1,
-                    ChecksumSHA256 = result.Value.ChecksumSHA256
-                };
-                await _metadataStorage.UpdateUploadMetadataAsync(bucketName, key, uploadId, upload, cancellationToken);
-            }
-        }
-
+        var result = await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, null, expectedMd5, cancellationToken);
+        await PersistPartMetadataAsync(bucketName, key, uploadId, partNumber, result, cancellationToken);
         return result;
     }
 
-    private static bool HasChecksums(UploadPart part)
+    public async Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
     {
-        return !string.IsNullOrEmpty(part.ChecksumCRC32) ||
-               !string.IsNullOrEmpty(part.ChecksumCRC32C) ||
-               !string.IsNullOrEmpty(part.ChecksumCRC64NVME) ||
-               !string.IsNullOrEmpty(part.ChecksumSHA1) ||
-               !string.IsNullOrEmpty(part.ChecksumSHA256);
-    }
-
-    public async Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
-    {
-        // If no chunk validator, use the version with just checksum request
         if (chunkValidator == null)
         {
-            return await UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, checksumRequest, cancellationToken);
+            return await UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, expectedMd5, cancellationToken);
         }
 
-        // Data-first approach: Don't check metadata, just validate and store the part
-        // Use the specialized overload that handles validation and storage in a single pass
-        var result = await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, _chunkedDataParser, chunkValidator, checksumRequest, cancellationToken);
-
-        // Store part checksums in upload metadata if upload succeeded and has checksums
-        if (result.IsSuccess && result.Value != null && HasChecksums(result.Value))
-        {
-            var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
-            if (upload != null)
-            {
-                upload.Parts[partNumber] = new PartMetadata
-                {
-                    ChecksumCRC32 = result.Value.ChecksumCRC32,
-                    ChecksumCRC32C = result.Value.ChecksumCRC32C,
-                    ChecksumCRC64NVME = result.Value.ChecksumCRC64NVME,
-                    ChecksumSHA1 = result.Value.ChecksumSHA1,
-                    ChecksumSHA256 = result.Value.ChecksumSHA256
-                };
-                await _metadataStorage.UpdateUploadMetadataAsync(bucketName, key, uploadId, upload, cancellationToken);
-            }
-        }
-
+        var result = await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, _chunkedDataParser, chunkValidator, null, expectedMd5, cancellationToken);
+        await PersistPartMetadataAsync(bucketName, key, uploadId, partNumber, result, cancellationToken);
         return result;
+    }
+
+    public async Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
+    {
+        var result = await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, checksumRequest, expectedMd5, cancellationToken);
+        await PersistPartMetadataAsync(bucketName, key, uploadId, partNumber, result, cancellationToken);
+        return result;
+    }
+
+    public async Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
+    {
+        if (chunkValidator == null)
+        {
+            return await UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, checksumRequest, expectedMd5, cancellationToken);
+        }
+
+        var result = await _dataStorage.StorePartDataAsync(bucketName, key, uploadId, partNumber, dataReader, _chunkedDataParser, chunkValidator, checksumRequest, expectedMd5, cancellationToken);
+        await PersistPartMetadataAsync(bucketName, key, uploadId, partNumber, result, cancellationToken);
+        return result;
+    }
+
+    // Persists the server-computed ETag (and any checksums) for a successfully-stored part.
+    // Data-first is preserved: if the upload metadata doesn't exist (e.g. user bypassed Initiate
+    // or metadata was wiped), the part file is still on disk and Complete will fall back to
+    // recomputing ETag from the file. This is best-effort bookkeeping to speed up Complete.
+    private async Task PersistPartMetadataAsync(string bucketName, string key, string uploadId, int partNumber, StorageResult<UploadPart> result, CancellationToken cancellationToken)
+    {
+        if (!result.IsSuccess || result.Value == null)
+        {
+            return;
+        }
+
+        var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
+        if (upload == null)
+        {
+            return;
+        }
+
+        upload.Parts[partNumber] = new PartMetadata
+        {
+            ETag = result.Value.ETag,
+            ChecksumCRC32 = result.Value.ChecksumCRC32,
+            ChecksumCRC32C = result.Value.ChecksumCRC32C,
+            ChecksumCRC64NVME = result.Value.ChecksumCRC64NVME,
+            ChecksumSHA1 = result.Value.ChecksumSHA1,
+            ChecksumSHA256 = result.Value.ChecksumSHA256
+        };
+        await _metadataStorage.UpdateUploadMetadataAsync(bucketName, key, uploadId, upload, cancellationToken);
     }
 
     public async Task<StorageResult<CompleteMultipartUploadResponse>> CompleteMultipartUploadAsync(string bucketName, string key, CompleteMultipartUploadRequest request, CancellationToken cancellationToken = default)
     {
-        // Data-first approach: Check for data existence instead of metadata
-        // Phase 3 & 4 Validation: Part size and ETag validation
-        var storedParts = await _dataStorage.GetStoredPartsAsync(bucketName, key, request.UploadId, cancellationToken);
+        // Data-first approach: cheap existence check before touching metadata.
+        // If no part data exists, reject without ever loading metadata (preserves the invariant that
+        // existence is decided by data, not metadata - an upload with stale metadata but no parts is
+        // treated as non-existent).
+        var hasAnyParts = await _dataStorage.HasAnyPartsAsync(bucketName, key, request.UploadId, cancellationToken);
+        if (!hasAnyParts)
+        {
+            return StorageResult<CompleteMultipartUploadResponse>.Error("NoSuchUpload", $"Upload '{request.UploadId}' not found");
+        }
 
-        // Check if any parts exist - this is the real validation
+        // Upload exists - load metadata up-front so we can hint GetStoredPartsAsync with persisted
+        // part ETags and checksums, letting filesystem backends skip a full MD5 pass over every part.
+        var uploadMetadata = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, request.UploadId, cancellationToken);
+
+        var storedParts = await _dataStorage.GetStoredPartsAsync(bucketName, key, request.UploadId, uploadMetadata?.Parts, cancellationToken);
+
+        // Defensive: HasAnyPartsAsync said yes but GetStoredPartsAsync returned empty. Shouldn't
+        // happen in practice, but guards against a TOCTOU race (parts deleted between the two calls).
         if (!storedParts.Any())
         {
             return StorageResult<CompleteMultipartUploadResponse>.Error("NoSuchUpload", $"Upload '{request.UploadId}' not found");
         }
 
-        // Merge checksums from metadata storage (similar to ListPartsAsync pattern)
-        var uploadMetadata = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, request.UploadId, cancellationToken);
+        // Merge per-part checksums from metadata (ETag is already resolved by GetStoredPartsAsync via the hint above).
         if (uploadMetadata != null && uploadMetadata.Parts.Count > 0)
         {
             foreach (var part in storedParts)
@@ -175,14 +165,6 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
 
             // Note: Part size validation (5MB minimum) should be enforced during upload, not here.
             // S3 allows completing multipart uploads with parts smaller than 5MB as long as they were accepted during upload.
-        }
-
-        // Get readers for all parts
-        var partReaders = await _dataStorage.GetPartReadersAsync(bucketName, key, request.UploadId, request.Parts, cancellationToken);
-        var readersList = partReaders.ToList();
-        if (!readersList.Any())
-        {
-            throw new InvalidOperationException("Failed to get part readers");
         }
 
         // Use already retrieved metadata for S3 compliance, but fall back to defaults if missing (data-first resilience)
@@ -224,8 +206,33 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         if (!string.IsNullOrEmpty(aggregatedCRC64NVME))
             aggregatedChecksums["CRC64NVME"] = aggregatedCRC64NVME;
 
-        // Phase 1: Prepare multipart data (temp file, not yet visible)
-        using var preparedData = await _objectDataStorage.PrepareMultipartDataAsync(bucketName, key, readersList, cancellationToken);
+        // Phase 1: Prepare multipart data (temp file, not yet visible).
+        // Fast path: when both storages are file-backed (filesystem + filesystem), assemble the
+        // tempfile directly from part file paths using kernel-side copy (copy_file_range -> CoW
+        // reflink on XFS/Btrfs, or server-side SMB/NFS copy) so bytes never traverse userspace
+        // or the client<->server network hop.
+        PreparedData? prepared = null;
+        if (_dataStorage is IFileBackedMultipartPartSource fileSrc
+            && _objectDataStorage is IFileBackedObjectDataStorage fileDst
+            && fileSrc.TryGetPartFilePaths(bucketName, key, request.UploadId, request.Parts, out var partPaths))
+        {
+            prepared = await fileDst.PrepareMultipartDataFromFilesAsync(bucketName, key, partPaths, cancellationToken);
+        }
+
+        if (prepared == null)
+        {
+            // Fallback: PipeReader path - required for non-file-backed backends (InMemory, future
+            // SQL-data) and when the feature flag UseZeroCopyCompleteMultipart is disabled.
+            var partReaders = await _dataStorage.GetPartReadersAsync(bucketName, key, request.UploadId, request.Parts, cancellationToken);
+            var readersList = partReaders.ToList();
+            if (!readersList.Any())
+            {
+                throw new InvalidOperationException("Failed to get part readers");
+            }
+            prepared = await _objectDataStorage.PrepareMultipartDataAsync(bucketName, key, readersList, cancellationToken);
+        }
+
+        using var preparedData = prepared;
         var size = preparedData.Size;
 
         // Phase 2: Store metadata BEFORE committing data
@@ -261,11 +268,11 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
 
     public async Task<List<UploadPart>> ListPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
     {
-        // Get parts from data storage (includes ETag, Size, LastModified)
-        var parts = await _dataStorage.GetStoredPartsAsync(bucketName, key, uploadId, cancellationToken);
-
-        // Get upload metadata which contains part checksums
+        // Load metadata first so we can hint the data storage with persisted ETags (same perf reason
+        // as Complete - filesystem backend can skip a full MD5 pass when metadata has the ETag).
         var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
+
+        var parts = await _dataStorage.GetStoredPartsAsync(bucketName, key, uploadId, upload?.Parts, cancellationToken);
 
         // Merge checksums from metadata into parts
         if (upload != null && upload.Parts.Count > 0)

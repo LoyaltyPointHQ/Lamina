@@ -10,7 +10,7 @@ using Microsoft.Extensions.Options;
 
 namespace Lamina.Storage.Filesystem;
 
-public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
+public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage, IFileBackedMultipartPartSource
 {
     private readonly string _dataDirectory;
     private readonly string? _metadataDirectory;
@@ -44,7 +44,7 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
         }
     }
 
-    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
     {
         var partPath = GetPartPath(uploadId, partNumber);
         var partDir = Path.GetDirectoryName(partPath)!;
@@ -71,6 +71,17 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
                 await fileStream.FlushAsync(cancellationToken);
             } // FileStream is fully disposed here
 
+            var etag = await ETagHelper.ComputeETagFromFileAsync(partPath);
+
+            // AWS: if client sent Content-MD5, server MUST validate against the received bytes and
+            // return BadDigest on mismatch. We compare against the freshly-computed ETag (MD5 of the
+            // file we just wrote) and clean up the orphaned part file on failure.
+            if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
+            {
+                TryDeletePartFile(partPath);
+                return StorageResult<UploadPart>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
+            }
+
             // Validate and finalize checksums if requested
             if (checksumCalculator?.HasChecksums == true)
             {
@@ -79,10 +90,7 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
                 if (!result.IsValid)
                 {
                     // Checksum validation failed - clean up and return null
-                    if (File.Exists(partPath))
-                    {
-                        File.Delete(partPath);
-                    }
+                    TryDeletePartFile(partPath);
                     return StorageResult<UploadPart>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
                 }
 
@@ -90,7 +98,7 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
                 var part = new UploadPart
                 {
                     PartNumber = partNumber,
-                    ETag = await ETagHelper.ComputeETagFromFileAsync(partPath),
+                    ETag = etag,
                     Size = bytesWritten,
                     LastModified = DateTime.UtcNow
                 };
@@ -111,8 +119,6 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
             else
             {
                 // No checksums requested
-                var etag = await ETagHelper.ComputeETagFromFileAsync(partPath);
-
                 var part = new UploadPart
                 {
                     PartNumber = partNumber,
@@ -130,7 +136,22 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
         }
     }
 
-    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkedDataParser chunkedDataParser, IChunkSignatureValidator chunkValidator, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
+    private void TryDeletePartFile(string partPath)
+    {
+        try
+        {
+            if (File.Exists(partPath))
+            {
+                File.Delete(partPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to clean up rejected part file: {PartPath}", partPath);
+        }
+    }
+
+    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkedDataParser chunkedDataParser, IChunkSignatureValidator chunkValidator, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
     {
         var partPath = GetPartPath(uploadId, partNumber);
         var partDir = Path.GetDirectoryName(partPath)!;
@@ -211,6 +232,12 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
                 // Compute ETag from the temp file
                 var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
 
+                if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
+                {
+                    TryDeletePartFile(tempPath);
+                    return StorageResult<UploadPart>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
+                }
+
                 // Atomically move temp file to final location
                 File.Move(tempPath, partPath, overwrite: true);
 
@@ -240,6 +267,12 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
             {
                 // No checksums requested
                 var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
+
+                if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
+                {
+                    TryDeletePartFile(tempPath);
+                    return StorageResult<UploadPart>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
+                }
 
                 // Atomically move temp file to final location
                 File.Move(tempPath, partPath, overwrite: true);
@@ -297,19 +330,10 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
                 return Enumerable.Empty<PipeReader>();
             }
 
-            // Verify ETag
-            var actualETag = await ETagHelper.ComputeETagFromFileAsync(partPath);
-            var expectedETag = part.ETag.Trim('"');
-            if (actualETag != expectedETag)
-            {
-                // Clean up any readers we've already created
-                foreach (var reader in readers)
-                {
-                    await reader.CompleteAsync();
-                }
-                _logger.LogWarning("Part ETag mismatch for upload {UploadId}, part {PartNumber}", uploadId, part.PartNumber);
-                return Enumerable.Empty<PipeReader>();
-            }
+            // ETag was already validated by the Complete facade against the client's request (using the
+            // persisted server-computed ETag from upload metadata). Recomputing it here would re-read
+            // every part file once more - pure network overhead on CIFS/NFS with no new safety signal
+            // (TOCTOU window between facade check and here is microseconds).
 
             // Create a pipe for this part
             var pipe = new Pipe();
@@ -369,7 +393,42 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
         }
     }
 
-    public async Task<List<UploadPart>> GetStoredPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
+    public bool TryGetPartFilePaths(string bucketName, string key, string uploadId, IReadOnlyList<CompletedPart> parts, out IReadOnlyList<string> paths)
+    {
+        var ordered = parts.OrderBy(p => p.PartNumber).ToList();
+        var result = new List<string>(ordered.Count);
+        foreach (var part in ordered)
+        {
+            var partPath = GetPartPath(uploadId, part.PartNumber);
+            if (!File.Exists(partPath))
+            {
+                _logger.LogWarning("File-backed fast path cannot start: part {PartNumber} missing for upload {UploadId}", part.PartNumber, uploadId);
+                paths = Array.Empty<string>();
+                return false;
+            }
+            result.Add(partPath);
+        }
+        paths = result;
+        return true;
+    }
+
+    public Task<bool> HasAnyPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
+    {
+        var uploadDir = _metadataMode == MetadataStorageMode.SeparateDirectory
+            ? Path.Combine(_metadataDirectory!, "_multipart_uploads", uploadId)
+            : Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_multipart_uploads", uploadId);
+
+        if (!Directory.Exists(uploadDir))
+        {
+            return Task.FromResult(false);
+        }
+
+        var exists = Directory.EnumerateFiles(uploadDir, "part_*")
+            .Any(f => !f.EndsWith(".metadata.json"));
+        return Task.FromResult(exists);
+    }
+
+    public async Task<List<UploadPart>> GetStoredPartsAsync(string bucketName, string key, string uploadId, IReadOnlyDictionary<int, PartMetadata>? knownMetadata = null, CancellationToken cancellationToken = default)
     {
         var uploadDir = _metadataMode == MetadataStorageMode.SeparateDirectory
             ? Path.Combine(_metadataDirectory!, "_multipart_uploads", uploadId)
@@ -395,8 +454,23 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage
                 if (fileName.StartsWith("part_") && int.TryParse(fileName.Substring(5), out int partNumber))
                 {
                     var fileInfo = new FileInfo(partFile);
-                    // Compute ETag directly from file without loading into memory
-                    var etag = await ETagHelper.ComputeETagFromFileAsync(partFile);
+
+                    // Prefer the ETag that was computed server-side during UploadPart and persisted in
+                    // upload metadata. Recomputing it here would re-read the entire part file - a full
+                    // network round-trip on CIFS/NFS for every Complete call. Fall back to recompute
+                    // only when metadata is absent (e.g. old upload from before this was persisted, or
+                    // metadata file was deleted out-of-band).
+                    string etag;
+                    if (knownMetadata is not null
+                        && knownMetadata.TryGetValue(partNumber, out var partMeta)
+                        && !string.IsNullOrEmpty(partMeta.ETag))
+                    {
+                        etag = partMeta.ETag;
+                    }
+                    else
+                    {
+                        etag = await ETagHelper.ComputeETagFromFileAsync(partFile);
+                    }
 
                     var part = new UploadPart
                     {

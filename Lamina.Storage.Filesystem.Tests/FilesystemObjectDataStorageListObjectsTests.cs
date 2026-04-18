@@ -38,7 +38,7 @@ public class FilesystemObjectDataStorageListObjectsTests : IAsyncLifetime
 
         var networkHelper = new NetworkFileSystemHelper(settings, NullLogger<NetworkFileSystemHelper>.Instance);
         var mockChunkedDataParser = new Mock<IChunkedDataParser>();
-        _storage = new FilesystemObjectDataStorage(settings, networkHelper, NullLogger<FilesystemObjectDataStorage>.Instance, mockChunkedDataParser.Object);
+        _storage = new FilesystemObjectDataStorage(settings, networkHelper, new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance), NullLogger<FilesystemObjectDataStorage>.Instance, mockChunkedDataParser.Object);
     }
     public async Task InitializeAsync()
     {

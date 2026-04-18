@@ -635,7 +635,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
             {
                 // Upload the data (or byte range) as a multipart part
                 var uploadPartResult = await _multipartUploadStorage.UploadPartAsync(
-                    destBucketName, destKey, uploadId, partNumber, pipe.Reader, checksumRequest, cancellationToken);
+                    destBucketName, destKey, uploadId, partNumber, pipe.Reader, checksumRequest, expectedMd5: null, cancellationToken);
 
                 // Wait for write task to complete
                 await writeTask;

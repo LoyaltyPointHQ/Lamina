@@ -37,7 +37,7 @@ public class FilesystemObjectDataStorageTests : IDisposable
 
         var networkHelper = new NetworkFileSystemHelper(settings, NullLogger<NetworkFileSystemHelper>.Instance);
         var mockChunkedDataParser = new Mock<IChunkedDataParser>();
-        _storage = new FilesystemObjectDataStorage(settings, networkHelper, NullLogger<FilesystemObjectDataStorage>.Instance, mockChunkedDataParser.Object);
+        _storage = new FilesystemObjectDataStorage(settings, networkHelper, new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance), NullLogger<FilesystemObjectDataStorage>.Instance, mockChunkedDataParser.Object);
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public class FilesystemObjectDataStorageTests : IDisposable
 
         var networkHelper = new NetworkFileSystemHelper(settings, NullLogger<NetworkFileSystemHelper>.Instance);
         var mockChunkedDataParser = new Mock<IChunkedDataParser>();
-        var inlineStorage = new FilesystemObjectDataStorage(settings, networkHelper, NullLogger<FilesystemObjectDataStorage>.Instance, mockChunkedDataParser.Object);
+        var inlineStorage = new FilesystemObjectDataStorage(settings, networkHelper, new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance), NullLogger<FilesystemObjectDataStorage>.Instance, mockChunkedDataParser.Object);
 
         const string bucketName = "test-bucket";
         const string key = "test-object.txt";
@@ -388,7 +388,7 @@ public class FilesystemObjectDataStorageTests : IDisposable
 
         var networkHelper = new NetworkFileSystemHelper(settings, NullLogger<NetworkFileSystemHelper>.Instance);
         var mockChunkedDataParser = new Mock<IChunkedDataParser>();
-        var customStorage = new FilesystemObjectDataStorage(settings, networkHelper, NullLogger<FilesystemObjectDataStorage>.Instance, mockChunkedDataParser.Object);
+        var customStorage = new FilesystemObjectDataStorage(settings, networkHelper, new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance), NullLogger<FilesystemObjectDataStorage>.Instance, mockChunkedDataParser.Object);
 
         const string bucketName = "test-bucket";
         const string normalKey = "normal-object.txt";
@@ -438,7 +438,7 @@ public class FilesystemObjectDataStorageTests : IDisposable
 
         var networkHelper = new NetworkFileSystemHelper(settings, NullLogger<NetworkFileSystemHelper>.Instance);
         var mockChunkedDataParser = new Mock<IChunkedDataParser>();
-        var customStorage = new FilesystemObjectDataStorage(settings, networkHelper, NullLogger<FilesystemObjectDataStorage>.Instance, mockChunkedDataParser.Object);
+        var customStorage = new FilesystemObjectDataStorage(settings, networkHelper, new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance), NullLogger<FilesystemObjectDataStorage>.Instance, mockChunkedDataParser.Object);
 
         const string bucketName = "test-bucket";
         const string key = ".lamina-tmp-legitimate-file.txt"; // This should be allowed with custom prefix

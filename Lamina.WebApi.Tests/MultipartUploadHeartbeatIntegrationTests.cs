@@ -169,17 +169,17 @@ public class MultipartUploadHeartbeatIntegrationTests
         public Task<MultipartUpload> InitiateMultipartUploadAsync(string bucketName, string key, InitiateMultipartUploadRequest request, CancellationToken cancellationToken = default)
             => _inner.InitiateMultipartUploadAsync(bucketName, key, request, cancellationToken);
 
-        public Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, CancellationToken cancellationToken = default)
-            => _inner.UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, cancellationToken);
+        public Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
+            => _inner.UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, expectedMd5, cancellationToken);
 
-        public Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, CancellationToken cancellationToken = default)
-            => _inner.UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, chunkValidator, cancellationToken);
+        public Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
+            => _inner.UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, chunkValidator, expectedMd5, cancellationToken);
 
-        public Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
-            => _inner.UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, checksumRequest, cancellationToken);
+        public Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
+            => _inner.UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, checksumRequest, expectedMd5, cancellationToken);
 
-        public Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default)
-            => _inner.UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, chunkValidator, checksumRequest, cancellationToken);
+        public Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
+            => _inner.UploadPartAsync(bucketName, key, uploadId, partNumber, dataReader, chunkValidator, checksumRequest, expectedMd5, cancellationToken);
 
         public async Task<StorageResult<CompleteMultipartUploadResponse>> CompleteMultipartUploadAsync(string bucketName, string key, CompleteMultipartUploadRequest request, CancellationToken cancellationToken = default)
         {

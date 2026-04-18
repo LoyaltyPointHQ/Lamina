@@ -238,8 +238,11 @@ public async Task<IActionResult> PutObject(string bucketName, string key)
     "MetadataDirectory": "/tmp/laminas/metadata",
     "MetadataMode": "SeparateDirectory",
     // or "Inline" or "Xattr"
-    "NetworkMode": "None"
+    "NetworkMode": "None",
     // or "CIFS" or "NFS"
+    "UseZeroCopyCompleteMultipart": true
+    // default true; set false to force userspace read/write during CompleteMultipartUpload
+    // (escape hatch if a specific kernel/FS combo misbehaves with copy_file_range)
   },
   "SqlStorage": {
     "Provider": "SQLite",
