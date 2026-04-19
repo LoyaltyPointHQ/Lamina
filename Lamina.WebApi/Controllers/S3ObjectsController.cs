@@ -285,6 +285,11 @@ public class S3ObjectsController : S3ControllerBase
         // Check if there's a chunk validator from the authentication middleware
         var chunkValidator = HttpContext.Items["ChunkValidator"] as IChunkSignatureValidator;
 
+        // Guard: if client uses aws-chunked encoding but no validator was created, the streaming
+        // variant is not supported — reject early instead of saving corrupted chunked data.
+        if (chunkValidator == null && Request.Headers["Content-Encoding"].ToString().Contains("aws-chunked"))
+            return S3Error("NotImplemented", "The specified streaming upload method is not supported.", $"/{bucketName}/{key}", 501);
+
         var storeResult = chunkValidator != null
             ? await _objectStorage.PutObjectAsync(bucketName, key, reader, chunkValidator, putRequest, cancellationToken)
             : await _objectStorage.PutObjectAsync(bucketName, key, reader, putRequest, cancellationToken);

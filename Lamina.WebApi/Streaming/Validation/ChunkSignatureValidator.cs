@@ -14,6 +14,7 @@ namespace Lamina.WebApi.Streaming.Validation
         private readonly long _expectedDecodedLength;
         private readonly ILogger _logger;
         private readonly bool _expectsTrailers;
+        private readonly bool _isUnsignedChunks;
         private readonly List<string> _expectedTrailerNames;
         private int _chunkIndex;
         internal string PreviousSignature;
@@ -26,7 +27,8 @@ namespace Lamina.WebApi.Streaming.Validation
             string seedSignature,
             ILogger logger,
             bool expectsTrailers = false,
-            List<string>? expectedTrailerNames = null)
+            List<string>? expectedTrailerNames = null,
+            bool isUnsignedChunks = false)
         {
             SigningKey = signingKey;
             RequestDateTime = requestDateTime;
@@ -34,6 +36,7 @@ namespace Lamina.WebApi.Streaming.Validation
             _expectedDecodedLength = expectedDecodedLength;
             _logger = logger;
             _expectsTrailers = expectsTrailers;
+            _isUnsignedChunks = isUnsignedChunks;
             _expectedTrailerNames = expectedTrailerNames ?? new List<string>();
             _chunkIndex = 0;
             PreviousSignature = seedSignature;
@@ -47,6 +50,12 @@ namespace Lamina.WebApi.Streaming.Validation
 
         public bool ValidateChunk(ReadOnlyMemory<byte> chunkData, string chunkSignature, bool isLastChunk)
         {
+            if (_isUnsignedChunks)
+            {
+                _chunkIndex++;
+                return true;
+            }
+
             try
             {
                 var expectedSignature = SignatureCalculator.CalculateChunkSignature(
@@ -81,6 +90,12 @@ namespace Lamina.WebApi.Streaming.Validation
 
         public async Task<bool> ValidateChunkStreamAsync(Stream chunkStream, long chunkSize, string chunkSignature, bool isLastChunk)
         {
+            if (_isUnsignedChunks)
+            {
+                _chunkIndex++;
+                return true;
+            }
+
             try
             {
                 var expectedSignature = await SignatureCalculator.CalculateChunkSignatureStreamAsync(

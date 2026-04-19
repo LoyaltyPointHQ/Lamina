@@ -66,25 +66,26 @@ namespace Lamina.WebApi.Streaming.Chunked
         public static ChunkHeader? ParseHeaderLine(string headerLine)
         {
             var parts = headerLine.Split(';');
-            if (parts.Length < 2 || !parts[1].StartsWith(ChunkConstants.ChunkSignaturePrefix))
+
+            if (parts.Length >= 2 && parts[1].StartsWith(ChunkConstants.ChunkSignaturePrefix))
             {
-                return null;
+                // Signed format: "SIZE;chunk-signature=SIG"
+                var chunkSizeStr = parts[0];
+                var chunkSignature = parts[1].Substring(ChunkConstants.ChunkSignaturePrefix.Length);
+
+                if (!int.TryParse(chunkSizeStr, ChunkConstants.HexNumberStyle, null, out var chunkSize))
+                    return null;
+
+                return new ChunkHeader { Size = chunkSize, Signature = chunkSignature, RawHeaderLine = headerLine };
             }
 
-            var chunkSizeStr = parts[0];
-            var chunkSignature = parts[1].Substring(ChunkConstants.ChunkSignaturePrefix.Length);
-
-            if (!int.TryParse(chunkSizeStr, ChunkConstants.HexNumberStyle, null, out var chunkSize))
+            if (parts.Length == 1 && int.TryParse(parts[0], ChunkConstants.HexNumberStyle, null, out var unsignedSize))
             {
-                return null;
+                // Unsigned format: "SIZE" (no signature, used with STREAMING-UNSIGNED-PAYLOAD-TRAILER)
+                return new ChunkHeader { Size = unsignedSize, Signature = string.Empty, RawHeaderLine = headerLine };
             }
 
-            return new ChunkHeader
-            {
-                Size = chunkSize,
-                Signature = chunkSignature,
-                RawHeaderLine = headerLine
-            };
+            return null;
         }
 
         /// <summary>

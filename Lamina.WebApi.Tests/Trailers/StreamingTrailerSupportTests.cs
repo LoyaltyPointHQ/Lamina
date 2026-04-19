@@ -423,19 +423,67 @@ namespace Lamina.WebApi.Tests.Streaming.Trailers
                 trailerHeaderString));
         }
 
+        [Fact]
+        public async Task CreateChunkValidator_DetectsUnsignedPayloadTrailer_ReturnsValidatorWithUnsignedMode()
+        {
+            // Arrange
+            var dateTime = new DateTime(2024, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+            var context = new DefaultHttpContext();
+            context.Request.Headers["Host"] = "test.s3.amazonaws.com";
+            context.Request.Headers["x-amz-content-sha256"] = "STREAMING-UNSIGNED-PAYLOAD-TRAILER";
+            context.Request.Headers["x-amz-date"] = "20240101T120000Z";
+            context.Request.Headers["x-amz-decoded-content-length"] = "1024";
+            context.Request.Headers["x-amz-trailer"] = "x-amz-checksum-crc32c";
+            context.Request.Method = "PUT";
+            context.Request.Path = "/test-bucket/test-key";
+
+            var user = new S3User { AccessKeyId = "TESTKEY", SecretAccessKey = "testsecret" };
+
+            var headers = new Dictionary<string, string>
+            {
+                ["host"] = "test.s3.amazonaws.com",
+                ["x-amz-date"] = "20240101T120000Z",
+                ["x-amz-content-sha256"] = "STREAMING-UNSIGNED-PAYLOAD-TRAILER",
+                ["x-amz-decoded-content-length"] = "1024",
+                ["x-amz-trailer"] = "x-amz-checksum-crc32c"
+            };
+            var signedHeaders = "host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-trailer";
+
+            var signature = await CalculateStreamingSignature(
+                "PUT", "/test-bucket/test-key", "", headers, signedHeaders, Array.Empty<byte>(),
+                dateTime, "TESTKEY", "testsecret", payloadHash: "STREAMING-UNSIGNED-PAYLOAD-TRAILER");
+
+            context.Request.Headers["Authorization"] = $"AWS4-HMAC-SHA256 Credential=TESTKEY/20240101/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
+
+            // Act
+            var validator = _streamingService.CreateChunkValidator(context.Request, user);
+
+            // Assert
+            Assert.NotNull(validator);
+            Assert.True(validator.ExpectsTrailers);
+            Assert.Contains("x-amz-checksum-crc32c", validator.ExpectedTrailerNames);
+
+            // Unsigned mode: should accept any chunk signature
+            var chunkData = System.Text.Encoding.UTF8.GetBytes("test");
+            using var stream = new MemoryStream(chunkData);
+            var chunkValid = await validator.ValidateChunkStreamAsync(stream, chunkData.Length, "wrong-sig", false);
+            Assert.True(chunkValid);
+        }
+
         private Task<string> CalculateStreamingSignature(string method, string uri, string queryString,
             Dictionary<string, string> headers, string signedHeaders, byte[] payload,
-            DateTime dateTime, string accessKey, string secretKey, bool isTrailerStreaming = false)
+            DateTime dateTime, string accessKey, string secretKey, bool isTrailerStreaming = false,
+            string? payloadHash = null)
         {
             var dateStamp = dateTime.ToString("yyyyMMdd");
             var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
 
             var canonicalHeaders = GetCanonicalHeaders(headers, signedHeaders);
-            var payloadHash = isTrailerStreaming
+            var resolvedPayloadHash = payloadHash ?? (isTrailerStreaming
                 ? "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"
-                : "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
+                : "STREAMING-AWS4-HMAC-SHA256-PAYLOAD");
 
-            var canonicalRequest = $"{method}\n{EncodeUri(uri)}\n{queryString}\n{canonicalHeaders}\n{signedHeaders}\n{payloadHash}";
+            var canonicalRequest = $"{method}\n{EncodeUri(uri)}\n{queryString}\n{canonicalHeaders}\n{signedHeaders}\n{resolvedPayloadHash}";
 
             var algorithm = "AWS4-HMAC-SHA256";
             var credentialScope = $"{dateStamp}/us-east-1/s3/aws4_request";

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
+using Lamina.WebApi.Authentication;
 using Lamina.WebApi.Services;
 using Lamina.WebApi.Streaming.Validation;
 
@@ -31,10 +32,11 @@ namespace Lamina.WebApi.Streaming
 
             // Check if this is a streaming request
             var contentSha256 = request.Headers["x-amz-content-sha256"].FirstOrDefault();
-            var isTrailerStreaming = contentSha256 == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER";
-            var isRegularStreaming = contentSha256 == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
+            var isTrailerStreaming = contentSha256 == S3AuthenticationDefaults.StreamingPayloadTrailer;
+            var isRegularStreaming = contentSha256 == S3AuthenticationDefaults.StreamingPayload;
+            var isUnsignedTrailerStreaming = contentSha256 == S3AuthenticationDefaults.StreamingUnsignedPayloadTrailer;
 
-            if (!isTrailerStreaming && !isRegularStreaming)
+            if (!isTrailerStreaming && !isRegularStreaming && !isUnsignedTrailerStreaming)
             {
                 return null;
             }
@@ -68,9 +70,9 @@ namespace Lamina.WebApi.Streaming
 
             var requestDateTime = DateTime.ParseExact(xAmzDate, "yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
 
-            // Parse expected trailers if this is a trailer streaming request
+            // Parse expected trailers for trailer streaming variants
             var expectedTrailerNames = new List<string>();
-            if (isTrailerStreaming)
+            if (isTrailerStreaming || isUnsignedTrailerStreaming)
             {
                 var trailerHeader = request.Headers["x-amz-trailer"].FirstOrDefault();
                 if (!string.IsNullOrEmpty(trailerHeader))
@@ -82,8 +84,8 @@ namespace Lamina.WebApi.Streaming
                 }
             }
 
-            // Validate the seed signature by calculating what it should be for the initial request
-            var calculatedSeedSignature = CalculateSeedSignature(request, user.SecretAccessKey, accessKeyId, dateStamp, region, signedHeaders, requestDateTime, isTrailerStreaming);
+            // Validate the seed signature (uses the x-amz-content-sha256 value as payload hash in canonical request)
+            var calculatedSeedSignature = CalculateSeedSignature(request, user.SecretAccessKey, accessKeyId, dateStamp, region, signedHeaders, requestDateTime, isTrailerStreaming, isUnsignedTrailerStreaming);
             if (!string.Equals(calculatedSeedSignature, providedSeedSignature, StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogWarning("Seed signature validation failed. Expected: {Expected}, Got: {Got}", calculatedSeedSignature, providedSeedSignature);
@@ -92,7 +94,6 @@ namespace Lamina.WebApi.Streaming
 
             _logger.LogDebug("Seed signature validation successful: {SeedSignature}", providedSeedSignature);
 
-            // Create signing key for chunk validation
             var signingKey = GetSigningKey(user.SecretAccessKey, dateStamp, region, "s3");
 
             return new ChunkSignatureValidator(
@@ -102,27 +103,27 @@ namespace Lamina.WebApi.Streaming
                 decodedLength,
                 providedSeedSignature,
                 _logger,
-                isTrailerStreaming,
-                expectedTrailerNames);
+                expectsTrailers: isTrailerStreaming || isUnsignedTrailerStreaming,
+                expectedTrailerNames,
+                isUnsignedChunks: isUnsignedTrailerStreaming);
         }
 
-        private string CalculateSeedSignature(HttpRequest request, string secretAccessKey, string accessKeyId, string dateStamp, string region, string signedHeaders, DateTime requestDateTime, bool isTrailerStreaming = false)
+        private string CalculateSeedSignature(HttpRequest request, string secretAccessKey, string accessKeyId, string dateStamp, string region, string signedHeaders, DateTime requestDateTime, bool isTrailerStreaming = false, bool isUnsignedTrailerStreaming = false)
         {
             var amzDate = requestDateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
 
-            // Build canonical request for the initial streaming request
             var method = request.Method;
             var canonicalUri = request.Path.Value ?? "/";
             var canonicalQueryString = GetCanonicalQueryString(request.Query);
             var headers = GetHeaders(request.Headers);
-
-            // Build canonical headers
             var canonicalHeaders = GetCanonicalHeaders(headers, signedHeaders);
 
-            // For streaming requests, the payload hash depends on the streaming type
-            var payloadHash = isTrailerStreaming
-                ? "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"
-                : "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
+            // Payload hash in the canonical request is the x-amz-content-sha256 value itself
+            var payloadHash = isUnsignedTrailerStreaming
+                ? S3AuthenticationDefaults.StreamingUnsignedPayloadTrailer
+                : isTrailerStreaming
+                    ? S3AuthenticationDefaults.StreamingPayloadTrailer
+                    : S3AuthenticationDefaults.StreamingPayload;
 
             // Encode the URI path segments for the canonical request (following AWS spec)
             var encodedUri = EncodeUri(canonicalUri);

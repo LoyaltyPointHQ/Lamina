@@ -102,6 +102,7 @@ public abstract class S3ControllerBase : ControllerBase
                 !(contentSha256 == "UNSIGNED-PAYLOAD" ||
                   contentSha256 == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD" ||
                   contentSha256 == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER" ||
+                  contentSha256 == "STREAMING-UNSIGNED-PAYLOAD-TRAILER" ||
                   System.Text.RegularExpressions.Regex.IsMatch(contentSha256, "^[a-f0-9]{64}$")))
             {
                 return S3Error("InvalidRequest", "Invalid x-amz-content-sha256 header value.", resource, 400);

@@ -79,8 +79,8 @@ namespace Lamina.WebApi.Tests.Controllers
 
             var authHeader = $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateTime:yyyyMMdd}/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
 
-            // Create chunked body with trailers
-            var chunkedBody = CreateChunkedBodyWithTrailers(content, "wdBDMA==");
+            // Create chunked body with trailers (properly signed chunks)
+            var chunkedBody = CreateChunkedBodyWithTrailers(content, "wdBDMA==", signature, dateTime);
 
             var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/{objectKey}")
             {
@@ -102,15 +102,7 @@ namespace Lamina.WebApi.Tests.Controllers
             // For now, we expect the request to be rejected because we haven't updated storage implementations
             // This test verifies that the trailer parsing is working at the authentication/validation level
 
-            // The request should either succeed (if we implement storage support) or fail with a meaningful error
-            // For this test, we're mainly checking that the authentication and parsing layers work
-            Assert.True(response.StatusCode == HttpStatusCode.OK ||
-                       response.StatusCode == HttpStatusCode.InternalServerError ||
-                       response.StatusCode == HttpStatusCode.BadRequest);
-
-            // If it's an error response, it should not be an authentication error (401 or 403)
-            Assert.NotEqual(HttpStatusCode.Unauthorized, response.StatusCode);
-            Assert.NotEqual(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
 
         [Fact]
@@ -154,8 +146,8 @@ namespace Lamina.WebApi.Tests.Controllers
 
             var authHeader = $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateTime:yyyyMMdd}/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
 
-            // Create chunked body with invalid trailer signature
-            var chunkedBody = CreateChunkedBodyWithInvalidTrailerSignature(content);
+            // Create chunked body with valid chunk signatures but invalid trailer signature
+            var chunkedBody = CreateChunkedBodyWithInvalidTrailerSignature(content, signature, dateTime);
 
             var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/{objectKey}")
             {
@@ -178,6 +170,142 @@ namespace Lamina.WebApi.Tests.Controllers
             // This test verifies that the authentication layer can handle trailer streaming requests
             // TODO: When trailer validation enforcement is implemented, change this to expect BadRequest or InternalServerError
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        [Fact]
+        public async Task PutObject_WithUnsignedPayloadTrailer_StoresCorrectContent()
+        {
+            // Arrange
+            var bucketName = $"test-bucket-{Guid.NewGuid()}";
+            var objectKey = "unsigned-trailer-object";
+            var content = "Hello World";
+
+            await CreateBucket(bucketName);
+
+            var dateTime = DateTime.UtcNow;
+            var host = "localhost";
+
+            var headers = new Dictionary<string, string>
+            {
+                ["host"] = host,
+                ["x-amz-date"] = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'"),
+                ["x-amz-content-sha256"] = "STREAMING-UNSIGNED-PAYLOAD-TRAILER",
+                ["x-amz-decoded-content-length"] = content.Length.ToString(),
+                ["x-amz-trailer"] = "x-amz-checksum-crc32c",
+                ["content-encoding"] = "aws-chunked"
+            };
+            var signedHeaders = "content-encoding;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-trailer";
+
+            var signature = await CalculateStreamingSignature(
+                "PUT", $"/{bucketName}/{objectKey}", "", headers, signedHeaders, Array.Empty<byte>(),
+                dateTime, "TESTKEY", "testsecret");
+
+            var authHeader = $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateTime:yyyyMMdd}/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
+
+            // Unsigned chunked body: chunks WITHOUT chunk-signature extensions
+            var chunkedBody = CreateUnsignedChunkedBody(content, "wdBDMA==");
+
+            var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/{objectKey}")
+            {
+                Content = new ByteArrayContent(chunkedBody)
+            };
+            request.Headers.TryAddWithoutValidation("Authorization", authHeader);
+            request.Headers.Add("x-amz-date", headers["x-amz-date"]);
+            request.Headers.Add("x-amz-content-sha256", headers["x-amz-content-sha256"]);
+            request.Headers.Add("x-amz-decoded-content-length", headers["x-amz-decoded-content-length"]);
+            request.Headers.Add("x-amz-trailer", headers["x-amz-trailer"]);
+            request.Content.Headers.Add("Content-Encoding", "aws-chunked");
+
+            // Act
+            var response = await _client.SendAsync(request);
+
+            // Assert
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            // Verify stored content is the original data, NOT the chunked format
+            var getRequest = await CreateSignedGetRequest(bucketName, objectKey, dateTime);
+            var getResponse = await _client.SendAsync(getRequest);
+            Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
+            var storedContent = await getResponse.Content.ReadAsStringAsync();
+            Assert.Equal(content, storedContent);
+        }
+
+        [Fact]
+        public async Task PutObject_WithUnknownStreamingType_Returns501()
+        {
+            // Arrange
+            var bucketName = $"test-bucket-{Guid.NewGuid()}";
+            await CreateBucket(bucketName);
+
+            // Simulate a future unknown streaming variant that somehow bypasses the whitelist
+            // by setting Content-Encoding: aws-chunked without a valid chunk validator setup.
+            // We test this by using UNSIGNED-PAYLOAD (which won't create a validator) + aws-chunked.
+            var dateTime = DateTime.UtcNow;
+            var headers = new Dictionary<string, string>
+            {
+                ["host"] = "localhost",
+                ["x-amz-date"] = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'"),
+                ["x-amz-content-sha256"] = "UNSIGNED-PAYLOAD"
+            };
+            var signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+            var signature = await CalculateSignature("PUT", $"/{bucketName}/guard-test", "", headers, signedHeaders, Array.Empty<byte>(), dateTime, "TESTKEY", "testsecret");
+            var authHeader = $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateTime:yyyyMMdd}/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
+
+            var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/guard-test")
+            {
+                Content = new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes("5\r\nHello\r\n0\r\n\r\n"))
+            };
+            request.Headers.TryAddWithoutValidation("Authorization", authHeader);
+            request.Headers.Add("x-amz-date", headers["x-amz-date"]);
+            request.Headers.Add("x-amz-content-sha256", "UNSIGNED-PAYLOAD");
+            request.Content.Headers.Add("Content-Encoding", "aws-chunked");
+
+            // Act
+            var response = await _client.SendAsync(request);
+
+            // Assert: guard must reject, not save corrupted data
+            Assert.Equal(HttpStatusCode.NotImplemented, response.StatusCode);
+        }
+
+        private byte[] CreateUnsignedChunkedBody(string content, string crc32cChecksum)
+        {
+            var body = new StringBuilder();
+            var contentBytes = Encoding.UTF8.GetBytes(content);
+            var chunkSizeHex = contentBytes.Length.ToString("x");
+
+            // Unsigned format: NO "chunk-signature=" extension on chunk header
+            body.Append($"{chunkSizeHex}\r\n");
+            body.Append($"{content}\r\n");
+
+            // Final chunk (0 bytes), unsigned
+            body.Append("0\r\n");
+            body.Append("\r\n");
+
+            // Trailers with a dummy signature (trailer sig validation not enforced yet)
+            body.Append($"x-amz-checksum-crc32c: {crc32cChecksum}\r\n");
+            body.Append("x-amz-trailer-signature: dummy_trailer_signature\r\n");
+            body.Append("\r\n");
+
+            return Encoding.UTF8.GetBytes(body.ToString());
+        }
+
+        private async Task<HttpRequestMessage> CreateSignedGetRequest(string bucketName, string objectKey, DateTime dateTime)
+        {
+            var headers = new Dictionary<string, string>
+            {
+                ["host"] = "localhost",
+                ["x-amz-date"] = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'"),
+                ["x-amz-content-sha256"] = "UNSIGNED-PAYLOAD"
+            };
+            var signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+            var signature = await CalculateSignature("GET", $"/{bucketName}/{objectKey}", "", headers, signedHeaders, Array.Empty<byte>(), dateTime, "TESTKEY", "testsecret");
+            var authHeader = $"AWS4-HMAC-SHA256 Credential=TESTKEY/{dateTime:yyyyMMdd}/us-east-1/s3/aws4_request, SignedHeaders={signedHeaders}, Signature={signature}";
+
+            var request = new HttpRequestMessage(HttpMethod.Get, $"/{bucketName}/{objectKey}");
+            request.Headers.TryAddWithoutValidation("Authorization", authHeader);
+            request.Headers.Add("x-amz-date", headers["x-amz-date"]);
+            request.Headers.Add("x-amz-content-sha256", "UNSIGNED-PAYLOAD");
+            return request;
         }
 
         private async Task CreateBucket(string bucketName)
@@ -203,52 +331,55 @@ namespace Lamina.WebApi.Tests.Controllers
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
 
-        private byte[] CreateChunkedBodyWithTrailers(string content, string crc32cChecksum)
+        private byte[] CreateChunkedBodyWithTrailers(string content, string crc32cChecksum, string seedSignature, DateTime dateTime)
         {
-            var body = new StringBuilder();
-
-            // Add data chunk
             var contentBytes = Encoding.UTF8.GetBytes(content);
             var chunkSizeHex = contentBytes.Length.ToString("x");
-            var chunkSignature = "dummy_chunk_signature"; // In real implementation, this would be calculated
+            var chunkSig = CalculateChunkSignature(contentBytes, dateTime, seedSignature, "testsecret", false);
+            var finalChunkSig = CalculateChunkSignature(Array.Empty<byte>(), dateTime, chunkSig, "testsecret", true);
 
-            body.Append($"{chunkSizeHex};chunk-signature={chunkSignature}\r\n");
+            var body = new StringBuilder();
+            body.Append($"{chunkSizeHex};chunk-signature={chunkSig}\r\n");
             body.Append($"{content}\r\n");
-
-            // Add final chunk
-            body.Append("0;chunk-signature=dummy_final_signature\r\n");
+            body.Append($"0;chunk-signature={finalChunkSig}\r\n");
             body.Append("\r\n");
-
-            // Add trailers
             body.Append($"x-amz-checksum-crc32c: {crc32cChecksum}\r\n");
             body.Append("x-amz-trailer-signature: dummy_trailer_signature\r\n");
             body.Append("\r\n");
-
             return Encoding.UTF8.GetBytes(body.ToString());
         }
 
-        private byte[] CreateChunkedBodyWithInvalidTrailerSignature(string content)
+        private byte[] CreateChunkedBodyWithInvalidTrailerSignature(string content, string seedSignature, DateTime dateTime)
         {
-            var body = new StringBuilder();
-
-            // Add data chunk
             var contentBytes = Encoding.UTF8.GetBytes(content);
             var chunkSizeHex = contentBytes.Length.ToString("x");
-            var chunkSignature = "dummy_chunk_signature";
+            var chunkSig = CalculateChunkSignature(contentBytes, dateTime, seedSignature, "testsecret", false);
+            var finalChunkSig = CalculateChunkSignature(Array.Empty<byte>(), dateTime, chunkSig, "testsecret", true);
 
-            body.Append($"{chunkSizeHex};chunk-signature={chunkSignature}\r\n");
+            var body = new StringBuilder();
+            body.Append($"{chunkSizeHex};chunk-signature={chunkSig}\r\n");
             body.Append($"{content}\r\n");
-
-            // Add final chunk
-            body.Append("0;chunk-signature=dummy_final_signature\r\n");
+            body.Append($"0;chunk-signature={finalChunkSig}\r\n");
             body.Append("\r\n");
-
-            // Add trailers with invalid signature
             body.Append("x-amz-checksum-crc32c: wdBDMA==\r\n");
             body.Append("x-amz-trailer-signature: definitely_invalid_signature\r\n");
             body.Append("\r\n");
-
             return Encoding.UTF8.GetBytes(body.ToString());
+        }
+
+        private string CalculateChunkSignature(byte[] chunkData, DateTime dateTime, string previousSignature, string secretKey, bool isLastChunk)
+        {
+            var dateStamp = dateTime.ToString("yyyyMMdd");
+            var amzDate = dateTime.ToString("yyyyMMdd'T'HHmmss'Z'");
+
+            var algorithm = "AWS4-HMAC-SHA256-PAYLOAD";
+            var credentialScope = $"{dateStamp}/us-east-1/s3/aws4_request";
+            var emptyStringHash = GetHash(Array.Empty<byte>());
+            var chunkHash = GetHash(chunkData);
+
+            var stringToSign = $"{algorithm}\n{amzDate}\n{credentialScope}\n{previousSignature}\n{emptyStringHash}\n{chunkHash}";
+            var signingKey = GetSigningKey(secretKey, dateStamp, "us-east-1", "s3");
+            return GetHmacSha256Hex(signingKey, stringToSign);
         }
 
         private Task<string> CalculateStreamingSignature(string method, string uri, string queryString,

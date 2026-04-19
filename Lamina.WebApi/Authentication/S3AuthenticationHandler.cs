@@ -64,9 +64,11 @@ namespace Lamina.WebApi.Authentication
                 // Extract bucket name and object key from path
                 var (bucketName, objectKey) = ExtractBucketAndKey();
 
-                // Check if this is a streaming request
+                // Check if this is a streaming request (any STREAMING-* variant)
                 var contentSha256 = Context.Request.Headers[S3AuthenticationDefaults.ContentSha256HeaderName].FirstOrDefault();
-                var isStreamingPayload = contentSha256 == S3AuthenticationDefaults.StreamingPayload;
+                var isStreamingPayload = contentSha256 == S3AuthenticationDefaults.StreamingPayload
+                    || contentSha256 == S3AuthenticationDefaults.StreamingPayloadTrailer
+                    || contentSha256 == S3AuthenticationDefaults.StreamingUnsignedPayloadTrailer;
 
                 // Validate the request using the authentication service
                 var (isValid, user, error) = await _authService.ValidateRequestAsync(

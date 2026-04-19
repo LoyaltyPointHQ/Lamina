@@ -347,6 +347,10 @@ public class S3MultipartController : S3ControllerBase
             // Check if there's a chunk validator from the authentication middleware (for streaming uploads)
             var chunkValidator = HttpContext.Items["ChunkValidator"] as IChunkSignatureValidator;
 
+            // Guard: if client uses aws-chunked encoding but no validator was created, reject early.
+            if (chunkValidator == null && Request.Headers["Content-Encoding"].ToString().Contains("aws-chunked"))
+                return S3Error("NotImplemented", "The specified streaming upload method is not supported.", $"/{bucketName}/{key}", 501);
+
             var partResult = chunkValidator != null
                 ? await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, chunkValidator, checksumRequest, expectedMd5, cancellationToken)
                 : await _multipartStorage.UploadPartAsync(bucketName, key, uploadId, partNumber, reader, checksumRequest, expectedMd5, cancellationToken);

@@ -41,6 +41,17 @@ namespace Lamina.WebApi.Authentication
         public const string StreamingPayload = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
 
         /// <summary>
+        /// Special value for streaming payload with trailers.
+        /// </summary>
+        public const string StreamingPayloadTrailer = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER";
+
+        /// <summary>
+        /// Special value for unsigned streaming payload with trailers (used by AWS SDK v2+).
+        /// Per-chunk signatures are skipped; trailer checksum signature is still validated.
+        /// </summary>
+        public const string StreamingUnsignedPayloadTrailer = "STREAMING-UNSIGNED-PAYLOAD-TRAILER";
+
+        /// <summary>
         /// Special value for unsigned payload.
         /// </summary>
         public const string UnsignedPayload = "UNSIGNED-PAYLOAD";
