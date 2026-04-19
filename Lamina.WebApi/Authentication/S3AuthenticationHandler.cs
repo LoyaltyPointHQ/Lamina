@@ -3,6 +3,7 @@ using System.Text.Encodings.Web;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.WebApi.Streaming;
+using Lamina.WebApi.Streaming.Validation;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
 using S3AuthService = Lamina.WebApi.Services.IAuthenticationService;
@@ -54,7 +55,15 @@ namespace Lamina.WebApi.Authentication
                 anonymousIdentity.AddClaim(new Claim(ClaimTypes.Anonymous, "true"));
                 var anonymousPrincipal = new ClaimsPrincipal(anonymousIdentity);
                 var anonymousTicket = new AuthenticationTicket(anonymousPrincipal, Scheme.Name);
-                
+
+                var contentSha256Anon = Context.Request.Headers[S3AuthenticationDefaults.ContentSha256HeaderName].FirstOrDefault();
+                if (contentSha256Anon == S3AuthenticationDefaults.StreamingUnsignedPayloadTrailer)
+                {
+                    var validator = CreateAnonymousChunkValidator(Context.Request);
+                    if (validator != null)
+                        Context.Items["ChunkValidator"] = validator;
+                }
+
                 Logger.LogDebug("Authentication disabled - creating anonymous principal");
                 return AuthenticateResult.Success(anonymousTicket);
             }
@@ -169,6 +178,19 @@ namespace Lamina.WebApi.Authentication
             var objectKey = pathSegments.Length > 1 ? string.Join("/", pathSegments.Skip(1)) : null;
 
             return (bucketName, objectKey);
+        }
+
+        private static AnonymousChunkValidator? CreateAnonymousChunkValidator(HttpRequest request)
+        {
+            if (!long.TryParse(request.Headers["x-amz-decoded-content-length"].FirstOrDefault(), out var decodedLength))
+                return null;
+
+            var trailerHeader = request.Headers["x-amz-trailer"].ToString();
+            var trailerNames = string.IsNullOrEmpty(trailerHeader)
+                ? new List<string>()
+                : trailerHeader.Split(',').Select(t => t.Trim().ToLowerInvariant()).ToList();
+
+            return new AnonymousChunkValidator(decodedLength, trailerNames);
         }
 
         /// <summary>

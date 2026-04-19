@@ -539,4 +539,79 @@ namespace Lamina.WebApi.Tests.Controllers
             return GetHash(Encoding.UTF8.GetBytes(text));
         }
     }
+
+    public class StreamingTrailerNoAuthIntegrationTests : IClassFixture<WebApplicationFactory<global::Program>>
+    {
+        private readonly HttpClient _client;
+
+        public StreamingTrailerNoAuthIntegrationTests(WebApplicationFactory<global::Program> factory)
+        {
+            var config = new Dictionary<string, string?>
+            {
+                ["Authentication:Enabled"] = "false",
+                ["StorageType"] = "InMemory"
+            };
+
+            _client = factory.WithWebHostBuilder(builder =>
+            {
+                builder.ConfigureAppConfiguration((_, configBuilder) =>
+                    configBuilder.AddInMemoryCollection(config));
+            }).CreateClient();
+        }
+
+        [Fact]
+        public async Task UploadPart_WithUnsignedPayloadTrailer_NoAuth_Succeeds()
+        {
+            // Arrange
+            var bucketName = $"test-bucket-{Guid.NewGuid()}";
+            var objectKey = "unsigned-trailer-part";
+            var content = "Hello World";
+
+            await _client.PutAsync($"/{bucketName}", null);
+
+            var initiateResponse = await _client.PostAsync($"/{bucketName}/{objectKey}?uploads", null);
+            Assert.Equal(HttpStatusCode.OK, initiateResponse.StatusCode);
+            var initiateXml = await initiateResponse.Content.ReadAsStringAsync();
+            var uploadId = System.Xml.Linq.XDocument.Parse(initiateXml)
+                .Descendants()
+                .First(e => e.Name.LocalName == "UploadId")
+                .Value;
+
+            // CRC32C of "Hello World" (known value from ChecksumCalculationTests)
+            var crc32cChecksum = "aR2qLw==";
+            var chunkedBody = CreateUnsignedChunkedBody(content, crc32cChecksum);
+
+            var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/{objectKey}?partNumber=1&uploadId={uploadId}")
+            {
+                Content = new ByteArrayContent(chunkedBody)
+            };
+            request.Headers.Add("x-amz-content-sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER");
+            request.Headers.Add("x-amz-decoded-content-length", Encoding.UTF8.GetByteCount(content).ToString());
+            request.Headers.Add("x-amz-trailer", "x-amz-checksum-crc32c");
+            request.Content.Headers.Add("Content-Encoding", "aws-chunked");
+
+            // Act
+            var response = await _client.SendAsync(request);
+
+            // Assert
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.True(response.Headers.Contains("x-amz-checksum-crc32c"),
+                "Response should echo x-amz-checksum-crc32c header");
+            Assert.Equal(crc32cChecksum, response.Headers.GetValues("x-amz-checksum-crc32c").First());
+        }
+
+        private static byte[] CreateUnsignedChunkedBody(string content, string crc32cChecksum)
+        {
+            var contentBytes = Encoding.UTF8.GetBytes(content);
+            var body = new StringBuilder();
+            body.Append($"{contentBytes.Length:x}\r\n");
+            body.Append($"{content}\r\n");
+            body.Append("0\r\n");
+            body.Append("\r\n");
+            body.Append($"x-amz-checksum-crc32c: {crc32cChecksum}\r\n");
+            body.Append("x-amz-trailer-signature: dummy_trailer_signature\r\n");
+            body.Append("\r\n");
+            return Encoding.UTF8.GetBytes(body.ToString());
+        }
+    }
 }

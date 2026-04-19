@@ -406,6 +406,12 @@ public class ChecksumCalculationTests : IntegrationTestBase
 
         // Assert - Server should validate and accept the correct checksum
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // Assert - Server should echo the checksum back in response (botocore response_checksum_validation)
+        var checksumHeaderName = $"x-amz-checksum-{algorithm.ToLowerInvariant()}";
+        Assert.True(response.Headers.Contains(checksumHeaderName),
+            $"Response should contain {checksumHeaderName} header");
+        Assert.Equal(correctChecksum, response.Headers.GetValues(checksumHeaderName).First());
     }
 
     [Theory]
