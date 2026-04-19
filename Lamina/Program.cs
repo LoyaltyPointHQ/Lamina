@@ -183,31 +183,32 @@ if (metadataStorageType.Equals("Sql", StringComparison.OrdinalIgnoreCase))
     });
 }
 
-// Register data storage services
-if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
+var usesFilesystemData = storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase);
+var usesFilesystemMetadata = metadataStorageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase);
+
+// Shared filesystem-only infrastructure. Needed whenever either the data side or the
+// metadata side is filesystem-backed - the metadata stores (SeparateDirectory / Inline /
+// Xattr) reuse FilesystemStorageSettings and NetworkFileSystemHelper even when the data
+// backend is e.g. InMemory.
+if (usesFilesystemData || usesFilesystemMetadata)
 {
-    // Configure and register FilesystemStorageSettings with IOptions
     builder.Services.Configure<FilesystemStorageSettings>(
         builder.Configuration.GetSection("FilesystemStorage"));
-
-    // Register NetworkFileSystemHelper for CIFS/NFS support
     builder.Services.AddSingleton<NetworkFileSystemHelper>();
+}
 
-    // Register LinuxZeroCopyHelper for kernel-side part assembly (copy_file_range)
+// Register data storage services
+if (usesFilesystemData)
+{
+    // LinuxZeroCopyHelper is only needed by the data side (copy_file_range multipart fast path)
     builder.Services.AddSingleton<LinuxZeroCopyHelper>();
 
-    // Register bucket data services
     builder.Services.AddSingleton<IBucketDataStorage, FilesystemBucketDataStorage>();
-
-    // Register data services for objects
     builder.Services.AddSingleton<IObjectDataStorage, FilesystemObjectDataStorage>();
-
-    // Register data services for multipart uploads
     builder.Services.AddSingleton<IMultipartUploadDataStorage, FilesystemMultipartUploadDataStorage>();
 }
 else
 {
-    // Register in-memory data services
     builder.Services.AddSingleton<IBucketDataStorage, InMemoryBucketDataStorage>();
     builder.Services.AddSingleton<IObjectDataStorage, InMemoryObjectDataStorage>();
     builder.Services.AddSingleton<IMultipartUploadDataStorage, InMemoryMultipartUploadDataStorage>();
@@ -221,7 +222,7 @@ if (metadataStorageType.Equals("Sql", StringComparison.OrdinalIgnoreCase))
     builder.Services.AddScoped<IObjectMetadataStorage, SqlObjectMetadataStorage>();
     builder.Services.AddScoped<IMultipartUploadMetadataStorage, SqlMultipartUploadMetadataStorage>();
 }
-else if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
+else if (usesFilesystemMetadata)
 {
     // Register filesystem metadata services based on metadata mode (caching is built-in)
     var metadataMode = builder.Configuration.GetValue<string>("FilesystemStorage:MetadataMode") ?? "Inline";
@@ -230,10 +231,16 @@ else if (storageType.Equals("Filesystem", StringComparison.OrdinalIgnoreCase))
         builder.Services.AddScoped<IBucketMetadataStorage, XattrBucketMetadataStorage>();
         builder.Services.AddScoped<IObjectMetadataStorage, XattrObjectMetadataStorage>();
     }
-    else
+    else if (metadataMode.Equals("SeparateDirectory", StringComparison.OrdinalIgnoreCase))
     {
         builder.Services.AddScoped<IBucketMetadataStorage, FilesystemBucketMetadataStorage>();
-        builder.Services.AddScoped<IObjectMetadataStorage, FilesystemObjectMetadataStorage>();
+        builder.Services.AddScoped<IObjectMetadataStorage, SeparateDirectoryObjectMetadataStorage>();
+    }
+    else
+    {
+        // Inline mode (default)
+        builder.Services.AddScoped<IBucketMetadataStorage, FilesystemBucketMetadataStorage>();
+        builder.Services.AddScoped<IObjectMetadataStorage, InlineObjectMetadataStorage>();
     }
 
     // Register filesystem multipart upload metadata service

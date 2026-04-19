@@ -62,4 +62,17 @@ public interface IObjectDataStorage
     Task<(long size, DateTime lastModified)?> GetDataInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     Task<ListDataResult> ListDataKeysAsync(string bucketName, BucketType bucketType, string? prefix = null, string? delimiter = null, string? startAfter = null, int maxKeys = 1000, CancellationToken cancellationToken = default);
     Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Recomputes the requested checksum algorithms over the object's current bytes. Returns an
+    /// empty dictionary when the object does not exist or <paramref name="algorithms"/> is empty.
+    /// Metadata storages use this (together with <see cref="ComputeETagAsync"/>) to heal stale
+    /// metadata without reaching into the data backend's filesystem layout themselves.
+    /// Supported algorithm names: CRC32, CRC32C, CRC64NVME, SHA1, SHA256.
+    /// </summary>
+    Task<Dictionary<string, string>> ComputeChecksumsAsync(
+        string bucketName,
+        string key,
+        IEnumerable<string> algorithms,
+        CancellationToken cancellationToken = default);
 }

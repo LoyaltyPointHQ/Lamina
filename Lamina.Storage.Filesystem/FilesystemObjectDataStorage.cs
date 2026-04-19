@@ -645,6 +645,38 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
         return ETagHelper.ComputeETagFromFileAsync(dataPath)!;
     }
 
+    public async Task<Dictionary<string, string>> ComputeChecksumsAsync(
+        string bucketName,
+        string key,
+        IEnumerable<string> algorithms,
+        CancellationToken cancellationToken = default)
+    {
+        var algorithmList = algorithms as List<string> ?? algorithms.ToList();
+        if (algorithmList.Count == 0)
+        {
+            return new Dictionary<string, string>();
+        }
+
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
+        {
+            return new Dictionary<string, string>();
+        }
+
+        var dataPath = GetDataPath(bucketName, key);
+        if (!File.Exists(dataPath))
+        {
+            return new Dictionary<string, string>();
+        }
+
+        var fileName = Path.GetFileName(dataPath);
+        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
+        {
+            return new Dictionary<string, string>();
+        }
+
+        return await ChecksumHelper.ComputeSelectiveChecksumsFromFileAsync(dataPath, algorithmList, cancellationToken);
+    }
+
     private (bool IsValid, string Path) ValidateAndPreparePath(string bucketName, string? prefix)
     {
         if (FilesystemStorageHelper.IsKeyForbidden(bucketName, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))

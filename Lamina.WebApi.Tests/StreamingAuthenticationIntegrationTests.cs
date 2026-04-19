@@ -2,6 +2,8 @@ using System.Net;
 using System.Text;
 using System.Globalization;
 using System.Security.Cryptography;
+using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.InMemory;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -27,7 +29,7 @@ public class StreamingAuthenticationIntegrationTests : IClassFixture<WebApplicat
                 var testProjectPath = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..");
                 var testSettingsPath = Path.Combine(testProjectPath, "Lamina.WebApi.Tests", "appsettings.Test.json");
                 config.AddJsonFile(testSettingsPath, optional: false, reloadOnChange: false);
-                
+
                 // Then overlay authentication settings
                 var authConfig = new Dictionary<string, string?>
                 {
@@ -40,8 +42,18 @@ public class StreamingAuthenticationIntegrationTests : IClassFixture<WebApplicat
                     ["Authentication:Users:0:BucketPermissions:0:BucketName"] = "*",
                     ["Authentication:Users:0:BucketPermissions:0:Permissions:0"] = "*"
                 };
-                
+
                 config.AddInMemoryCollection(authConfig);
+            });
+            builder.ConfigureServices(services =>
+            {
+                // Program.cs reads StorageType from default appsettings.json (Filesystem) and
+                // registers filesystem metadata stores before ConfigureAppConfiguration overrides
+                // the config. Replace them with InMemory variants so tests are independent from
+                // the /data layout.
+                services.AddSingleton<IObjectMetadataStorage, InMemoryObjectMetadataStorage>();
+                services.AddSingleton<IBucketMetadataStorage, InMemoryBucketMetadataStorage>();
+                services.AddSingleton<IMultipartUploadMetadataStorage, InMemoryMultipartUploadMetadataStorage>();
             });
         });
         _client = _factory.CreateClient();

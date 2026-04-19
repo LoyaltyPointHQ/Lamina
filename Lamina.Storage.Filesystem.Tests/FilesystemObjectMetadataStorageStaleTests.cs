@@ -1,4 +1,5 @@
 using Lamina.Core.Models;
+using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Configuration;
 using Lamina.Storage.Filesystem;
@@ -13,15 +14,15 @@ using Moq;
 namespace Lamina.Storage.Filesystem.Tests;
 
 /// <summary>
-/// Tests for stale metadata detection and selective checksum recomputation
-/// in FilesystemObjectMetadataStorage.
+/// Tests for stale metadata detection and selective checksum recomputation in the
+/// SeparateDirectory filesystem metadata storage.
 /// </summary>
 public class FilesystemObjectMetadataStorageStaleTests : IDisposable
 {
     private readonly string _testDirectory;
     private readonly string _dataDirectory;
     private readonly string _metadataDirectory;
-    private readonly FilesystemObjectMetadataStorage _storage;
+    private readonly SeparateDirectoryObjectMetadataStorage _storage;
     private readonly FilesystemObjectDataStorage _dataStorage;
     private readonly Mock<IBucketStorageFacade> _bucketStorageMock;
 
@@ -46,29 +47,26 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
             .ReturnsAsync(true);
 
         var lockManager = new InMemoryLockManager();
-        var networkHelper = new NetworkFileSystemHelper(Options.Create(settings), Mock.Of<ILogger<NetworkFileSystemHelper>>());
-        var metadataLogger = Mock.Of<ILogger<FilesystemObjectMetadataStorage>>();
+        var networkHelper = new NetworkFileSystemHelper(Options.Create(settings), NullLogger<NetworkFileSystemHelper>.Instance);
 
         var cacheSettings = new MetadataCacheSettings { Enabled = false };
-
-        _storage = new FilesystemObjectMetadataStorage(
-            Options.Create(settings),
-            Options.Create(cacheSettings),
-            _bucketStorageMock.Object,
-            lockManager,
-            networkHelper,
-            metadataLogger,
-            null);
-
-        var dataLogger = Mock.Of<ILogger<FilesystemObjectDataStorage>>();
-        var chunkedDataParser = Mock.Of<Lamina.Core.Streaming.IChunkedDataParser>();
 
         _dataStorage = new FilesystemObjectDataStorage(
             Options.Create(settings),
             networkHelper,
             new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance),
-            dataLogger,
-            chunkedDataParser);
+            NullLogger<FilesystemObjectDataStorage>.Instance,
+            Mock.Of<IChunkedDataParser>());
+
+        _storage = new SeparateDirectoryObjectMetadataStorage(
+            Options.Create(settings),
+            Options.Create(cacheSettings),
+            _bucketStorageMock.Object,
+            _dataStorage,
+            lockManager,
+            networkHelper,
+            NullLogger<SeparateDirectoryObjectMetadataStorage>.Instance,
+            null);
     }
 
     [Fact]

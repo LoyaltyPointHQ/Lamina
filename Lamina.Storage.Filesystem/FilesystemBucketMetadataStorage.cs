@@ -113,13 +113,13 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
             return null;
         }
 
-        var bucketDataPath = Path.Combine(_dataDirectory, bucketName);
-        var dirInfo = new DirectoryInfo(bucketDataPath);
+        var creationDate = await _dataStorage.GetBucketCreationTimeAsync(bucketName, cancellationToken)
+            ?? DateTime.UtcNow;
 
         var bucket = new Bucket
         {
             Name = bucketName,
-            CreationDate = dirInfo.CreationTimeUtc,
+            CreationDate = creationDate,
             Type = request.Type ?? BucketType.GeneralPurpose,
             StorageClass = request.StorageClass,
             Tags = new Dictionary<string, string>(),
@@ -174,13 +174,13 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
             return null;
         }
 
-        var bucketDataPath = Path.Combine(_dataDirectory, bucketName);
-        var dirInfo = new DirectoryInfo(bucketDataPath);
+        var creationDate = await _dataStorage.GetBucketCreationTimeAsync(bucketName, cancellationToken)
+            ?? DateTime.UtcNow;
 
         var bucket = new Bucket
         {
             Name = bucketName,
-            CreationDate = dirInfo.CreationTimeUtc,
+            CreationDate = creationDate,
             Type = BucketType.GeneralPurpose,
             Tags = new Dictionary<string, string>()
         };

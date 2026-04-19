@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
 using Microsoft.Extensions.Logging;
@@ -13,6 +14,7 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
 {
     private readonly string _dataDirectory;
     private readonly IBucketStorageFacade _bucketStorage;
+    private readonly IObjectDataStorage _dataStorage;
     private readonly XattrHelper _xattrHelper;
     private readonly ILogger<XattrObjectMetadataStorage> _logger;
 
@@ -22,16 +24,21 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
     private const string TagPrefix = "tag";
     private const string OwnerIdAttributeName = "owner-id";
     private const string OwnerDisplayNameAttributeName = "owner-display-name";
+    // Data mtime snapshotted when metadata was last written. A later mtime on the data means
+    // the file was modified outside the API (data-first) and the ETag is no longer trustworthy.
+    private const string MetadataTimestampAttributeName = "metadata-ts";
 
     public XattrObjectMetadataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
         IBucketStorageFacade bucketStorage,
+        IObjectDataStorage dataStorage,
         ILogger<XattrObjectMetadataStorage> logger,
         ILoggerFactory loggerFactory)
     {
         var settings = settingsOptions.Value;
         _dataDirectory = settings.DataDirectory;
         _bucketStorage = bucketStorage;
+        _dataStorage = dataStorage;
         _logger = logger;
 
         _xattrHelper = new XattrHelper(settings.XattrPrefix, loggerFactory.CreateLogger<XattrHelper>());
@@ -51,12 +58,15 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
             return null;
         }
 
-        var dataPath = GetDataPath(bucketName, key);
-        if (!File.Exists(dataPath))
+        var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+        if (dataInfo == null)
         {
-            _logger.LogError("Cannot store metadata for non-existent data file: {DataPath}", dataPath);
+            _logger.LogError("Cannot store metadata for non-existent data: {Bucket}/{Key}", bucketName, key);
             return null;
         }
+
+        // xattr physically lives on the data file - we still need the path to set attributes.
+        var dataPath = GetDataPath(bucketName, key);
 
         try
         {
@@ -66,6 +76,10 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
                 _logger.LogError("Failed to store ETag attribute for {Key} in bucket {BucketName}", key, bucketName);
                 return null;
             }
+
+            // Snapshot of the data mtime at write time; used later to detect external modifications.
+            _xattrHelper.SetAttribute(dataPath, MetadataTimestampAttributeName,
+                dataInfo.Value.lastModified.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
 
             // Store Content-Type if provided
             var contentType = request?.ContentType ?? "application/octet-stream";
@@ -96,15 +110,12 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
                 StoreTags(dataPath, request.Tags, key, bucketName);
             }
 
-            // Get the actual last modified time from the filesystem
-            var fileInfo = new FileInfo(dataPath);
-
             var s3Object = new S3Object
             {
                 Key = key,
                 BucketName = bucketName,
                 Size = size,
-                LastModified = fileInfo.LastWriteTimeUtc,
+                LastModified = lastModified ?? dataInfo.Value.lastModified,
                 ETag = etag,
                 ContentType = contentType,
                 Metadata = request?.Metadata ?? new Dictionary<string, string>(),
@@ -137,97 +148,111 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
         }
     }
 
-    public Task<S3ObjectInfo?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public async Task<S3ObjectInfo?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        var dataPath = GetDataPath(bucketName, key);
-        if (!File.Exists(dataPath))
+        var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+        if (dataInfo == null)
         {
-            return Task.FromResult<S3ObjectInfo?>(null);
+            return null;
         }
+
+        var dataPath = GetDataPath(bucketName, key);
 
         try
         {
-            // Get ETag from xattr
             var etag = _xattrHelper.GetAttribute(dataPath, ETagAttributeName);
             if (string.IsNullOrEmpty(etag))
             {
-                // No metadata stored in xattr
-                return Task.FromResult<S3ObjectInfo?>(null);
+                return null;
             }
 
-            // Get Content-Type from xattr
-            var contentType = _xattrHelper.GetAttribute(dataPath, ContentTypeAttributeName) ?? "application/octet-stream";
+            // Staleness detection: compare the mtime snapshotted when metadata was last written
+            // against the current data mtime. If data is newer, the file was modified outside the
+            // API (data-first) and ETag must be recomputed.
+            var recordedTsRaw = _xattrHelper.GetAttribute(dataPath, MetadataTimestampAttributeName);
+            if (!string.IsNullOrEmpty(recordedTsRaw)
+                && DateTime.TryParse(recordedTsRaw, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out var recordedTs)
+                && dataInfo.Value.lastModified > recordedTs
+                && !ETagHelper.IsMultipartETag(etag))
+            {
+                _logger.LogInformation("Detected stale xattr metadata for {Key} in bucket {BucketName} (data mtime: {DataTime}, recorded: {RecordedTime}), recomputing ETag",
+                    key, bucketName, dataInfo.Value.lastModified, recordedTs);
 
-            // Get owner information from xattr
+                var recomputed = await _dataStorage.ComputeETagAsync(bucketName, key, cancellationToken);
+                if (!string.IsNullOrEmpty(recomputed))
+                {
+                    etag = recomputed;
+                    // Refresh the snapshot so subsequent reads don't re-recompute.
+                    _xattrHelper.SetAttribute(dataPath, ETagAttributeName, etag);
+                    _xattrHelper.SetAttribute(dataPath, MetadataTimestampAttributeName,
+                        dataInfo.Value.lastModified.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+                }
+            }
+
+            var contentType = _xattrHelper.GetAttribute(dataPath, ContentTypeAttributeName) ?? "application/octet-stream";
             var ownerId = _xattrHelper.GetAttribute(dataPath, OwnerIdAttributeName);
             var ownerDisplayName = _xattrHelper.GetAttribute(dataPath, OwnerDisplayNameAttributeName);
-
-            // Get user metadata
             var userMetadata = GetUserMetadata(dataPath);
-
-            // Get tags
             var tags = GetTags(dataPath);
 
-            // Always get size and last modified from filesystem
-            var fileInfo = new FileInfo(dataPath);
-
-            return Task.FromResult<S3ObjectInfo?>(new S3ObjectInfo
+            return new S3ObjectInfo
             {
                 Key = key,
-                LastModified = fileInfo.LastWriteTimeUtc,
+                LastModified = dataInfo.Value.lastModified,
                 ETag = etag,
-                Size = fileInfo.Length,
+                Size = dataInfo.Value.size,
                 ContentType = contentType,
                 Metadata = userMetadata,
                 Tags = tags,
                 OwnerId = ownerId,
                 OwnerDisplayName = ownerDisplayName
-            });
+            };
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get metadata for {Key} in bucket {BucketName}", key, bucketName);
-            return Task.FromResult<S3ObjectInfo?>(null);
+            return null;
         }
     }
 
-    public Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        var dataPath = GetDataPath(bucketName, key);
-        if (!File.Exists(dataPath))
+        if (!await _dataStorage.DataExistsAsync(bucketName, key, cancellationToken))
         {
-            return Task.FromResult(true); // Consider it success if file doesn't exist
+            return true; // Consider it success if file doesn't exist
         }
 
+        var dataPath = GetDataPath(bucketName, key);
         try
         {
-            return Task.FromResult(_xattrHelper.RemoveAllAttributes(dataPath));
+            return _xattrHelper.RemoveAllAttributes(dataPath);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to delete metadata for {Key} in bucket {BucketName}", key, bucketName);
-            return Task.FromResult(false);
+            return false;
         }
     }
 
-    public Task<bool> MetadataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public async Task<bool> MetadataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        var dataPath = GetDataPath(bucketName, key);
-        if (!File.Exists(dataPath))
+        if (!await _dataStorage.DataExistsAsync(bucketName, key, cancellationToken))
         {
-            return Task.FromResult(false);
+            return false;
         }
 
+        var dataPath = GetDataPath(bucketName, key);
         try
         {
             // Check if ETag attribute exists (this indicates we have metadata)
             var etag = _xattrHelper.GetAttribute(dataPath, ETagAttributeName);
-            return Task.FromResult(!string.IsNullOrEmpty(etag));
+            return !string.IsNullOrEmpty(etag);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to check metadata existence for {Key} in bucket {BucketName}", key, bucketName);
-            return Task.FromResult(false);
+            return false;
         }
     }
 
@@ -345,46 +370,49 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
         return Path.Combine(_dataDirectory, bucketName, key);
     }
 
-    public Task<Dictionary<string, string>?> GetObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public async Task<Dictionary<string, string>?> GetObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        var dataPath = GetDataPath(bucketName, key);
-        if (!File.Exists(dataPath))
+        if (!await _dataStorage.DataExistsAsync(bucketName, key, cancellationToken))
         {
-            return Task.FromResult<Dictionary<string, string>?>(null);
+            return null;
         }
 
+        var dataPath = GetDataPath(bucketName, key);
         var etag = _xattrHelper.GetAttribute(dataPath, ETagAttributeName);
         if (string.IsNullOrEmpty(etag))
         {
-            return Task.FromResult<Dictionary<string, string>?>(null);
+            return null;
         }
 
-        return Task.FromResult<Dictionary<string, string>?>(GetTags(dataPath));
+        return GetTags(dataPath);
     }
 
-    public Task<bool> SetObjectTagsAsync(string bucketName, string key, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
+    public async Task<bool> SetObjectTagsAsync(string bucketName, string key, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
     {
-        var dataPath = GetDataPath(bucketName, key);
-        if (!File.Exists(dataPath))
+        if (!await _dataStorage.DataExistsAsync(bucketName, key, cancellationToken))
         {
-            return Task.FromResult(false);
+            return false;
         }
 
+        var dataPath = GetDataPath(bucketName, key);
         var etag = _xattrHelper.GetAttribute(dataPath, ETagAttributeName);
         if (string.IsNullOrEmpty(etag))
         {
-            return Task.FromResult(false);
+            return false;
         }
 
         RemoveAllTags(dataPath);
         StoreTags(dataPath, tags, key, bucketName);
-        return Task.FromResult(true);
+        return true;
     }
 
     public Task<bool> DeleteObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         return SetObjectTagsAsync(bucketName, key, new Dictionary<string, string>(), cancellationToken);
     }
+
+    // dataPath is still needed: xattr operations physically act on the data file. The
+    // _dataDirectory dependency is therefore inherent to Xattr mode (see IRequiresDataFileForMetadata).
 
     private void StoreTags(string dataPath, Dictionary<string, string> tags, string key, string bucketName)
     {

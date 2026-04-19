@@ -67,7 +67,7 @@ public class SqlObjectMetadataStorageStaleTests : IDisposable
     }
 
     [Fact]
-    public async Task GetMetadataAsync_StaleMetadata_RecomputesETagAndClearsChecksums()
+    public async Task GetMetadataAsync_StaleMetadata_RecomputesETagAndSelectiveChecksums()
     {
         // Arrange
         var bucketName = "test-bucket";
@@ -92,18 +92,52 @@ public class SqlObjectMetadataStorageStaleTests : IDisposable
         _dataStorageMock.Setup(x => x.ComputeETagAsync(bucketName, key, It.IsAny<CancellationToken>()))
             .ReturnsAsync(newEtag);
 
+        // Setup mock: recomputed checksums (only the ones originally stored)
+        _dataStorageMock.Setup(x => x.ComputeChecksumsAsync(
+                bucketName, key,
+                It.Is<IEnumerable<string>>(algs => algs.Contains("CRC32") && algs.Contains("SHA256") && !algs.Contains("SHA1")),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<string, string>
+            {
+                { "CRC32", "new-crc32" },
+                { "SHA256", "new-sha256" }
+            });
+
         // Act
         var result = await _storage.GetMetadataAsync(bucketName, key);
 
         // Assert
         Assert.NotNull(result);
         Assert.Equal(newEtag, result.ETag); // ETag was recomputed
-        Assert.Null(result.ChecksumCRC32); // Checksums cleared
-        Assert.Null(result.ChecksumSHA256); // Checksums cleared
-        Assert.Null(result.ChecksumCRC32C);
+        Assert.Equal("new-crc32", result.ChecksumCRC32);   // CRC32 was recomputed (was in original)
+        Assert.Equal("new-sha256", result.ChecksumSHA256); // SHA256 was recomputed (was in original)
+        Assert.Null(result.ChecksumCRC32C);                 // Not in original, stays null
+        Assert.Null(result.ChecksumSHA1);                   // Not in original, stays null
 
-        // Verify ETag recomputation was called
         _dataStorageMock.Verify(x => x.ComputeETagAsync(bucketName, key, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetMetadataAsync_StaleMetadataWithMultipartETag_PreservesETag()
+    {
+        // Multipart ETag ("{hex32}-{N}") is a function of part MD5s, not derivable from merged
+        // file. Recomputing from file would silently corrupt it. Must be preserved verbatim.
+        var bucketName = "test-bucket";
+        var key = "multipart-key";
+        const string multipartEtag = "deadbeefdeadbeefdeadbeefdeadbeef-5";
+        var size = 1024L;
+
+        await _storage.StoreMetadataAsync(bucketName, key, multipartEtag, size, null, null);
+
+        _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((size, DateTime.UtcNow.AddMinutes(10)));
+
+        var result = await _storage.GetMetadataAsync(bucketName, key);
+
+        Assert.NotNull(result);
+        Assert.Equal(multipartEtag, result.ETag);
+        // ComputeETagAsync must NOT be called for multipart ETags
+        _dataStorageMock.Verify(x => x.ComputeETagAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -185,33 +219,24 @@ public class SqlObjectMetadataStorageStaleTests : IDisposable
     }
 
     [Fact]
-    public async Task GetMetadataAsync_StaleMetadataWithChecksums_LogsClearingChecksums()
+    public async Task GetMetadataAsync_StaleMetadataWithoutChecksums_DoesNotCallComputeChecksums()
     {
-        // Arrange
+        // When original metadata had no checksums, nothing to recompute - avoid the read.
         var bucketName = "test-bucket";
         var key = "test-key";
-        var checksums = new Dictionary<string, string> { { "CRC32", "value" } };
 
-        await _storage.StoreMetadataAsync(bucketName, key, "etag", 1024L, null, checksums);
+        await _storage.StoreMetadataAsync(bucketName, key, "etag", 1024L, null, null);
 
-        // Setup mocks for stale metadata
         _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
             .ReturnsAsync((1024L, DateTime.UtcNow.AddMinutes(10)));
         _dataStorageMock.Setup(x => x.ComputeETagAsync(bucketName, key, It.IsAny<CancellationToken>()))
             .ReturnsAsync("new-etag");
 
-        // Act
         await _storage.GetMetadataAsync(bucketName, key);
 
-        // Assert - verify logging about clearing checksums
-        _loggerMock.Verify(
-            x => x.Log(
-                LogLevel.Information,
-                It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Clearing checksums")),
-                It.IsAny<Exception>(),
-                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-            Times.Once);
+        _dataStorageMock.Verify(
+            x => x.ComputeChecksumsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     public void Dispose()

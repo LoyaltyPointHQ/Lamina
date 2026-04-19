@@ -26,8 +26,6 @@ public static class ChecksumHelper
             return new Dictionary<string, string>();
         }
 
-        using var calculator = new StreamingChecksumCalculator(algorithmList);
-
         await using var fileStream = new FileStream(
             filePath,
             FileMode.Open,
@@ -36,13 +34,30 @@ public static class ChecksumHelper
             bufferSize: 81920,
             useAsync: true);
 
+        return await ComputeSelectiveChecksumsFromStreamAsync(fileStream, algorithmList, cancellationToken);
+    }
+
+    /// <summary>
+    /// Computes only the specified checksums from a stream in a single pass.
+    /// </summary>
+    public static async Task<Dictionary<string, string>> ComputeSelectiveChecksumsFromStreamAsync(
+        Stream stream,
+        IEnumerable<string> algorithms,
+        CancellationToken cancellationToken = default)
+    {
+        var algorithmList = algorithms as List<string> ?? algorithms.ToList();
+        if (algorithmList.Count == 0)
+        {
+            return new Dictionary<string, string>();
+        }
+
+        using var calculator = new StreamingChecksumCalculator(algorithmList);
+
         var buffer = ArrayPool<byte>.Shared.Rent(81920);
         try
         {
             int bytesRead;
-
-            // Single pass through the file, computing all requested checksums
-            while ((bytesRead = await fileStream.ReadAsync(buffer.AsMemory(0, 81920), cancellationToken)) > 0)
+            while ((bytesRead = await stream.ReadAsync(buffer.AsMemory(0, 81920), cancellationToken)) > 0)
             {
                 calculator.Append(buffer.AsSpan(0, bytesRead));
             }

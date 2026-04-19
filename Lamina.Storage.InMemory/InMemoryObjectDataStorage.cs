@@ -323,5 +323,26 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         return Task.FromResult<string?>(null);
     }
 
+    public async Task<Dictionary<string, string>> ComputeChecksumsAsync(
+        string bucketName,
+        string key,
+        IEnumerable<string> algorithms,
+        CancellationToken cancellationToken = default)
+    {
+        var algorithmList = algorithms as List<string> ?? algorithms.ToList();
+        if (algorithmList.Count == 0)
+        {
+            return new Dictionary<string, string>();
+        }
+
+        if (!_data.TryGetValue(bucketName, out var bucketData) || !bucketData.TryGetValue(key, out var stored))
+        {
+            return new Dictionary<string, string>();
+        }
+
+        using var memoryStream = new MemoryStream(stored.Data, writable: false);
+        return await ChecksumHelper.ComputeSelectiveChecksumsFromStreamAsync(memoryStream, algorithmList, cancellationToken);
+    }
+
     private static string GetPendingKey(string bucketName, string key) => $"{bucketName}/{key}";
 }

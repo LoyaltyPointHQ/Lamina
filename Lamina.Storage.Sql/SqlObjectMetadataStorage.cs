@@ -194,9 +194,11 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
     }
 
     /// <summary>
-    /// Recomputes ETag for stale metadata and clears checksums.
-    /// For SQL storage, we only recompute the ETag and set checksums to null,
-    /// since we don't have direct file path access and checksums are expensive.
+    /// Recomputes ETag and previously-stored checksums for stale metadata by going through
+    /// <see cref="IObjectDataStorage"/>. Only algorithms that were originally present are
+    /// recomputed - absent checksums stay absent. Multipart ETags are preserved verbatim
+    /// (their value is a function of individual part MD5s, not reconstructible from the
+    /// merged bytes).
     /// </summary>
     private async Task<(string etag, Dictionary<string, string> checksums)> RecomputeStaleMetadataAsync(
         ObjectEntity entity,
@@ -204,31 +206,39 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
         string key,
         CancellationToken cancellationToken)
     {
-        // Always recompute ETag (it's relatively cheap and essential)
-        var etag = await _dataStorage.ComputeETagAsync(bucketName, key, cancellationToken);
-        if (etag == null)
+        var algorithmsToCompute = new List<string>();
+        if (!string.IsNullOrEmpty(entity.ChecksumCRC32))
+            algorithmsToCompute.Add("CRC32");
+        if (!string.IsNullOrEmpty(entity.ChecksumCRC32C))
+            algorithmsToCompute.Add("CRC32C");
+        if (!string.IsNullOrEmpty(entity.ChecksumCRC64NVME))
+            algorithmsToCompute.Add("CRC64NVME");
+        if (!string.IsNullOrEmpty(entity.ChecksumSHA1))
+            algorithmsToCompute.Add("SHA1");
+        if (!string.IsNullOrEmpty(entity.ChecksumSHA256))
+            algorithmsToCompute.Add("SHA256");
+
+        string etag;
+        if (ETagHelper.IsMultipartETag(entity.ETag))
         {
-            // If we can't compute ETag, return the existing one
-            _logger.LogWarning("Failed to recompute ETag for {Key} in bucket {BucketName}, using cached value", key, bucketName);
-            return (entity.ETag, new Dictionary<string, string>());
+            etag = entity.ETag;
+        }
+        else
+        {
+            var computed = await _dataStorage.ComputeETagAsync(bucketName, key, cancellationToken);
+            if (computed == null)
+            {
+                _logger.LogWarning("Failed to recompute ETag for {Key} in bucket {BucketName}, using cached value", key, bucketName);
+                return (entity.ETag, new Dictionary<string, string>());
+            }
+            etag = computed;
         }
 
-        // For SQL storage, we clear checksums when metadata is stale
-        // Checksums are expensive to recompute and we don't have easy file path access
-        // They will be null, indicating they need to be revalidated if required
-        var hadChecksums = !string.IsNullOrEmpty(entity.ChecksumCRC32) ||
-                          !string.IsNullOrEmpty(entity.ChecksumCRC32C) ||
-                          !string.IsNullOrEmpty(entity.ChecksumCRC64NVME) ||
-                          !string.IsNullOrEmpty(entity.ChecksumSHA1) ||
-                          !string.IsNullOrEmpty(entity.ChecksumSHA256);
+        var checksums = algorithmsToCompute.Count > 0
+            ? await _dataStorage.ComputeChecksumsAsync(bucketName, key, algorithmsToCompute, cancellationToken)
+            : new Dictionary<string, string>();
 
-        if (hadChecksums)
-        {
-            _logger.LogInformation("Clearing checksums for stale metadata of {Key} in bucket {BucketName} - checksums would need to be recalculated if needed", key, bucketName);
-        }
-
-        // Return empty dictionary which will cause all checksums to be set to null
-        return (etag, new Dictionary<string, string>());
+        return (etag, checksums);
     }
 
     public async Task<Dictionary<string, string>?> GetObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)

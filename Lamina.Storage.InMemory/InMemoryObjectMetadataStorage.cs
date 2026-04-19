@@ -2,15 +2,27 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Helpers;
 
 namespace Lamina.Storage.InMemory;
 
 public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, S3Object>> _metadata = new();
+    private readonly IObjectDataStorage? _dataStorage;
 
+    /// <summary>
+    /// Parameterless constructor kept for tests that exercise metadata in isolation. When no
+    /// data storage is injected, staleness detection against an external data backend is
+    /// disabled - metadata is assumed to be the source of truth.
+    /// </summary>
     public InMemoryObjectMetadataStorage()
     {
+    }
+
+    public InMemoryObjectMetadataStorage(IObjectDataStorage dataStorage)
+    {
+        _dataStorage = dataStorage;
     }
 
     public Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, DateTime? lastModified = null, CancellationToken cancellationToken = default)
@@ -60,18 +72,50 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
         return Task.FromResult<S3Object?>(s3Object);
     }
 
-    public Task<S3ObjectInfo?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public async Task<S3ObjectInfo?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         if (!_metadata.TryGetValue(bucketName, out var bucketMetadata) ||
             !bucketMetadata.TryGetValue(key, out var s3Object))
         {
-            return Task.FromResult<S3ObjectInfo?>(null);
+            return null;
         }
 
-        // InMemory storage doesn't support external data modifications,
-        // so no staleness check is needed (unlike filesystem storage).
+        // If a data backend is wired in, honour data-first: verify data exists and check
+        // whether it has moved past the timestamp we stored metadata for. Useful for hybrid
+        // setups (e.g. InMemory metadata + Filesystem data) where the data file can be
+        // modified outside the API.
+        if (_dataStorage != null)
+        {
+            var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+            if (dataInfo == null)
+            {
+                return null; // orphaned metadata
+            }
 
-        return Task.FromResult<S3ObjectInfo?>(new S3ObjectInfo
+            if (dataInfo.Value.lastModified > s3Object.LastModified)
+            {
+                var algorithms = CollectStoredChecksumAlgorithms(s3Object);
+
+                var etag = ETagHelper.IsMultipartETag(s3Object.ETag)
+                    ? s3Object.ETag
+                    : (await _dataStorage.ComputeETagAsync(bucketName, key, cancellationToken)) ?? s3Object.ETag;
+
+                var checksums = algorithms.Count > 0
+                    ? await _dataStorage.ComputeChecksumsAsync(bucketName, key, algorithms, cancellationToken)
+                    : new Dictionary<string, string>();
+
+                s3Object.ETag = etag;
+                s3Object.Size = dataInfo.Value.size;
+                s3Object.LastModified = dataInfo.Value.lastModified;
+                s3Object.ChecksumCRC32 = checksums.GetValueOrDefault("CRC32");
+                s3Object.ChecksumCRC32C = checksums.GetValueOrDefault("CRC32C");
+                s3Object.ChecksumCRC64NVME = checksums.GetValueOrDefault("CRC64NVME");
+                s3Object.ChecksumSHA1 = checksums.GetValueOrDefault("SHA1");
+                s3Object.ChecksumSHA256 = checksums.GetValueOrDefault("SHA256");
+            }
+        }
+
+        return new S3ObjectInfo
         {
             Key = s3Object.Key,
             LastModified = s3Object.LastModified,
@@ -87,7 +131,18 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
             ChecksumCRC64NVME = s3Object.ChecksumCRC64NVME,
             ChecksumSHA1 = s3Object.ChecksumSHA1,
             ChecksumSHA256 = s3Object.ChecksumSHA256
-        });
+        };
+    }
+
+    private static List<string> CollectStoredChecksumAlgorithms(S3Object s3Object)
+    {
+        var list = new List<string>();
+        if (!string.IsNullOrEmpty(s3Object.ChecksumCRC32)) list.Add("CRC32");
+        if (!string.IsNullOrEmpty(s3Object.ChecksumCRC32C)) list.Add("CRC32C");
+        if (!string.IsNullOrEmpty(s3Object.ChecksumCRC64NVME)) list.Add("CRC64NVME");
+        if (!string.IsNullOrEmpty(s3Object.ChecksumSHA1)) list.Add("SHA1");
+        if (!string.IsNullOrEmpty(s3Object.ChecksumSHA256)) list.Add("SHA256");
+        return list;
     }
 
     public Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)

@@ -99,6 +99,22 @@ public class FilesystemBucketDataStorage : IBucketDataStorage
         return Task.FromResult(Directory.Exists(bucketPath));
     }
 
+    public Task<DateTime?> GetBucketCreationTimeAsync(string bucketName, CancellationToken cancellationToken = default)
+    {
+        if (_metadataMode == MetadataStorageMode.Inline && bucketName == _inlineMetadataDirectoryName)
+        {
+            return Task.FromResult<DateTime?>(null);
+        }
+
+        var bucketPath = Path.Combine(_dataDirectory, bucketName);
+        if (!Directory.Exists(bucketPath))
+        {
+            return Task.FromResult<DateTime?>(null);
+        }
+
+        return Task.FromResult<DateTime?>(new DirectoryInfo(bucketPath).CreationTimeUtc);
+    }
+
     public Task<List<string>> ListBucketNamesAsync(CancellationToken cancellationToken = default)
     {
         try

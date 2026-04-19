@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -11,6 +12,8 @@ using Xunit;
 using Xunit.Abstractions;
 using System.Security.Cryptography;
 using Lamina.Core.Models;
+using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.InMemory;
 using Lamina.WebApi.Services;
 
 namespace Lamina.WebApi.Tests.Services
@@ -51,6 +54,12 @@ namespace Lamina.WebApi.Tests.Services
                     };
                     
                     config.AddInMemoryCollection(testConfig);
+                });
+                builder.ConfigureServices(services =>
+                {
+                    services.AddSingleton<IObjectMetadataStorage, InMemoryObjectMetadataStorage>();
+                    services.AddSingleton<IBucketMetadataStorage, InMemoryBucketMetadataStorage>();
+                    services.AddSingleton<IMultipartUploadMetadataStorage, InMemoryMultipartUploadMetadataStorage>();
                 });
             });
             _client = _factory.CreateClient();

@@ -5,11 +5,11 @@ namespace Lamina.Storage.InMemory;
 
 public class InMemoryBucketDataStorage : IBucketDataStorage
 {
-    private readonly ConcurrentDictionary<string, bool> _buckets = new();
+    private readonly ConcurrentDictionary<string, DateTime> _buckets = new();
 
     public Task<bool> CreateBucketAsync(string bucketName, CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(_buckets.TryAdd(bucketName, true));
+        return Task.FromResult(_buckets.TryAdd(bucketName, DateTime.UtcNow));
     }
 
     public Task<bool> DeleteBucketAsync(string bucketName, CancellationToken cancellationToken = default)
@@ -20,6 +20,11 @@ public class InMemoryBucketDataStorage : IBucketDataStorage
     public Task<bool> BucketExistsAsync(string bucketName, CancellationToken cancellationToken = default)
     {
         return Task.FromResult(_buckets.ContainsKey(bucketName));
+    }
+
+    public Task<DateTime?> GetBucketCreationTimeAsync(string bucketName, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(_buckets.TryGetValue(bucketName, out var created) ? (DateTime?)created : null);
     }
 
     public Task<List<string>> ListBucketNamesAsync(CancellationToken cancellationToken = default)

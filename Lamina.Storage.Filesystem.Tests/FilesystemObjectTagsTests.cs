@@ -1,10 +1,12 @@
 using Lamina.Core.Models;
+using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Configuration;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.Filesystem.Locking;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 
@@ -15,7 +17,7 @@ public class FilesystemObjectTagsTests : IDisposable
     private readonly string _testDirectory;
     private readonly string _dataDirectory;
     private readonly string _metadataDirectory;
-    private readonly FilesystemObjectMetadataStorage _storage;
+    private readonly SeparateDirectoryObjectMetadataStorage _storage;
 
     public FilesystemObjectTagsTests()
     {
@@ -26,6 +28,11 @@ public class FilesystemObjectTagsTests : IDisposable
         Directory.CreateDirectory(_dataDirectory);
         Directory.CreateDirectory(_metadataDirectory);
 
+        _storage = CreateStorage();
+    }
+
+    private SeparateDirectoryObjectMetadataStorage CreateStorage()
+    {
         var settings = new FilesystemStorageSettings
         {
             DataDirectory = _dataDirectory,
@@ -38,15 +45,23 @@ public class FilesystemObjectTagsTests : IDisposable
             .ReturnsAsync(true);
 
         var lockManager = new InMemoryLockManager();
-        var networkHelper = new NetworkFileSystemHelper(Options.Create(settings), Mock.Of<ILogger<NetworkFileSystemHelper>>());
+        var networkHelper = new NetworkFileSystemHelper(Options.Create(settings), NullLogger<NetworkFileSystemHelper>.Instance);
 
-        _storage = new FilesystemObjectMetadataStorage(
+        var dataStorage = new FilesystemObjectDataStorage(
+            Options.Create(settings),
+            networkHelper,
+            new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance),
+            NullLogger<FilesystemObjectDataStorage>.Instance,
+            Mock.Of<IChunkedDataParser>());
+
+        return new SeparateDirectoryObjectMetadataStorage(
             Options.Create(settings),
             Options.Create(new MetadataCacheSettings { Enabled = false }),
             bucketStorageMock.Object,
+            dataStorage,
             lockManager,
             networkHelper,
-            Mock.Of<ILogger<FilesystemObjectMetadataStorage>>(),
+            NullLogger<SeparateDirectoryObjectMetadataStorage>.Instance,
             null);
     }
 
@@ -171,25 +186,7 @@ public class FilesystemObjectTagsTests : IDisposable
         await _storage.SetObjectTagsAsync("b", "k", new Dictionary<string, string> { { "project", "lamina" } });
 
         // Use a new storage instance with same directory (simulating restart)
-        var settings = new FilesystemStorageSettings
-        {
-            DataDirectory = _dataDirectory,
-            MetadataDirectory = _metadataDirectory,
-            MetadataMode = MetadataStorageMode.SeparateDirectory
-        };
-        var bucketStorageMock = new Mock<IBucketStorageFacade>();
-        bucketStorageMock.Setup(x => x.BucketExistsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-        var lockManager = new InMemoryLockManager();
-        var networkHelper = new NetworkFileSystemHelper(Options.Create(settings), Mock.Of<ILogger<NetworkFileSystemHelper>>());
-        var freshStorage = new FilesystemObjectMetadataStorage(
-            Options.Create(settings),
-            Options.Create(new MetadataCacheSettings { Enabled = false }),
-            bucketStorageMock.Object,
-            lockManager,
-            networkHelper,
-            Mock.Of<ILogger<FilesystemObjectMetadataStorage>>(),
-            null);
+        var freshStorage = CreateStorage();
 
         var tags = await freshStorage.GetObjectTagsAsync("b", "k");
 

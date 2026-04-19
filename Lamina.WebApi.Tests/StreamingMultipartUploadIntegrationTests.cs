@@ -5,9 +5,12 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Serialization;
 using Lamina.Core.Models;
+using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.InMemory;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Lamina.WebApi.Tests.Controllers;
@@ -42,6 +45,12 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
                 };
 
                 config.AddInMemoryCollection(authConfig);
+            });
+            builder.ConfigureServices(services =>
+            {
+                services.AddSingleton<IObjectMetadataStorage, InMemoryObjectMetadataStorage>();
+                services.AddSingleton<IBucketMetadataStorage, InMemoryBucketMetadataStorage>();
+                services.AddSingleton<IMultipartUploadMetadataStorage, InMemoryMultipartUploadMetadataStorage>();
             });
         });
         _client = _factory.CreateClient();

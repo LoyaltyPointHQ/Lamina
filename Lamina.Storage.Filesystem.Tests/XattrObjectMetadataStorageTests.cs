@@ -1,13 +1,17 @@
 using Lamina.Storage.Filesystem;
 using Lamina.Storage.Filesystem.Configuration;
+using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.InMemory;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using System.Runtime.InteropServices;
 using Lamina.Core.Models;
+using Lamina.Core.Streaming;
 using Lamina.Storage.Core;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Configuration;
+using Moq;
 
 namespace Lamina.Storage.Filesystem.Tests;
 
@@ -37,9 +41,18 @@ public class XattrObjectMetadataStorageTests : IDisposable
         var bucketMetadataStorage = new InMemoryBucketMetadataStorage(bucketDataStorage);
         _bucketStorage = new BucketStorageFacade(bucketDataStorage, bucketMetadataStorage, Options.Create(new BucketDefaultsSettings()), loggerFactory.CreateLogger<BucketStorageFacade>());
 
+        var networkHelper = new NetworkFileSystemHelper(Options.Create(settings), NullLogger<NetworkFileSystemHelper>.Instance);
+        var dataStorage = new FilesystemObjectDataStorage(
+            Options.Create(settings),
+            networkHelper,
+            new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance),
+            NullLogger<FilesystemObjectDataStorage>.Instance,
+            Mock.Of<IChunkedDataParser>());
+
         _storage = new XattrObjectMetadataStorage(
             Options.Create(settings),
             _bucketStorage,
+            dataStorage,
             logger,
             loggerFactory);
     }
@@ -63,9 +76,18 @@ public class XattrObjectMetadataStorageTests : IDisposable
             var bucketMetadataStorage = new InMemoryBucketMetadataStorage(bucketDataStorage);
             var bucketStorage = new BucketStorageFacade(bucketDataStorage, bucketMetadataStorage, Options.Create(new BucketDefaultsSettings()), loggerFactory.CreateLogger<BucketStorageFacade>());
 
+            var networkHelper = new NetworkFileSystemHelper(Options.Create(settings), NullLogger<NetworkFileSystemHelper>.Instance);
+            var dataStorage = new FilesystemObjectDataStorage(
+                Options.Create(settings),
+                networkHelper,
+                new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance),
+                NullLogger<FilesystemObjectDataStorage>.Instance,
+                Mock.Of<IChunkedDataParser>());
+
             Assert.Throws<NotSupportedException>(() => new XattrObjectMetadataStorage(
                 Options.Create(settings),
                 bucketStorage,
+                dataStorage,
                 logger,
                 loggerFactory));
         }
@@ -309,6 +331,66 @@ public class XattrObjectMetadataStorageTests : IDisposable
         Assert.False(_storage.IsValidObjectKey(""));
         Assert.False(_storage.IsValidObjectKey(" "));
         Assert.False(_storage.IsValidObjectKey(null!));
+    }
+
+    [Fact]
+    public async Task GetMetadataAsync_DataModifiedAfterStore_RecomputesETag()
+    {
+        // Data-first scenario: an external writer touches the file after metadata was stored.
+        // The recorded xattr timestamp lags behind the file mtime - xattr layer must detect it
+        // and recompute the ETag rather than return the stale one.
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
+
+        var bucketName = "test-bucket";
+        var key = "stale.bin";
+        var originalContent = "aaa"u8.ToArray();
+        var modifiedContent = "bbbb"u8.ToArray();
+
+        Directory.CreateDirectory(Path.Combine(_testDirectory, bucketName));
+        var dataPath = Path.Combine(_testDirectory, bucketName, key);
+        await File.WriteAllBytesAsync(dataPath, originalContent);
+
+        await _bucketStorage.CreateBucketAsync(bucketName);
+        const string storedEtag = "etag-of-aaa";
+        await _storage.StoreMetadataAsync(bucketName, key, storedEtag, originalContent.Length);
+
+        // Simulate an external write: replace content AND bump mtime forward.
+        await Task.Delay(50);
+        await File.WriteAllBytesAsync(dataPath, modifiedContent);
+        File.SetLastWriteTimeUtc(dataPath, DateTime.UtcNow.AddSeconds(10));
+
+        var result = await _storage.GetMetadataAsync(bucketName, key);
+
+        Assert.NotNull(result);
+        Assert.NotEqual(storedEtag, result.ETag); // ETag was recomputed from the modified content
+    }
+
+    [Fact]
+    public async Task GetMetadataAsync_DataModifiedButMultipartETag_PreservesETag()
+    {
+        // Multipart ETag formula needs per-part MD5s and cannot be rebuilt from the merged
+        // bytes, so even when the file mtime says the data moved, the stored ETag must survive.
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
+
+        var bucketName = "test-bucket";
+        var key = "mp.bin";
+        var originalContent = new byte[] { 1, 2, 3, 4 };
+
+        Directory.CreateDirectory(Path.Combine(_testDirectory, bucketName));
+        var dataPath = Path.Combine(_testDirectory, bucketName, key);
+        await File.WriteAllBytesAsync(dataPath, originalContent);
+
+        await _bucketStorage.CreateBucketAsync(bucketName);
+        const string multipartEtag = "deadbeefdeadbeefdeadbeefdeadbeef-3";
+        await _storage.StoreMetadataAsync(bucketName, key, multipartEtag, originalContent.Length);
+
+        await Task.Delay(50);
+        File.SetLastWriteTimeUtc(dataPath, DateTime.UtcNow.AddSeconds(10));
+
+        var result = await _storage.GetMetadataAsync(bucketName, key);
+
+        Assert.NotNull(result);
+        Assert.Equal(multipartEtag, result.ETag);
     }
 
     public void Dispose()
