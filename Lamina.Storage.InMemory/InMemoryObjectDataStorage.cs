@@ -138,8 +138,6 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
             offset += segment.Length;
         }
 
-        var etag = ETagHelper.ComputeETag(combinedData);
-
         var pendingKey = GetPendingKey(bucketName, key);
         _pendingData[pendingKey] = combinedData;
 
@@ -148,7 +146,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
             BucketName = bucketName,
             Key = key,
             Size = totalSize,
-            ETag = etag,
+            ETag = string.Empty,
             Checksums = new Dictionary<string, string>()
         };
         preparedData.SetDisposeAction(() => _pendingData.TryRemove(pendingKey, out _));
