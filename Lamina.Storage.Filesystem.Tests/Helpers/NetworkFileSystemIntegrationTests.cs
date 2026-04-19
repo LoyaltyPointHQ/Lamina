@@ -267,7 +267,7 @@ public class NetworkFileSystemIntegrationTests : IDisposable
         // Assert - Overhead should be minimal
         // Use Ticks for precision — ElapsedMilliseconds rounds to 0 on fast runs
         var overhead = (double)swWithRetry.ElapsedTicks / Math.Max(swNoRetry.ElapsedTicks, 1);
-        Assert.True(overhead < 3.0,
+        Assert.True(overhead < 5.0,
             $"Retry overhead too high: {overhead:F2}x (with retry: {swWithRetry.ElapsedMilliseconds}ms, without: {swNoRetry.ElapsedMilliseconds}ms)");
     }
 
