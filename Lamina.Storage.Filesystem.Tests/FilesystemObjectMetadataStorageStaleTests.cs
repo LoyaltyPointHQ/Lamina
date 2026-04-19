@@ -221,6 +221,48 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
     }
 
     [Fact]
+    public async Task GetMetadataAsync_StaleMetadata_PersistsRecomputedMetadataToFile()
+    {
+        // Arrange
+        var bucketName = "test-bucket";
+        var key = "test-file.bin";
+        var originalData = "original content"u8.ToArray();
+
+        Directory.CreateDirectory(Path.Combine(_dataDirectory, bucketName));
+        var dataPath = Path.Combine(_dataDirectory, bucketName, key);
+        await File.WriteAllBytesAsync(dataPath, originalData);
+
+        var originalChecksums = new Dictionary<string, string> { { "SHA256", "old-sha256" } };
+        await _storage.StoreMetadataAsync(bucketName, key, "old-etag", originalData.Length, null, originalChecksums);
+
+        await Task.Delay(100);
+
+        var newData = "modified content"u8.ToArray();
+        await File.WriteAllBytesAsync(dataPath, newData);
+
+        // Act — first read triggers recomputation
+        var result = await _storage.GetMetadataAsync(bucketName, key);
+        Assert.NotNull(result);
+        var recomputedETag = result.ETag;
+        var recomputedSha256 = result.ChecksumSHA256;
+
+        // Read the metadata JSON directly from disk
+        var metadataPath = Path.Combine(_metadataDirectory, bucketName, $"{key}.json");
+        var json = await File.ReadAllTextAsync(metadataPath);
+
+        // Parse JSON to compare field values (avoids unicode-escaping issues with '+' in base64)
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        // Assert — persisted file must contain recomputed values
+        Assert.Equal(recomputedETag, root.GetProperty("ETag").GetString());
+        Assert.NotNull(recomputedSha256);
+        Assert.Equal(recomputedSha256, root.GetProperty("ChecksumSHA256").GetString());
+        Assert.DoesNotContain("old-etag", json);
+        Assert.DoesNotContain("old-sha256", json);
+    }
+
+    [Fact]
     public async Task GetMetadataAsync_StaleWithMultipartETag_PreservesETag()
     {
         // Multipart ETags ("<32 hex>-<N>") are a function of individual part MD5s and the part

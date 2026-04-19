@@ -273,6 +273,10 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
             metadata.ChecksumCRC64NVME = recomputed.checksums.GetValueOrDefault("CRC64NVME");
             metadata.ChecksumSHA1 = recomputed.checksums.GetValueOrDefault("SHA1");
             metadata.ChecksumSHA256 = recomputed.checksums.GetValueOrDefault("SHA256");
+            metadata.LastModified = dataLastModified;
+
+            var updatedJson = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
+            await _lockManager.WriteFileAsync(metadataPath, updatedJson, cancellationToken);
         }
 
         var objectInfo = new S3ObjectInfo
