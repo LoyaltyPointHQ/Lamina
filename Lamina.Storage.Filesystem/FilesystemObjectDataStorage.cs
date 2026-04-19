@@ -396,10 +396,35 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
         var tempPath = Path.Combine(destDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
         try
         {
-            await _networkHelper.ExecuteWithRetryAsync(() =>
+            await _networkHelper.ExecuteWithRetryAsync(async () =>
                 {
-                    File.Copy(sourcePath, tempPath, overwrite: false);
-                    return Task.FromResult(true);
+                    using var srcHandle = File.OpenHandle(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.Asynchronous);
+                    using var dstHandle = File.OpenHandle(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, FileOptions.Asynchronous);
+                    var length = RandomAccess.GetLength(srcHandle);
+
+                    if (_zeroCopyHelper.IsSupported && _zeroCopyHelper.TryCopyFileRange(srcHandle, dstHandle, length, cancellationToken))
+                    {
+                        return true;
+                    }
+
+                    var buffer = ArrayPool<byte>.Shared.Rent(81920);
+                    try
+                    {
+                        long copied = 0;
+                        while (copied < length)
+                        {
+                            var read = await RandomAccess.ReadAsync(srcHandle, buffer.AsMemory(), copied, cancellationToken);
+                            if (read == 0)
+                                throw new IOException($"Unexpected EOF reading {sourcePath} at offset {copied}");
+                            await RandomAccess.WriteAsync(dstHandle, buffer.AsMemory(0, read), copied, cancellationToken);
+                            copied += read;
+                        }
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(buffer);
+                    }
+                    return true;
                 },
                 "CopyFile");
 
