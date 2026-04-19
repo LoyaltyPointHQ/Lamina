@@ -86,35 +86,48 @@ public class ObjectStorageFacade : IObjectStorageFacade
             var etag = preparedData.ETag;
             var checksums = preparedData.Checksums;
 
-            // Phase 2: Store metadata BEFORE committing data (metadata-before-data). Pass
-            // an explicit LastModified - FileInfo on the yet-uncommitted data path returns
-            // Windows epoch (1601-01-01 UTC), which would make GET stale-detect and recompute.
             if (ShouldStoreMetadata(key, request))
             {
-                var s3Object = await _metadataStorage.StoreMetadataAsync(bucketName, key, etag, size, request, checksums, DateTime.UtcNow, cancellationToken);
-
-                if (s3Object == null)
+                // Xattr backends bind metadata to the data file, so commit must happen first.
+                if (_metadataStorage is IRequiresDataFileForMetadata)
                 {
-                    // Abort prepared data if metadata storage failed
+                    await _dataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
+
+                    var s3Object = await _metadataStorage.StoreMetadataAsync(bucketName, key, etag, size, request, checksums, DateTime.UtcNow, cancellationToken);
+                    if (s3Object == null)
+                    {
+                        await _dataStorage.DeleteDataAsync(bucketName, key, cancellationToken);
+                        _logger.LogError("Failed to store metadata for object {Key} in bucket {BucketName}", key, bucketName);
+                        return StorageResult<S3Object>.Error("InternalError", "Failed to store metadata");
+                    }
+
+                    return StorageResult<S3Object>.Success(s3Object);
+                }
+
+                // Default: metadata-before-data. Pass explicit LastModified — FileInfo on the
+                // yet-uncommitted path returns Windows epoch (1601-01-01 UTC), which would make
+                // GET stale-detect and trigger a full ETag recompute after commit.
+                var s3ObjectDefault = await _metadataStorage.StoreMetadataAsync(bucketName, key, etag, size, request, checksums, DateTime.UtcNow, cancellationToken);
+
+                if (s3ObjectDefault == null)
+                {
                     await _dataStorage.AbortPreparedDataAsync(preparedData, cancellationToken);
                     _logger.LogError("Failed to store metadata for object {Key} in bucket {BucketName}", key, bucketName);
                     return StorageResult<S3Object>.Error("InternalError", "Failed to store metadata");
                 }
 
-                // Phase 3: Commit data (make visible via atomic move)
                 try
                 {
                     await _dataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
                 }
                 catch (Exception ex)
                 {
-                    // Rollback metadata if commit failed
                     await _metadataStorage.DeleteMetadataAsync(bucketName, key, cancellationToken);
                     _logger.LogError(ex, "Failed to commit data for object {Key} in bucket {BucketName}", key, bucketName);
                     return StorageResult<S3Object>.Error("InternalError", "Failed to commit data");
                 }
 
-                return StorageResult<S3Object>.Success(s3Object);
+                return StorageResult<S3Object>.Success(s3ObjectDefault);
             }
             else
             {
@@ -518,21 +531,35 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 effectiveRequest.Tags = new Dictionary<string, string>(sourceInfo.Tags);
             }
 
-            // Phase 2: Store metadata BEFORE committing data. Pass an explicit LastModified -
-            // FileInfo on the yet-uncommitted dest path returns Windows epoch, which would make
-            // GET stale-detect and recompute the ETag from the full file bytes after commit.
             if (ShouldStoreMetadata(destKey, effectiveRequest))
             {
-                var s3Object = await _metadataStorage.StoreMetadataAsync(destBucketName, destKey, etag, size, effectiveRequest, null, DateTime.UtcNow, cancellationToken);
+                if (_metadataStorage is IRequiresDataFileForMetadata)
+                {
+                    await _dataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
 
-                if (s3Object == null)
+                    var s3Object = await _metadataStorage.StoreMetadataAsync(destBucketName, destKey, etag, size, effectiveRequest, null, DateTime.UtcNow, cancellationToken);
+                    if (s3Object == null)
+                    {
+                        await _dataStorage.DeleteDataAsync(destBucketName, destKey, cancellationToken);
+                        _logger.LogError("Failed to store metadata for copied object {DestKey} in bucket {DestBucket}", destKey, destBucketName);
+                        return null;
+                    }
+
+                    return s3Object;
+                }
+
+                // Default: metadata-before-data. Pass explicit LastModified — FileInfo on the
+                // yet-uncommitted dest path returns Windows epoch, which would cause stale-detect
+                // and trigger a full ETag recompute from file bytes after commit.
+                var s3ObjectDefault = await _metadataStorage.StoreMetadataAsync(destBucketName, destKey, etag, size, effectiveRequest, null, DateTime.UtcNow, cancellationToken);
+
+                if (s3ObjectDefault == null)
                 {
                     await _dataStorage.AbortPreparedDataAsync(preparedData, cancellationToken);
                     _logger.LogError("Failed to store metadata for copied object {DestKey} in bucket {DestBucket}", destKey, destBucketName);
                     return null;
                 }
 
-                // Phase 3: Commit data
                 try
                 {
                     await _dataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
@@ -544,7 +571,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
                     return null;
                 }
 
-                return s3Object;
+                return s3ObjectDefault;
             }
             else
             {
