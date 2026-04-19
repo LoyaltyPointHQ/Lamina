@@ -75,4 +75,17 @@ public interface IObjectDataStorage
         string key,
         IEnumerable<string> algorithms,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Computes the ETag (MD5) and the requested checksum algorithms over the object's current
+    /// bytes in a single pass. Returns <c>null</c> etag and an empty dictionary when the object
+    /// does not exist. Callers that need to preserve a multipart ETag should check
+    /// <see cref="ETagHelper.IsMultipartETag"/> before using the returned etag.
+    /// Supported algorithm names: CRC32, CRC32C, CRC64NVME, SHA1, SHA256.
+    /// </summary>
+    Task<(string? etag, Dictionary<string, string> checksums)> ComputeETagAndChecksumsAsync(
+        string bucketName,
+        string key,
+        IEnumerable<string> checksumAlgorithms,
+        CancellationToken cancellationToken = default);
 }

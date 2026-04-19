@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Security.Cryptography;
 
 namespace Lamina.Storage.Core.Helpers;
 
@@ -35,6 +36,87 @@ public static class ChecksumHelper
             useAsync: true);
 
         return await ComputeSelectiveChecksumsFromStreamAsync(fileStream, algorithmList, cancellationToken);
+    }
+
+    /// <summary>
+    /// Computes the ETag (MD5 hex) and the specified checksum algorithms from a file in a single pass.
+    /// Returns <c>null</c> etag if the file does not exist.
+    /// </summary>
+    public static async Task<(string? etag, Dictionary<string, string> checksums)> ComputeETagAndChecksumsFromFileAsync(
+        string filePath,
+        IEnumerable<string> checksumAlgorithms,
+        CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(filePath))
+            return (null, new Dictionary<string, string>());
+
+        await using var fileStream = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 81920,
+            useAsync: true);
+
+        return await ComputeETagAndChecksumsFromStreamAsync(fileStream, checksumAlgorithms, cancellationToken);
+    }
+
+    /// <summary>
+    /// Computes the ETag (MD5 hex) and the specified checksum algorithms from a stream in a single pass.
+    /// </summary>
+    public static async Task<(string etag, Dictionary<string, string> checksums)> ComputeETagAndChecksumsFromStreamAsync(
+        Stream stream,
+        IEnumerable<string> checksumAlgorithms,
+        CancellationToken cancellationToken = default)
+    {
+        var algorithmList = checksumAlgorithms as List<string> ?? checksumAlgorithms.ToList();
+
+        using var md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
+        using var calculator = new StreamingChecksumCalculator(algorithmList);
+
+        var buffer = ArrayPool<byte>.Shared.Rent(81920);
+        try
+        {
+            int bytesRead;
+            while ((bytesRead = await stream.ReadAsync(buffer.AsMemory(0, 81920), cancellationToken)) > 0)
+            {
+                var span = buffer.AsSpan(0, bytesRead);
+                md5.AppendData(span);
+                if (algorithmList.Count > 0)
+                    calculator.Append(span);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+
+        var md5Hash = md5.GetHashAndReset();
+        var etag = Convert.ToHexString(md5Hash).ToLower();
+        var checksums = algorithmList.Count > 0 ? calculator.Finish().CalculatedChecksums : new Dictionary<string, string>();
+        return (etag, checksums);
+    }
+
+    /// <summary>
+    /// Computes the ETag (MD5 hex) and the specified checksum algorithms from a byte array in a single pass.
+    /// </summary>
+    public static (string etag, Dictionary<string, string> checksums) ComputeETagAndChecksums(
+        ReadOnlySpan<byte> data,
+        IEnumerable<string> checksumAlgorithms)
+    {
+        var algorithmList = checksumAlgorithms as List<string> ?? checksumAlgorithms.ToList();
+
+        using var md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
+        using var calculator = new StreamingChecksumCalculator(algorithmList);
+
+        md5.AppendData(data);
+        if (algorithmList.Count > 0)
+            calculator.Append(data);
+
+        var md5Hash = md5.GetHashAndReset();
+        var etag = Convert.ToHexString(md5Hash).ToLower();
+        var checksums = algorithmList.Count > 0 ? calculator.Finish().CalculatedChecksums : new Dictionary<string, string>();
+        return (etag, checksums);
     }
 
     /// <summary>

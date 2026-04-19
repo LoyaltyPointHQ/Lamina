@@ -88,20 +88,16 @@ public class SqlObjectMetadataStorageStaleTests : IDisposable
         _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
             .ReturnsAsync((size, DateTime.UtcNow.AddMinutes(10))); // Future timestamp = stale metadata
 
-        // Setup mock: recomputed ETag
-        _dataStorageMock.Setup(x => x.ComputeETagAsync(bucketName, key, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(newEtag);
-
-        // Setup mock: recomputed checksums (only the ones originally stored)
-        _dataStorageMock.Setup(x => x.ComputeChecksumsAsync(
+        // Setup mock: recomputed ETag + checksums in single call
+        _dataStorageMock.Setup(x => x.ComputeETagAndChecksumsAsync(
                 bucketName, key,
                 It.Is<IEnumerable<string>>(algs => algs.Contains("CRC32") && algs.Contains("SHA256") && !algs.Contains("SHA1")),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Dictionary<string, string>
+            .ReturnsAsync((newEtag, new Dictionary<string, string>
             {
                 { "CRC32", "new-crc32" },
                 { "SHA256", "new-sha256" }
-            });
+            }));
 
         // Act
         var result = await _storage.GetMetadataAsync(bucketName, key);
@@ -114,7 +110,7 @@ public class SqlObjectMetadataStorageStaleTests : IDisposable
         Assert.Null(result.ChecksumCRC32C);                 // Not in original, stays null
         Assert.Null(result.ChecksumSHA1);                   // Not in original, stays null
 
-        _dataStorageMock.Verify(x => x.ComputeETagAsync(bucketName, key, It.IsAny<CancellationToken>()), Times.Once);
+        _dataStorageMock.Verify(x => x.ComputeETagAndChecksumsAsync(bucketName, key, It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -131,13 +127,14 @@ public class SqlObjectMetadataStorageStaleTests : IDisposable
 
         _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
             .ReturnsAsync((size, DateTime.UtcNow.AddMinutes(10)));
+        _dataStorageMock.Setup(x => x.ComputeETagAndChecksumsAsync(bucketName, key, It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(("some-computed-etag", new Dictionary<string, string>()));
 
         var result = await _storage.GetMetadataAsync(bucketName, key);
 
         Assert.NotNull(result);
+        // Multipart ETag must be preserved, not replaced with the computed MD5
         Assert.Equal(multipartEtag, result.ETag);
-        // ComputeETagAsync must NOT be called for multipart ETags
-        _dataStorageMock.Verify(x => x.ComputeETagAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -155,9 +152,9 @@ public class SqlObjectMetadataStorageStaleTests : IDisposable
         _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
             .ReturnsAsync((size, DateTime.UtcNow.AddMinutes(10)));
 
-        // Setup mock: ETag computation fails
-        _dataStorageMock.Setup(x => x.ComputeETagAsync(bucketName, key, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((string?)null);
+        // Setup mock: ETag computation fails (returns null etag)
+        _dataStorageMock.Setup(x => x.ComputeETagAndChecksumsAsync(bucketName, key, It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(((string?)null, new Dictionary<string, string>()));
 
         // Act
         var result = await _storage.GetMetadataAsync(bucketName, key);
@@ -201,8 +198,8 @@ public class SqlObjectMetadataStorageStaleTests : IDisposable
         // Setup mocks
         _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
             .ReturnsAsync((size, DateTime.UtcNow.AddMinutes(10)));
-        _dataStorageMock.Setup(x => x.ComputeETagAsync(bucketName, key, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(newEtag);
+        _dataStorageMock.Setup(x => x.ComputeETagAndChecksumsAsync(bucketName, key, It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((newEtag, new Dictionary<string, string>()));
 
         // Act
         await _storage.GetMetadataAsync(bucketName, key);
@@ -229,14 +226,17 @@ public class SqlObjectMetadataStorageStaleTests : IDisposable
 
         _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
             .ReturnsAsync((1024L, DateTime.UtcNow.AddMinutes(10)));
-        _dataStorageMock.Setup(x => x.ComputeETagAsync(bucketName, key, It.IsAny<CancellationToken>()))
-            .ReturnsAsync("new-etag");
+        _dataStorageMock.Setup(x => x.ComputeETagAndChecksumsAsync(bucketName, key, It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(("new-etag", new Dictionary<string, string>()));
 
         await _storage.GetMetadataAsync(bucketName, key);
 
         _dataStorageMock.Verify(
-            x => x.ComputeChecksumsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+            x => x.ComputeETagAndChecksumsAsync(
+                It.IsAny<string>(), It.IsAny<string>(),
+                It.Is<IEnumerable<string>>(algs => !algs.Any()),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     public void Dispose()

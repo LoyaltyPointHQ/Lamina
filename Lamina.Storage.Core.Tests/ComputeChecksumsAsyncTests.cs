@@ -100,4 +100,49 @@ public class ComputeChecksumsAsyncTests
         Assert.Equal(reference["CRC32"], result["CRC32"]);
         Assert.Equal(reference["SHA256"], result["SHA256"]);
     }
+
+    [Fact]
+    public async Task ComputeETagAndChecksumsAsync_ReturnsETagMatchingComputeETagAsync()
+    {
+        var storage = await CreateInMemoryStorageWithDataAsync();
+
+        var (etag, _) = await storage.ComputeETagAndChecksumsAsync(BucketName, Key, Array.Empty<string>());
+        var expectedETag = await storage.ComputeETagAsync(BucketName, Key);
+
+        Assert.Equal(expectedETag, etag);
+    }
+
+    [Fact]
+    public async Task ComputeETagAndChecksumsAsync_ReturnsChecksumsMatchingComputeChecksumsAsync()
+    {
+        var storage = await CreateInMemoryStorageWithDataAsync();
+
+        var (_, checksums) = await storage.ComputeETagAndChecksumsAsync(BucketName, Key, new[] { "CRC32", "SHA256" });
+        var expectedChecksums = await storage.ComputeChecksumsAsync(BucketName, Key, new[] { "CRC32", "SHA256" });
+
+        Assert.Equal(expectedChecksums["CRC32"], checksums["CRC32"]);
+        Assert.Equal(expectedChecksums["SHA256"], checksums["SHA256"]);
+    }
+
+    [Fact]
+    public async Task ComputeETagAndChecksumsAsync_NonExistentObject_ReturnsNullETagAndEmptyChecksums()
+    {
+        var storage = new InMemoryObjectDataStorage(Mock.Of<IChunkedDataParser>());
+
+        var (etag, checksums) = await storage.ComputeETagAndChecksumsAsync(BucketName, Key, new[] { "CRC32" });
+
+        Assert.Null(etag);
+        Assert.Empty(checksums);
+    }
+
+    [Fact]
+    public async Task ComputeETagAndChecksumsAsync_EmptyAlgorithms_ReturnsETagWithEmptyChecksums()
+    {
+        var storage = await CreateInMemoryStorageWithDataAsync();
+
+        var (etag, checksums) = await storage.ComputeETagAndChecksumsAsync(BucketName, Key, Array.Empty<string>());
+
+        Assert.NotNull(etag);
+        Assert.Empty(checksums);
+    }
 }

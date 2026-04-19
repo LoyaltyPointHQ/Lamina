@@ -52,13 +52,11 @@ public class InMemoryObjectMetadataStorageStaleTests
         var dataStorageMock = new Mock<IObjectDataStorage>();
         dataStorageMock.Setup(x => x.GetDataInfoAsync(Bucket, Key, It.IsAny<CancellationToken>()))
             .ReturnsAsync((42L, newerDataTime));
-        dataStorageMock.Setup(x => x.ComputeETagAsync(Bucket, Key, It.IsAny<CancellationToken>()))
-            .ReturnsAsync("recomputed-etag");
-        dataStorageMock.Setup(x => x.ComputeChecksumsAsync(
+        dataStorageMock.Setup(x => x.ComputeETagAndChecksumsAsync(
                 Bucket, Key,
                 It.Is<IEnumerable<string>>(a => a.Contains("CRC32") && !a.Contains("SHA1")),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Dictionary<string, string> { { "CRC32", "new-crc32" } });
+            .ReturnsAsync(("recomputed-etag", new Dictionary<string, string> { { "CRC32", "new-crc32" } }));
 
         var storage = new InMemoryObjectMetadataStorage(dataStorageMock.Object);
         await storage.StoreMetadataAsync(Bucket, Key, "old-etag", 10, null,
@@ -87,11 +85,14 @@ public class InMemoryObjectMetadataStorageStaleTests
         var storage = new InMemoryObjectMetadataStorage(dataStorageMock.Object);
         await storage.StoreMetadataAsync(Bucket, Key, multipartEtag, 10, null, null, storedTime);
 
+        dataStorageMock.Setup(x => x.ComputeETagAndChecksumsAsync(Bucket, Key, It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(("some-computed-etag", new Dictionary<string, string>()));
+
         var result = await storage.GetMetadataAsync(Bucket, Key);
 
         Assert.NotNull(result);
+        // Multipart ETag must be preserved, not replaced with the computed MD5
         Assert.Equal(multipartEtag, result.ETag);
-        dataStorageMock.Verify(x => x.ComputeETagAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

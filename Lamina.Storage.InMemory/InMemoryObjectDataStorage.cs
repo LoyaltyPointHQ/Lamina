@@ -342,5 +342,18 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         return await ChecksumHelper.ComputeSelectiveChecksumsFromStreamAsync(memoryStream, algorithmList, cancellationToken);
     }
 
+    public Task<(string? etag, Dictionary<string, string> checksums)> ComputeETagAndChecksumsAsync(
+        string bucketName,
+        string key,
+        IEnumerable<string> checksumAlgorithms,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_data.TryGetValue(bucketName, out var bucketData) || !bucketData.TryGetValue(key, out var stored))
+            return Task.FromResult<(string? etag, Dictionary<string, string> checksums)>((null, new Dictionary<string, string>()));
+
+        var (etag, checksums) = ChecksumHelper.ComputeETagAndChecksums(stored.Data.AsSpan(), checksumAlgorithms);
+        return Task.FromResult<(string? etag, Dictionary<string, string> checksums)>((etag, checksums));
+    }
+
     private static string GetPendingKey(string bucketName, string key) => $"{bucketName}/{key}";
 }

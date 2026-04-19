@@ -96,13 +96,12 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
             {
                 var algorithms = CollectStoredChecksumAlgorithms(s3Object);
 
+                var (computedETag, checksums) = await _dataStorage.ComputeETagAndChecksumsAsync(bucketName, key, algorithms, cancellationToken);
+
+                // Preserve multipart ETags: recomputing from the merged bytes would yield MD5-of-full-file.
                 var etag = ETagHelper.IsMultipartETag(s3Object.ETag)
                     ? s3Object.ETag
-                    : (await _dataStorage.ComputeETagAsync(bucketName, key, cancellationToken)) ?? s3Object.ETag;
-
-                var checksums = algorithms.Count > 0
-                    ? await _dataStorage.ComputeChecksumsAsync(bucketName, key, algorithms, cancellationToken)
-                    : new Dictionary<string, string>();
+                    : computedETag ?? s3Object.ETag;
 
                 s3Object.ETag = etag;
                 s3Object.Size = dataInfo.Value.size;

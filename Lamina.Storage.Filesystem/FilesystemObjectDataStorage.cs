@@ -702,6 +702,24 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
         return await ChecksumHelper.ComputeSelectiveChecksumsFromFileAsync(dataPath, algorithmList, cancellationToken);
     }
 
+    public async Task<(string? etag, Dictionary<string, string> checksums)> ComputeETagAndChecksumsAsync(
+        string bucketName,
+        string key,
+        IEnumerable<string> checksumAlgorithms,
+        CancellationToken cancellationToken = default)
+    {
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
+            return (null, new Dictionary<string, string>());
+
+        var dataPath = GetDataPath(bucketName, key);
+        var fileName = Path.GetFileName(dataPath);
+        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
+            return (null, new Dictionary<string, string>());
+
+        var (etag, checksums) = await ChecksumHelper.ComputeETagAndChecksumsFromFileAsync(dataPath, checksumAlgorithms, cancellationToken);
+        return (etag, checksums);
+    }
+
     private (bool IsValid, string Path) ValidateAndPreparePath(string bucketName, string? prefix)
     {
         if (FilesystemStorageHelper.IsKeyForbidden(bucketName, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))

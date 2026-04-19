@@ -218,25 +218,22 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
         if (!string.IsNullOrEmpty(entity.ChecksumSHA256))
             algorithmsToCompute.Add("SHA256");
 
+        var (computedETag, checksums) = await _dataStorage.ComputeETagAndChecksumsAsync(bucketName, key, algorithmsToCompute, cancellationToken);
+
         string etag;
         if (ETagHelper.IsMultipartETag(entity.ETag))
         {
             etag = entity.ETag;
         }
+        else if (computedETag == null)
+        {
+            _logger.LogWarning("Failed to recompute ETag for {Key} in bucket {BucketName}, using cached value", key, bucketName);
+            return (entity.ETag, new Dictionary<string, string>());
+        }
         else
         {
-            var computed = await _dataStorage.ComputeETagAsync(bucketName, key, cancellationToken);
-            if (computed == null)
-            {
-                _logger.LogWarning("Failed to recompute ETag for {Key} in bucket {BucketName}, using cached value", key, bucketName);
-                return (entity.ETag, new Dictionary<string, string>());
-            }
-            etag = computed;
+            etag = computedETag;
         }
-
-        var checksums = algorithmsToCompute.Count > 0
-            ? await _dataStorage.ComputeChecksumsAsync(bucketName, key, algorithmsToCompute, cancellationToken)
-            : new Dictionary<string, string>();
 
         return (etag, checksums);
     }

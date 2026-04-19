@@ -440,14 +440,12 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
         if (!string.IsNullOrEmpty(metadata.ChecksumSHA256))
             algorithmsToCompute.Add("SHA256");
 
+        var (computedETag, checksums) = await _dataStorage.ComputeETagAndChecksumsAsync(bucketName, key, algorithmsToCompute, cancellationToken);
+
         // Preserve multipart ETags: recomputing from the merged bytes would yield MD5-of-full-file.
         var etag = ETagHelper.IsMultipartETag(metadata.ETag)
             ? metadata.ETag
-            : (await _dataStorage.ComputeETagAsync(bucketName, key, cancellationToken)) ?? metadata.ETag;
-
-        var checksums = algorithmsToCompute.Count > 0
-            ? await _dataStorage.ComputeChecksumsAsync(bucketName, key, algorithmsToCompute, cancellationToken)
-            : new Dictionary<string, string>();
+            : computedETag ?? metadata.ETag;
 
         return (etag, checksums);
     }
