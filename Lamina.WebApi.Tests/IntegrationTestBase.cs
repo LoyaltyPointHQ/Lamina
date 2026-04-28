@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Lamina.WebApi.Tests.Controllers;
 
@@ -26,12 +27,16 @@ public abstract class IntegrationTestBase : IClassFixture<WebApplicationFactory<
                 config.AddJsonFile(testSettingsPath, optional: false, reloadOnChange: false);
             });
             // Override metadata storage to Singleton InMemory instances.
-            // Program.cs reads StorageType from config before ConfigureAppConfiguration runs,
-            // so it may register Filesystem metadata instead of InMemory.
+            // Program.cs reads StorageType from config which may register Filesystem.
+            // Note: Data storage (IObjectDataStorage, IBucketDataStorage, IMultipartUploadDataStorage)
+            // is NOT overridden - tests use whatever Program.cs configures (Filesystem by default).
             builder.ConfigureServices(services =>
             {
+                services.RemoveAll<IObjectMetadataStorage>();
                 services.AddSingleton<IObjectMetadataStorage, InMemoryObjectMetadataStorage>();
+                services.RemoveAll<IBucketMetadataStorage>();
                 services.AddSingleton<IBucketMetadataStorage, InMemoryBucketMetadataStorage>();
+                services.RemoveAll<IMultipartUploadMetadataStorage>();
                 services.AddSingleton<IMultipartUploadMetadataStorage, InMemoryMultipartUploadMetadataStorage>();
             });
         });

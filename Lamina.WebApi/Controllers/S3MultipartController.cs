@@ -8,6 +8,7 @@ using Lamina.WebApi.Authorization;
 using Lamina.WebApi.Configuration;
 using Lamina.WebApi.Controllers.Attributes;
 using Lamina.WebApi.Controllers.Base;
+using Lamina.WebApi.Helpers;
 using Lamina.WebApi.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -125,19 +126,57 @@ public class S3MultipartController : S3ControllerBase
         [FromQuery(Name = "key-marker")] string? keyMarker,
         [FromQuery(Name = "upload-id-marker")] string? uploadIdMarker,
         [FromQuery(Name = "max-uploads")] int? maxUploads,
+        [FromQuery] string? prefix,
+        [FromQuery] string? delimiter,
+        [FromQuery(Name = "encoding-type")] string? encodingType,
         CancellationToken cancellationToken = default
     )
     {
-        var uploads = await _multipartStorage.ListMultipartUploadsAsync(bucketName, cancellationToken);
+        var allUploads = await _multipartStorage.ListMultipartUploadsAsync(bucketName, cancellationToken);
+
+        // Cap max-uploads to S3's maximum of 1000
+        var effectiveMaxUploads = Math.Min(maxUploads ?? 1000, 1000);
+
+        // Filter by prefix
+        var filteredUploads = allUploads.AsEnumerable();
+        if (!string.IsNullOrEmpty(prefix))
+        {
+            filteredUploads = filteredUploads.Where(u => u.Key.StartsWith(prefix, StringComparison.Ordinal));
+        }
+
+        // Sort by (Key, UploadId) for deterministic ordering
+        var sortedUploads = filteredUploads
+            .OrderBy(u => u.Key, StringComparer.Ordinal)
+            .ThenBy(u => u.UploadId, StringComparer.Ordinal)
+            .ToList();
+
+        // Filter by markers: uploads where (Key > keyMarker) OR (Key == keyMarker AND UploadId > uploadIdMarker)
+        if (!string.IsNullOrEmpty(keyMarker))
+        {
+            sortedUploads = sortedUploads.Where(u =>
+                string.Compare(u.Key, keyMarker, StringComparison.Ordinal) > 0 ||
+                (u.Key == keyMarker && !string.IsNullOrEmpty(uploadIdMarker) &&
+                 string.Compare(u.UploadId, uploadIdMarker, StringComparison.Ordinal) > 0)
+            ).ToList();
+        }
+
+        // Take only up to effectiveMaxUploads
+        var returnedUploads = sortedUploads.Take(effectiveMaxUploads).ToList();
+        var isTruncated = sortedUploads.Count > effectiveMaxUploads;
 
         var result = new ListMultipartUploadsResult
         {
             Bucket = bucketName,
             KeyMarker = keyMarker,
             UploadIdMarker = uploadIdMarker,
-            MaxUploads = maxUploads ?? 1000,
-            IsTruncated = false,
-            Uploads = uploads.Select(u => new Upload
+            Prefix = prefix,
+            Delimiter = delimiter,
+            MaxUploads = effectiveMaxUploads,
+            EncodingType = encodingType,
+            IsTruncated = isTruncated,
+            NextKeyMarker = isTruncated ? returnedUploads.Last().Key : null,
+            NextUploadIdMarker = isTruncated ? returnedUploads.Last().UploadId : null,
+            Uploads = returnedUploads.Select(u => new Upload
             {
                 Key = u.Key,
                 UploadId = u.UploadId,
@@ -168,14 +207,11 @@ public class S3MultipartController : S3ControllerBase
             return S3Error("InvalidObjectName", "Object key is forbidden", $"/{bucketName}/{key}", 400);
         }
 
-        // Parse checksum algorithm header
-        Request.Headers.TryGetValue("x-amz-checksum-algorithm", out var checksumAlgorithm);
-        var checksumAlgorithmValue = checksumAlgorithm.ToString();
-        
-        // Validate checksum algorithm if provided
-        if (!string.IsNullOrEmpty(checksumAlgorithmValue) && !StreamingChecksumCalculator.IsValidAlgorithm(checksumAlgorithmValue))
+        // Parse and validate checksum headers
+        var checksum = ChecksumHeaderParser.Parse(Request.Headers);
+        if (!checksum.IsValid)
         {
-            return S3Error("InvalidArgument", $"Invalid checksum algorithm: {checksumAlgorithmValue}. Valid values are: CRC32, CRC32C, SHA1, SHA256, CRC64NVME", $"/{bucketName}/{key}", 400);
+            return S3Error(checksum.ErrorCode!, checksum.ErrorMessage!, $"/{bucketName}/{key}", 400);
         }
 
         Dictionary<string, string>? tagsFromHeader = null;
@@ -202,7 +238,7 @@ public class S3MultipartController : S3ControllerBase
                 .Where(h => h.Key.StartsWith("x-amz-meta-", StringComparison.OrdinalIgnoreCase))
                 .ToDictionary(h => h.Key.Substring(11), h => h.Value.ToString()),
             Tags = tagsFromHeader,
-            ChecksumAlgorithm = string.IsNullOrEmpty(checksumAlgorithmValue) ? null : checksumAlgorithmValue
+            ChecksumAlgorithm = checksum.Algorithm
         };
 
         try
@@ -286,47 +322,29 @@ public class S3MultipartController : S3ControllerBase
             }
         }
 
-        // Parse checksum headers
-        Request.Headers.TryGetValue("x-amz-checksum-algorithm", out var checksumAlgorithm);
-        Request.Headers.TryGetValue("x-amz-checksum-crc32", out var checksumCrc32);
-        Request.Headers.TryGetValue("x-amz-checksum-crc32c", out var checksumCrc32c);
-        Request.Headers.TryGetValue("x-amz-checksum-sha1", out var checksumSha1);
-        Request.Headers.TryGetValue("x-amz-checksum-sha256", out var checksumSha256);
-        Request.Headers.TryGetValue("x-amz-checksum-crc64nvme", out var checksumCrc64nvme);
-        
-        var checksumAlgorithmValue = checksumAlgorithm.ToString();
-        
-        // Validate checksum algorithm if provided
-        if (!string.IsNullOrEmpty(checksumAlgorithmValue) && !StreamingChecksumCalculator.IsValidAlgorithm(checksumAlgorithmValue))
+        // Parse and validate checksum headers
+        var checksum = ChecksumHeaderParser.Parse(Request.Headers);
+        if (!checksum.IsValid)
         {
-            return S3Error("InvalidArgument", $"Invalid checksum algorithm: {checksumAlgorithmValue}. Valid values are: CRC32, CRC32C, SHA1, SHA256, CRC64NVME", $"/{bucketName}/{key}", 400);
+            return S3Error(checksum.ErrorCode!, checksum.ErrorMessage!, $"/{bucketName}/{key}", 400);
         }
 
         // Build checksum request if any checksums were provided
         ChecksumRequest? checksumRequest = null;
-        if (!string.IsNullOrEmpty(checksumAlgorithmValue) || 
-            !string.IsNullOrEmpty(checksumCrc32.ToString()) ||
-            !string.IsNullOrEmpty(checksumCrc32c.ToString()) ||
-            !string.IsNullOrEmpty(checksumSha1.ToString()) ||
-            !string.IsNullOrEmpty(checksumSha256.ToString()) ||
-            !string.IsNullOrEmpty(checksumCrc64nvme.ToString()))
+        if (checksum.Algorithm != null || checksum.CRC32 != null || checksum.CRC32C != null ||
+            checksum.SHA1 != null || checksum.SHA256 != null || checksum.CRC64NVME != null)
         {
             checksumRequest = new ChecksumRequest
             {
-                Algorithm = string.IsNullOrEmpty(checksumAlgorithmValue) ? null : checksumAlgorithmValue,
+                Algorithm = checksum.Algorithm,
                 ProvidedChecksums = new Dictionary<string, string>()
             };
-            
-            if (!string.IsNullOrEmpty(checksumCrc32.ToString()))
-                checksumRequest.ProvidedChecksums["CRC32"] = checksumCrc32.ToString();
-            if (!string.IsNullOrEmpty(checksumCrc32c.ToString()))
-                checksumRequest.ProvidedChecksums["CRC32C"] = checksumCrc32c.ToString();
-            if (!string.IsNullOrEmpty(checksumSha1.ToString()))
-                checksumRequest.ProvidedChecksums["SHA1"] = checksumSha1.ToString();
-            if (!string.IsNullOrEmpty(checksumSha256.ToString()))
-                checksumRequest.ProvidedChecksums["SHA256"] = checksumSha256.ToString();
-            if (!string.IsNullOrEmpty(checksumCrc64nvme.ToString()))
-                checksumRequest.ProvidedChecksums["CRC64NVME"] = checksumCrc64nvme.ToString();
+
+            if (checksum.CRC32 != null) checksumRequest.ProvidedChecksums["CRC32"] = checksum.CRC32;
+            if (checksum.CRC32C != null) checksumRequest.ProvidedChecksums["CRC32C"] = checksum.CRC32C;
+            if (checksum.SHA1 != null) checksumRequest.ProvidedChecksums["SHA1"] = checksum.SHA1;
+            if (checksum.SHA256 != null) checksumRequest.ProvidedChecksums["SHA256"] = checksum.SHA256;
+            if (checksum.CRC64NVME != null) checksumRequest.ProvidedChecksums["CRC64NVME"] = checksum.CRC64NVME;
         }
 
         // The x-amz-trailer header signals which checksum (AWS CLI v2 default CRC64NVME) arrives
@@ -506,47 +524,29 @@ public class S3MultipartController : S3ControllerBase
                 "UploadPartCopy: source={SourceBucket}/{SourceKey}, dest={DestBucket}/{DestKey}, part={PartNumber}, uploadId={UploadId}, range={RangeStart}-{RangeEnd}",
                 sourceBucketName, sourceKey, bucketName, key, partNumber, uploadId, byteRangeStart, byteRangeEnd);
 
-            // Parse checksum headers
-            Request.Headers.TryGetValue("x-amz-checksum-algorithm", out var checksumAlgorithm);
-            Request.Headers.TryGetValue("x-amz-checksum-crc32", out var checksumCrc32);
-            Request.Headers.TryGetValue("x-amz-checksum-crc32c", out var checksumCrc32c);
-            Request.Headers.TryGetValue("x-amz-checksum-sha1", out var checksumSha1);
-            Request.Headers.TryGetValue("x-amz-checksum-sha256", out var checksumSha256);
-            Request.Headers.TryGetValue("x-amz-checksum-crc64nvme", out var checksumCrc64nvme);
-
-            var checksumAlgorithmValue = checksumAlgorithm.ToString();
-
-            // Validate checksum algorithm if provided
-            if (!string.IsNullOrEmpty(checksumAlgorithmValue) && !StreamingChecksumCalculator.IsValidAlgorithm(checksumAlgorithmValue))
+            // Parse and validate checksum headers
+            var checksum = ChecksumHeaderParser.Parse(Request.Headers);
+            if (!checksum.IsValid)
             {
-                return S3Error("InvalidArgument", $"Invalid checksum algorithm: {checksumAlgorithmValue}. Valid values are: CRC32, CRC32C, SHA1, SHA256, CRC64NVME", $"/{bucketName}/{key}", 400);
+                return S3Error(checksum.ErrorCode!, checksum.ErrorMessage!, $"/{bucketName}/{key}", 400);
             }
 
             // Build checksum request if any checksums were provided
             ChecksumRequest? checksumRequest = null;
-            if (!string.IsNullOrEmpty(checksumAlgorithmValue) ||
-                !string.IsNullOrEmpty(checksumCrc32.ToString()) ||
-                !string.IsNullOrEmpty(checksumCrc32c.ToString()) ||
-                !string.IsNullOrEmpty(checksumSha1.ToString()) ||
-                !string.IsNullOrEmpty(checksumSha256.ToString()) ||
-                !string.IsNullOrEmpty(checksumCrc64nvme.ToString()))
+            if (checksum.Algorithm != null || checksum.CRC32 != null || checksum.CRC32C != null ||
+                checksum.SHA1 != null || checksum.SHA256 != null || checksum.CRC64NVME != null)
             {
                 checksumRequest = new ChecksumRequest
                 {
-                    Algorithm = string.IsNullOrEmpty(checksumAlgorithmValue) ? null : checksumAlgorithmValue,
+                    Algorithm = checksum.Algorithm,
                     ProvidedChecksums = new Dictionary<string, string>()
                 };
 
-                if (!string.IsNullOrEmpty(checksumCrc32.ToString()))
-                    checksumRequest.ProvidedChecksums["CRC32"] = checksumCrc32.ToString();
-                if (!string.IsNullOrEmpty(checksumCrc32c.ToString()))
-                    checksumRequest.ProvidedChecksums["CRC32C"] = checksumCrc32c.ToString();
-                if (!string.IsNullOrEmpty(checksumSha1.ToString()))
-                    checksumRequest.ProvidedChecksums["SHA1"] = checksumSha1.ToString();
-                if (!string.IsNullOrEmpty(checksumSha256.ToString()))
-                    checksumRequest.ProvidedChecksums["SHA256"] = checksumSha256.ToString();
-                if (!string.IsNullOrEmpty(checksumCrc64nvme.ToString()))
-                    checksumRequest.ProvidedChecksums["CRC64NVME"] = checksumCrc64nvme.ToString();
+                if (checksum.CRC32 != null) checksumRequest.ProvidedChecksums["CRC32"] = checksum.CRC32;
+                if (checksum.CRC32C != null) checksumRequest.ProvidedChecksums["CRC32C"] = checksum.CRC32C;
+                if (checksum.SHA1 != null) checksumRequest.ProvidedChecksums["SHA1"] = checksum.SHA1;
+                if (checksum.SHA256 != null) checksumRequest.ProvidedChecksums["SHA256"] = checksum.SHA256;
+                if (checksum.CRC64NVME != null) checksumRequest.ProvidedChecksums["CRC64NVME"] = checksum.CRC64NVME;
             }
 
             // Call the facade to copy the object part
@@ -783,7 +783,20 @@ public class S3MultipartController : S3ControllerBase
         CancellationToken cancellationToken = default
     )
     {
-        var parts = await _multipartStorage.ListPartsAsync(bucketName, key, uploadId, cancellationToken);
+        var allParts = await _multipartStorage.ListPartsAsync(bucketName, key, uploadId, cancellationToken);
+
+        // Cap max-parts to S3's maximum of 1000
+        var effectiveMaxParts = Math.Min(maxParts ?? 1000, 1000);
+
+        // Filter parts after the marker and sort by part number
+        var filteredParts = allParts
+            .Where(p => p.PartNumber > (partNumberMarker ?? 0))
+            .OrderBy(p => p.PartNumber)
+            .ToList();
+
+        // Take only up to effectiveMaxParts
+        var returnedParts = filteredParts.Take(effectiveMaxParts).ToList();
+        var isTruncated = filteredParts.Count > effectiveMaxParts;
 
         var result = new ListPartsResult
         {
@@ -792,11 +805,12 @@ public class S3MultipartController : S3ControllerBase
             UploadId = uploadId,
             StorageClass = "STANDARD",
             PartNumberMarker = partNumberMarker ?? 0,
-            MaxParts = maxParts ?? 1000,
-            IsTruncated = false,
+            MaxParts = effectiveMaxParts,
+            IsTruncated = isTruncated,
+            NextPartNumberMarker = isTruncated ? returnedParts.Last().PartNumber : null,
             Owner = new Owner(),
             Initiator = new Owner(),
-            Parts = parts.Select(p => new Part
+            Parts = returnedParts.Select(p => new Part
             {
                 PartNumber = p.PartNumber,
                 LastModified = p.LastModified.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),

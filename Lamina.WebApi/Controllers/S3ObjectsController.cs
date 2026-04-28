@@ -8,6 +8,7 @@ using Lamina.Storage.Core.Helpers;
 using Lamina.WebApi.Authorization;
 using Lamina.WebApi.Controllers.Attributes;
 using Lamina.WebApi.Controllers.Base;
+using Lamina.WebApi.Helpers;
 using Lamina.WebApi.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -221,20 +222,11 @@ public class S3ObjectsController : S3ControllerBase
         // Get authenticated user from claims
         var authenticatedUser = GetS3UserFromClaims();
 
-        // Parse checksum headers
-        Request.Headers.TryGetValue("x-amz-checksum-algorithm", out var checksumAlgorithm);
-        Request.Headers.TryGetValue("x-amz-checksum-crc32", out var checksumCrc32);
-        Request.Headers.TryGetValue("x-amz-checksum-crc32c", out var checksumCrc32c);
-        Request.Headers.TryGetValue("x-amz-checksum-sha1", out var checksumSha1);
-        Request.Headers.TryGetValue("x-amz-checksum-sha256", out var checksumSha256);
-        Request.Headers.TryGetValue("x-amz-checksum-crc64nvme", out var checksumCrc64nvme);
-        
-        var checksumAlgorithmValue = checksumAlgorithm.ToString();
-        
-        // Validate checksum algorithm if provided
-        if (!string.IsNullOrEmpty(checksumAlgorithmValue) && !StreamingChecksumCalculator.IsValidAlgorithm(checksumAlgorithmValue))
+        // Parse and validate checksum headers
+        var checksum = ChecksumHeaderParser.Parse(Request.Headers);
+        if (!checksum.IsValid)
         {
-            return S3Error("InvalidArgument", $"Invalid checksum algorithm: {checksumAlgorithmValue}. Valid values are: CRC32, CRC32C, SHA1, SHA256, CRC64NVME", $"/{bucketName}/{key}", 400);
+            return S3Error(checksum.ErrorCode!, checksum.ErrorMessage!, $"/{bucketName}/{key}", 400);
         }
 
         // Parse Content-MD5 header for integrity validation
@@ -281,12 +273,12 @@ public class S3ObjectsController : S3ControllerBase
             Tags = tagsFromHeader,
             OwnerId = authenticatedUser?.AccessKeyId ?? "anonymous",
             OwnerDisplayName = authenticatedUser?.Name ?? "anonymous",
-            ChecksumAlgorithm = string.IsNullOrEmpty(checksumAlgorithmValue) ? null : checksumAlgorithmValue,
-            ChecksumCRC32 = string.IsNullOrEmpty(checksumCrc32.ToString()) ? null : checksumCrc32.ToString(),
-            ChecksumCRC32C = string.IsNullOrEmpty(checksumCrc32c.ToString()) ? null : checksumCrc32c.ToString(),
-            ChecksumSHA1 = string.IsNullOrEmpty(checksumSha1.ToString()) ? null : checksumSha1.ToString(),
-            ChecksumSHA256 = string.IsNullOrEmpty(checksumSha256.ToString()) ? null : checksumSha256.ToString(),
-            ChecksumCRC64NVME = string.IsNullOrEmpty(checksumCrc64nvme.ToString()) ? null : checksumCrc64nvme.ToString()
+            ChecksumAlgorithm = checksum.Algorithm,
+            ChecksumCRC32 = checksum.CRC32,
+            ChecksumCRC32C = checksum.CRC32C,
+            ChecksumSHA1 = checksum.SHA1,
+            ChecksumSHA256 = checksum.SHA256,
+            ChecksumCRC64NVME = checksum.CRC64NVME
         };
 
         if (Request.Headers.TryGetValue("x-amz-trailer", out var trailerHeader) && !string.IsNullOrEmpty(trailerHeader.ToString()))

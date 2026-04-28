@@ -273,8 +273,15 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
 
         if (string.IsNullOrEmpty(delimiter))
         {
-            keys = keys.Take(maxKeys);
-            result.Keys.AddRange(keys);
+            var keyList = keys.ToList();
+            var returnedKeys = keyList.Take(maxKeys).ToList();
+            result.Keys.AddRange(returnedKeys);
+
+            if (keyList.Count > maxKeys)
+            {
+                result.IsTruncated = true;
+                result.StartAfter = returnedKeys.Last();
+            }
             return Task.FromResult(result);
         }
 
@@ -282,11 +289,14 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         var commonPrefixSet = new HashSet<string>();
         var resultKeys = new List<string>();
         var totalItems = 0;
+        string? lastKey = null;
+        var hasMoreKeys = false;
 
         foreach (var key in keys)
         {
             if (totalItems >= maxKeys)
             {
+                hasMoreKeys = true;
                 break;
             }
 
@@ -299,18 +309,26 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
                 if (commonPrefixSet.Add(commonPrefix))
                 {
                     totalItems++;
+                    lastKey = key;
                 }
             }
             else
             {
                 resultKeys.Add(key);
                 totalItems++;
+                lastKey = key;
             }
         }
 
         result.Keys.AddRange(resultKeys);
         result.CommonPrefixes.AddRange(commonPrefixSet.OrderBy(p => p, StringComparer.Ordinal));
         result.Keys.Sort();
+
+        if (hasMoreKeys && lastKey != null)
+        {
+            result.IsTruncated = true;
+            result.StartAfter = lastKey;
+        }
 
         return Task.FromResult(result);
     }

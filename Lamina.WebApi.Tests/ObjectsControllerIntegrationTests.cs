@@ -588,7 +588,7 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         Assert.Equal(3, result.ContentsList.Count);
         Assert.True(result.IsTruncated);
         Assert.NotNull(result.NextMarker);
-        Assert.Equal("file04.txt", result.NextMarker);
+        Assert.Equal("file03.txt", result.NextMarker); // Last returned key becomes NextMarker
 
         // Check keys are in lexicographic order
         Assert.Equal("file01.txt", result.ContentsList[0].Key);
@@ -608,8 +608,8 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
                 new StringContent($"Content {i}", Encoding.UTF8, "text/plain"));
         }
 
-        // Request objects starting after file02.txt
-        var response = await Client.GetAsync($"/{bucketName}?marker=file03.txt");
+        // Request objects starting AFTER file02.txt (marker is exclusive per S3 spec)
+        var response = await Client.GetAsync($"/{bucketName}?marker=file02.txt");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
@@ -623,7 +623,7 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         Assert.False(result.IsTruncated);
         Assert.Null(result.NextMarker);
 
-        // Check we got the remaining objects
+        // Check we got objects AFTER file02.txt
         Assert.Equal("file03.txt", result.ContentsList[0].Key);
         Assert.Equal("file04.txt", result.ContentsList[1].Key);
         Assert.Equal("file05.txt", result.ContentsList[2].Key);
@@ -651,9 +651,9 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         Assert.NotNull(result1);
         Assert.Equal(2, result1.ContentsList.Count);
         Assert.True(result1.IsTruncated);
-        Assert.Equal("file03.txt", result1.NextMarker);
+        Assert.Equal("file02.txt", result1.NextMarker); // Last returned key becomes NextMarker
 
-        // Second request: continue from where we left off
+        // Second request: continue from where we left off (marker is exclusive)
         var response2 = await Client.GetAsync($"/{bucketName}?max-keys=2&marker={result1.NextMarker}");
         var xmlContent2 = await response2.Content.ReadAsStringAsync();
         using var reader2 = new StringReader(xmlContent2);
@@ -662,7 +662,7 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         Assert.NotNull(result2);
         Assert.Equal(2, result2.ContentsList.Count);
         Assert.True(result2.IsTruncated);
-        Assert.Equal("file05.txt", result2.NextMarker);
+        Assert.Equal("file04.txt", result2.NextMarker); // Last returned key becomes NextMarker
         Assert.Equal("file03.txt", result2.ContentsList[0].Key);
         Assert.Equal("file04.txt", result2.ContentsList[1].Key);
 
@@ -752,8 +752,8 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
                 new StringContent($"Content {i}", Encoding.UTF8, "text/plain"));
         }
 
-        // Test continuation-token parameter (same behavior as marker)
-        var response = await Client.GetAsync($"/{bucketName}?continuation-token=item03.txt");
+        // Test continuation-token parameter (same behavior as marker - returns objects AFTER the token)
+        var response = await Client.GetAsync($"/{bucketName}?continuation-token=item02.txt");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
@@ -766,7 +766,7 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         Assert.Equal(2, result.ContentsList.Count);
         Assert.False(result.IsTruncated);
 
-        // Should get items after item02.txt
+        // Should get items AFTER item02.txt (marker is exclusive per S3 spec)
         Assert.Equal("item03.txt", result.ContentsList[0].Key);
         Assert.Equal("item04.txt", result.ContentsList[1].Key);
     }
@@ -1296,6 +1296,133 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
             new StringContent("content"));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    #endregion
+
+    #region ListObjectsV2 Pagination Tests
+
+    [Fact]
+    public async Task ListObjectsV2_WithStartAfter_SkipsKeysUpToAndIncluding()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create 5 objects
+        for (int i = 1; i <= 5; i++)
+        {
+            await Client.PutAsync($"/{bucketName}/item{i:D2}.txt",
+                new StringContent($"Content {i}", Encoding.UTF8, "text/plain"));
+        }
+
+        // V2 listing with start-after
+        var response = await Client.GetAsync($"/{bucketName}?list-type=2&start-after=item02.txt");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResultV2));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResultV2?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+        // Debug: print actual keys
+        var actualKeys = string.Join(", ", result.ContentsList.Select(c => c.Key));
+        Assert.True(result.ContentsList.Count == 3, $"Expected 3 items, got {result.ContentsList.Count}: [{actualKeys}]");
+        Assert.Equal("item03.txt", result.ContentsList[0].Key);
+        Assert.Equal("item04.txt", result.ContentsList[1].Key);
+        Assert.Equal("item05.txt", result.ContentsList[2].Key);
+    }
+
+    [Fact]
+    public async Task ListObjectsV2_WithContinuationToken_IgnoresStartAfter()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create 5 objects
+        for (int i = 1; i <= 5; i++)
+        {
+            await Client.PutAsync($"/{bucketName}/item{i:D2}.txt",
+                new StringContent($"Content {i}", Encoding.UTF8, "text/plain"));
+        }
+
+        // First page
+        var page1Response = await Client.GetAsync($"/{bucketName}?list-type=2&max-keys=2");
+        var page1Xml = await page1Response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResultV2));
+        using var page1Reader = new StringReader(page1Xml);
+        var page1 = (ListBucketResultV2?)serializer.Deserialize(page1Reader);
+
+        Assert.NotNull(page1);
+        Assert.True(page1.IsTruncated);
+        Assert.NotNull(page1.NextContinuationToken);
+
+        // Second page with continuation-token AND start-after (start-after should be ignored)
+        var page2Response = await Client.GetAsync(
+            $"/{bucketName}?list-type=2&max-keys=2&continuation-token={Uri.EscapeDataString(page1.NextContinuationToken)}&start-after=item01.txt");
+        var page2Xml = await page2Response.Content.ReadAsStringAsync();
+        using var page2Reader = new StringReader(page2Xml);
+        var page2 = (ListBucketResultV2?)serializer.Deserialize(page2Reader);
+
+        Assert.NotNull(page2);
+        // Debug: show page1 and page2 contents
+        var page1Keys = string.Join(", ", page1.ContentsList.Select(c => c.Key));
+        var page2Keys = string.Join(", ", page2.ContentsList.Select(c => c.Key));
+        Assert.True(page2.ContentsList.Count == 2, $"Expected 2 items on page2, got {page2.ContentsList.Count}. Page1: [{page1Keys}], Page2: [{page2Keys}], Token: {page1.NextContinuationToken}");
+        // Should continue from page 1, not from start-after
+        Assert.True(page2.ContentsList[0].Key == "item03.txt", $"Expected first item on page2 to be item03.txt, got {page2.ContentsList[0].Key}. Page1: [{page1Keys}], Page2: [{page2Keys}], Token: {page1.NextContinuationToken}");
+    }
+
+    [Fact]
+    public async Task ListObjectsV2_NextContinuationToken_IsOpaque()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create 5 objects
+        for (int i = 1; i <= 5; i++)
+        {
+            await Client.PutAsync($"/{bucketName}/item{i:D2}.txt",
+                new StringContent($"Content {i}", Encoding.UTF8, "text/plain"));
+        }
+
+        // V2 listing with max-keys to force pagination
+        var response = await Client.GetAsync($"/{bucketName}?list-type=2&max-keys=2");
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResultV2));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResultV2?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+        Assert.True(result.IsTruncated);
+        Assert.NotNull(result.NextContinuationToken);
+
+        // Token should be opaque (start with v1: prefix)
+        Assert.StartsWith("v1:", result.NextContinuationToken);
+        Assert.NotEqual("item02.txt", result.NextContinuationToken); // Not raw key
+    }
+
+    [Fact]
+    public async Task ListObjectsV1_Marker_StillWorksAsRawKey()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        // Create 5 objects
+        for (int i = 1; i <= 5; i++)
+        {
+            await Client.PutAsync($"/{bucketName}/item{i:D2}.txt",
+                new StringContent($"Content {i}", Encoding.UTF8, "text/plain"));
+        }
+
+        // V1 listing with marker (raw key)
+        var response = await Client.GetAsync($"/{bucketName}?marker=item02.txt");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var xmlContent = await response.Content.ReadAsStringAsync();
+        var serializer = new XmlSerializer(typeof(ListBucketResult));
+        using var reader = new StringReader(xmlContent);
+        var result = (ListBucketResult?)serializer.Deserialize(reader);
+
+        Assert.NotNull(result);
+        Assert.Equal(3, result.ContentsList.Count); // items 03, 04, 05
+        Assert.Equal("item03.txt", result.ContentsList[0].Key);
     }
 
     #endregion

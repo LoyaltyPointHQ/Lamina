@@ -162,4 +162,28 @@ public class ObjectTaggingHeaderIntegrationTests : IntegrationTestBase
         var tagging = DeserializeTagging(await get.Content.ReadAsStringAsync());
         Assert.Empty(tagging.TagSet);
     }
+
+    [Fact]
+    public async Task PutObject_WithTagsOnly_NoExplicitContentType_TagsPersist()
+    {
+        // This test verifies that tags are persisted even when:
+        // - No explicit Content-Type is set (uses auto-detected)
+        // - No custom metadata is provided
+        // - No checksums are provided
+        // This is a regression test for ShouldStoreMetadata not checking Tags
+        var bucket = await CreateBucketAsync();
+        var content = new ByteArrayContent("data"u8.ToArray());
+        content.Headers.Add("x-amz-tagging", "env=prod&team=core");
+
+        var put = await Client.PutAsync($"/{bucket}/file.bin", content);
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+
+        var get = await Client.GetAsync($"/{bucket}/file.bin?tagging");
+        Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+        var tagging = DeserializeTagging(await get.Content.ReadAsStringAsync());
+
+        Assert.Equal(2, tagging.TagSet.Count);
+        Assert.Contains(tagging.TagSet, t => t.Key == "env" && t.Value == "prod");
+        Assert.Contains(tagging.TagSet, t => t.Key == "team" && t.Value == "core");
+    }
 }

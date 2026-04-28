@@ -358,14 +358,26 @@ public class ListMultipartUploadsResult
     [XmlElement("NextUploadIdMarker")]
     public string? NextUploadIdMarker { get; set; }
 
+    [XmlElement("Prefix")]
+    public string? Prefix { get; set; }
+
+    [XmlElement("Delimiter")]
+    public string? Delimiter { get; set; }
+
     [XmlElement("MaxUploads")]
     public int MaxUploads { get; set; }
+
+    [XmlElement("EncodingType")]
+    public string? EncodingType { get; set; }
 
     [XmlElement("IsTruncated")]
     public bool IsTruncated { get; set; }
 
     [XmlElement("Upload")]
     public List<Upload> Uploads { get; set; } = new();
+
+    [XmlElement("CommonPrefixes")]
+    public List<CommonPrefixes> CommonPrefixesList { get; set; } = new();
 
     // Conditionally serialize NextKeyMarker and NextUploadIdMarker only when IsTruncated is true
     public bool ShouldSerializeNextKeyMarker() => IsTruncated && !string.IsNullOrEmpty(NextKeyMarker);

@@ -789,8 +789,15 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
         var commonPrefixSet = new HashSet<string>();
         var traversalState = new TraversalState(result, commonPrefixSet, maxKeys);
 
-        foreach (var entryName in GetFilesystemEnumerator(path, config.OrderedLexically, config.AllRecursive)
-                     .SkipWhile(x => !string.IsNullOrEmpty(startAfter) && EntryNameToKey(path, x) != startAfter))
+        // Skip entries up to and INCLUDING startAfter (S3 start-after means "keys greater than")
+        var enumerator = GetFilesystemEnumerator(path, config.OrderedLexically, config.AllRecursive);
+        if (!string.IsNullOrEmpty(startAfter))
+        {
+            enumerator = enumerator
+                .SkipWhile(x => string.Compare(EntryNameToKey(path, x), startAfter, StringComparison.Ordinal) <= 0);
+        }
+
+        foreach (var entryName in enumerator)
         {
             prefix ??= "";
 
@@ -800,11 +807,13 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
             if (HasReachedLimit(traversalState))
             {
                 result.IsTruncated = true;
-                result.StartAfter = key;
+                // Use last added key as StartAfter, not the current key
+                result.StartAfter = traversalState.LastAddedKey;
                 break;
             }
 
             ProcessFileSystemEntry(entryName, key, prefix, delimiter, config.AllRecursive, traversalState);
+            traversalState.LastAddedKey = key;
         }
 
         FinalizeCommonPrefixes(traversalState, config.OrderedLexically);
@@ -816,6 +825,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
         public ListDataResult Result { get; }
         public HashSet<string> CommonPrefixSet { get; }
         public int MaxKeys { get; }
+        public string? LastAddedKey { get; set; }
 
         public TraversalState(ListDataResult result, HashSet<string> commonPrefixSet, int maxKeys)
         {

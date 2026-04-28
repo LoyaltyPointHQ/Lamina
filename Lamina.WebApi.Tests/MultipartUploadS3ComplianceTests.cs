@@ -1085,4 +1085,261 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
 
         Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
     }
+
+    #region ListParts Pagination Tests
+
+    private async Task<(string bucket, string key, string uploadId, List<string> etags)> SetupMultipartWithPartsAsync(int partCount)
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var key = "pagination-test.bin";
+
+        var initResponse = await Client.PostAsync($"/{bucketName}/{key}?uploads", null);
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(await initResponse.Content.ReadAsStringAsync());
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+
+        var etags = new List<string>();
+        for (int i = 1; i <= partCount; i++)
+        {
+            var partResponse = await Client.PutAsync(
+                $"/{bucketName}/{key}?partNumber={i}&uploadId={initResult!.UploadId}",
+                new StringContent($"Part {i} content", Encoding.UTF8));
+            etags.Add(partResponse.Headers.GetValues("ETag").First().Trim('"'));
+        }
+
+        return (bucketName, key, initResult!.UploadId, etags);
+    }
+
+    private static ListPartsResult DeserializeListParts(string xml)
+    {
+        var serializer = new XmlSerializer(typeof(ListPartsResult));
+        using var reader = new StringReader(xml);
+        return (ListPartsResult)serializer.Deserialize(reader)!;
+    }
+
+    [Fact]
+    public async Task ListParts_WithMaxParts_ReturnsLimitedResults()
+    {
+        var (bucket, key, uploadId, _) = await SetupMultipartWithPartsAsync(5);
+
+        var response = await Client.GetAsync($"/{bucket}/{key}?uploadId={uploadId}&max-parts=2");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = DeserializeListParts(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(2, result.Parts.Count);
+        Assert.True(result.IsTruncated);
+        Assert.Equal(2, result.MaxParts);
+    }
+
+    [Fact]
+    public async Task ListParts_WithPartNumberMarker_ReturnsOnlyPartsAfterMarker()
+    {
+        var (bucket, key, uploadId, _) = await SetupMultipartWithPartsAsync(5);
+
+        var response = await Client.GetAsync($"/{bucket}/{key}?uploadId={uploadId}&part-number-marker=2");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = DeserializeListParts(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(3, result.Parts.Count); // Parts 3, 4, 5
+        Assert.All(result.Parts, p => Assert.True(p.PartNumber > 2));
+        Assert.False(result.IsTruncated);
+    }
+
+    [Fact]
+    public async Task ListParts_TruncatedResult_SetsNextPartNumberMarker()
+    {
+        var (bucket, key, uploadId, _) = await SetupMultipartWithPartsAsync(5);
+
+        var response = await Client.GetAsync($"/{bucket}/{key}?uploadId={uploadId}&max-parts=2");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = DeserializeListParts(await response.Content.ReadAsStringAsync());
+
+        Assert.True(result.IsTruncated);
+        Assert.NotNull(result.NextPartNumberMarker);
+        Assert.Equal(2, result.NextPartNumberMarker); // Last returned part number
+    }
+
+    [Fact]
+    public async Task ListParts_PaginationContinuation_ReturnsNextPage()
+    {
+        var (bucket, key, uploadId, _) = await SetupMultipartWithPartsAsync(5);
+
+        // First page
+        var page1Response = await Client.GetAsync($"/{bucket}/{key}?uploadId={uploadId}&max-parts=2");
+        var page1 = DeserializeListParts(await page1Response.Content.ReadAsStringAsync());
+        Assert.Equal(2, page1.Parts.Count);
+        Assert.True(page1.IsTruncated);
+
+        // Second page using NextPartNumberMarker
+        var page2Response = await Client.GetAsync(
+            $"/{bucket}/{key}?uploadId={uploadId}&max-parts=2&part-number-marker={page1.NextPartNumberMarker}");
+        var page2 = DeserializeListParts(await page2Response.Content.ReadAsStringAsync());
+
+        Assert.Equal(2, page2.Parts.Count);
+        Assert.True(page2.IsTruncated);
+        Assert.All(page2.Parts, p => Assert.True(p.PartNumber > page1.NextPartNumberMarker));
+
+        // Third page
+        var page3Response = await Client.GetAsync(
+            $"/{bucket}/{key}?uploadId={uploadId}&max-parts=2&part-number-marker={page2.NextPartNumberMarker}");
+        var page3 = DeserializeListParts(await page3Response.Content.ReadAsStringAsync());
+
+        Assert.Single(page3.Parts);
+        Assert.False(page3.IsTruncated);
+    }
+
+    [Fact]
+    public async Task ListParts_MaxPartsOver1000_CapsTo1000()
+    {
+        var (bucket, key, uploadId, _) = await SetupMultipartWithPartsAsync(3);
+
+        var response = await Client.GetAsync($"/{bucket}/{key}?uploadId={uploadId}&max-parts=9999");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = DeserializeListParts(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(1000, result.MaxParts); // Capped to 1000
+        Assert.Equal(3, result.Parts.Count); // But only 3 parts exist
+        Assert.False(result.IsTruncated);
+    }
+
+    #endregion
+
+    #region ListMultipartUploads Pagination Tests
+
+    private async Task<List<string>> InitiateMultipleUploadsAsync(string bucketName, params string[] keys)
+    {
+        var uploadIds = new List<string>();
+        foreach (var key in keys)
+        {
+            var initResponse = await Client.PostAsync($"/{bucketName}/{key}?uploads", null);
+            var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+            using var initReader = new StringReader(await initResponse.Content.ReadAsStringAsync());
+            var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+            uploadIds.Add(initResult!.UploadId);
+        }
+        return uploadIds;
+    }
+
+    private static ListMultipartUploadsResult DeserializeListUploads(string xml)
+    {
+        var serializer = new XmlSerializer(typeof(ListMultipartUploadsResult));
+        using var reader = new StringReader(xml);
+        return (ListMultipartUploadsResult)serializer.Deserialize(reader)!;
+    }
+
+    [Fact]
+    public async Task ListMultipartUploads_WithMaxUploads_ReturnsLimitedResults()
+    {
+        var bucket = await CreateTestBucketAsync();
+        await InitiateMultipleUploadsAsync(bucket, "a.txt", "b.txt", "c.txt", "d.txt", "e.txt");
+
+        var response = await Client.GetAsync($"/{bucket}?uploads&max-uploads=2");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = DeserializeListUploads(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(2, result.Uploads.Count);
+        Assert.True(result.IsTruncated);
+        Assert.Equal(2, result.MaxUploads);
+    }
+
+    [Fact]
+    public async Task ListMultipartUploads_WithKeyMarker_ReturnsOnlyUploadsAfterKey()
+    {
+        var bucket = await CreateTestBucketAsync();
+        await InitiateMultipleUploadsAsync(bucket, "a.txt", "b.txt", "c.txt", "d.txt", "e.txt");
+
+        var response = await Client.GetAsync($"/{bucket}?uploads&key-marker=b.txt");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = DeserializeListUploads(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(3, result.Uploads.Count); // c.txt, d.txt, e.txt
+        Assert.All(result.Uploads, u => Assert.True(string.Compare(u.Key, "b.txt", StringComparison.Ordinal) > 0));
+    }
+
+    [Fact]
+    public async Task ListMultipartUploads_TruncatedResult_SetsNextMarkers()
+    {
+        var bucket = await CreateTestBucketAsync();
+        await InitiateMultipleUploadsAsync(bucket, "a.txt", "b.txt", "c.txt", "d.txt", "e.txt");
+
+        var response = await Client.GetAsync($"/{bucket}?uploads&max-uploads=2");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = DeserializeListUploads(await response.Content.ReadAsStringAsync());
+
+        Assert.True(result.IsTruncated);
+        Assert.NotNull(result.NextKeyMarker);
+        Assert.NotNull(result.NextUploadIdMarker);
+    }
+
+    [Fact]
+    public async Task ListMultipartUploads_PaginationContinuation_ReturnsNextPage()
+    {
+        var bucket = await CreateTestBucketAsync();
+        await InitiateMultipleUploadsAsync(bucket, "a.txt", "b.txt", "c.txt", "d.txt", "e.txt");
+
+        // First page
+        var page1Response = await Client.GetAsync($"/{bucket}?uploads&max-uploads=2");
+        var page1 = DeserializeListUploads(await page1Response.Content.ReadAsStringAsync());
+        Assert.Equal(2, page1.Uploads.Count);
+        Assert.True(page1.IsTruncated);
+
+        // Second page using NextKeyMarker and NextUploadIdMarker
+        var page2Response = await Client.GetAsync(
+            $"/{bucket}?uploads&max-uploads=2&key-marker={page1.NextKeyMarker}&upload-id-marker={page1.NextUploadIdMarker}");
+        var page2 = DeserializeListUploads(await page2Response.Content.ReadAsStringAsync());
+
+        Assert.Equal(2, page2.Uploads.Count);
+        Assert.True(page2.IsTruncated);
+        // All uploads in page2 should come after page1's last upload
+        Assert.All(page2.Uploads, u => Assert.True(
+            string.Compare(u.Key, page1.NextKeyMarker, StringComparison.Ordinal) > 0 ||
+            (u.Key == page1.NextKeyMarker && string.Compare(u.UploadId, page1.NextUploadIdMarker, StringComparison.Ordinal) > 0)));
+
+        // Third page
+        var page3Response = await Client.GetAsync(
+            $"/{bucket}?uploads&max-uploads=2&key-marker={page2.NextKeyMarker}&upload-id-marker={page2.NextUploadIdMarker}");
+        var page3 = DeserializeListUploads(await page3Response.Content.ReadAsStringAsync());
+
+        Assert.Single(page3.Uploads);
+        Assert.False(page3.IsTruncated);
+    }
+
+    [Fact]
+    public async Task ListMultipartUploads_WithPrefix_FiltersKeys()
+    {
+        var bucket = await CreateTestBucketAsync();
+        await InitiateMultipleUploadsAsync(bucket, "logs/a.txt", "logs/b.txt", "data/c.txt", "data/d.txt");
+
+        var response = await Client.GetAsync($"/{bucket}?uploads&prefix=logs/");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = DeserializeListUploads(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(2, result.Uploads.Count);
+        Assert.All(result.Uploads, u => Assert.StartsWith("logs/", u.Key));
+    }
+
+    [Fact]
+    public async Task ListMultipartUploads_MaxUploadsOver1000_CapsTo1000()
+    {
+        var bucket = await CreateTestBucketAsync();
+        await InitiateMultipleUploadsAsync(bucket, "a.txt", "b.txt", "c.txt");
+
+        var response = await Client.GetAsync($"/{bucket}?uploads&max-uploads=9999");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = DeserializeListUploads(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(1000, result.MaxUploads); // Capped to 1000
+        Assert.Equal(3, result.Uploads.Count); // But only 3 uploads exist
+    }
+
+    #endregion
 }

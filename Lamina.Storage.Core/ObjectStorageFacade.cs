@@ -215,6 +215,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
     {
         request ??= new ListObjectsRequest();
         var effectiveMaxKeys = Math.Min(request.MaxKeys, 1000); // S3 limits to 1000
+        var isV2 = request.ListType == 2;
 
         // Get bucket type for storage optimization
         var bucket = await _bucketStorage.GetBucketAsync(bucketName, cancellationToken);
@@ -227,14 +228,40 @@ public class ObjectStorageFacade : IObjectStorageFacade
             return StorageResult<ListObjectsResponse>.Error("InvalidArgument", validationError);
         }
 
+        // Determine the effective start-after key for pagination
+        string? startAfterKey = null;
+        if (isV2)
+        {
+            // V2: continuation-token takes precedence, then start-after
+            if (!string.IsNullOrEmpty(request.ContinuationToken))
+            {
+                // Decode opaque token, fall back to raw key for backward compatibility
+                startAfterKey = ContinuationToken.Decode(request.ContinuationToken) ?? request.ContinuationToken;
+            }
+            else if (!string.IsNullOrEmpty(request.StartAfter))
+            {
+                startAfterKey = request.StartAfter;
+            }
+        }
+        else
+        {
+            // V1: marker is raw key
+            startAfterKey = request.ContinuationToken;
+        }
+
         var dataResult = await _dataStorage.ListDataKeysAsync(
             bucketName,
             bucketType,
             request.Prefix,
             request.Delimiter,
-            request.ContinuationToken, // This could be marker or continuation-token
-            effectiveMaxKeys, // Don't limit if not checking truncation
+            startAfterKey,
+            effectiveMaxKeys,
             cancellationToken);
+
+        // For V2, encode NextContinuationToken as opaque; for V1, keep raw key
+        var nextToken = dataResult.IsTruncated && !string.IsNullOrEmpty(dataResult.StartAfter)
+            ? (isV2 ? ContinuationToken.Encode(dataResult.StartAfter) : dataResult.StartAfter)
+            : null;
 
         var response = new ListObjectsResponse
         {
@@ -242,7 +269,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
             Delimiter = request.Delimiter,
             MaxKeys = effectiveMaxKeys,
             IsTruncated = dataResult.IsTruncated,
-            NextContinuationToken = dataResult.StartAfter,
+            NextContinuationToken = nextToken,
             CommonPrefixes = dataResult.CommonPrefixes ?? new List<string>()
         };
 
@@ -387,6 +414,12 @@ public class ObjectStorageFacade : IObjectStorageFacade
             !string.IsNullOrEmpty(request.ChecksumAlgorithm))
         {
             return true; // Checksums present, store metadata to preserve them
+        }
+
+        // Check if there are any tags that need to be persisted
+        if (request.Tags is { Count: > 0 })
+        {
+            return true; // Tags present, store metadata to preserve them
         }
 
         // Metadata matches defaults, no need to store
