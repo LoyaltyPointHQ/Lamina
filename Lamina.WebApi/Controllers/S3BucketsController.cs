@@ -205,15 +205,15 @@ public class S3BucketsController : S3ControllerBase
     {
         _logger.LogInformation("Deleting bucket: {BucketName}", bucketName);
 
-        var deleted = await _bucketStorage.DeleteBucketAsync(bucketName, force: true, cancellationToken);
-        if (!deleted)
-        {
-            _logger.LogWarning("Bucket not found for deletion: {BucketName}", bucketName);
-            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
-        }
+        var result = await _bucketStorage.DeleteBucketAsync(bucketName, force: false, cancellationToken);
 
-        _logger.LogInformation("Bucket deleted successfully: {BucketName}", bucketName);
-        return NoContent();
+        return result switch
+        {
+            DeleteBucketResult.Success => NoContent(),
+            DeleteBucketResult.NotFound => S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404),
+            DeleteBucketResult.NotEmpty => S3Error("BucketNotEmpty", "The bucket you tried to delete is not empty", bucketName, 409),
+            _ => S3Error("InternalError", "An internal error occurred", bucketName, 500)
+        };
     }
 
     [HttpHead("{bucketName}")]

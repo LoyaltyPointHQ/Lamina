@@ -237,6 +237,24 @@ public class S3ObjectsController : S3ControllerBase
             return S3Error("InvalidArgument", $"Invalid checksum algorithm: {checksumAlgorithmValue}. Valid values are: CRC32, CRC32C, SHA1, SHA256, CRC64NVME", $"/{bucketName}/{key}", 400);
         }
 
+        // Parse Content-MD5 header for integrity validation
+        byte[]? expectedMd5 = null;
+        if (Request.Headers.TryGetValue("Content-MD5", out var contentMd5Header) && !string.IsNullOrEmpty(contentMd5Header.ToString()))
+        {
+            try
+            {
+                expectedMd5 = Convert.FromBase64String(contentMd5Header.ToString());
+                if (expectedMd5.Length != 16)
+                {
+                    return S3Error("InvalidDigest", "The Content-MD5 you specified is not valid.", $"/{bucketName}/{key}", 400);
+                }
+            }
+            catch (FormatException)
+            {
+                return S3Error("InvalidDigest", "The Content-MD5 you specified is not valid.", $"/{bucketName}/{key}", 400);
+            }
+        }
+
         Dictionary<string, string>? tagsFromHeader = null;
         if (Request.Headers.TryGetValue("x-amz-tagging", out var taggingHeader) && !string.IsNullOrEmpty(taggingHeader.ToString()))
         {
@@ -291,8 +309,8 @@ public class S3ObjectsController : S3ControllerBase
             return S3Error("NotImplemented", "The specified streaming upload method is not supported.", $"/{bucketName}/{key}", 501);
 
         var storeResult = chunkValidator != null
-            ? await _objectStorage.PutObjectAsync(bucketName, key, reader, chunkValidator, putRequest, cancellationToken)
-            : await _objectStorage.PutObjectAsync(bucketName, key, reader, putRequest, cancellationToken);
+            ? await _objectStorage.PutObjectAsync(bucketName, key, reader, chunkValidator, putRequest, expectedMd5, cancellationToken)
+            : await _objectStorage.PutObjectAsync(bucketName, key, reader, putRequest, expectedMd5, cancellationToken);
 
         if (!storeResult.IsSuccess)
         {
@@ -302,6 +320,13 @@ public class S3ObjectsController : S3ControllerBase
                 _logger.LogWarning("Checksum validation failed for object {Key} in bucket {BucketName}: {ErrorMessage}",
                     key, bucketName, storeResult.ErrorMessage);
                 return S3Error("InvalidChecksum", storeResult.ErrorMessage!, $"/{bucketName}/{key}", 400);
+            }
+
+            if (storeResult.ErrorCode == "BadDigest")
+            {
+                _logger.LogWarning("Content-MD5 validation failed for object {Key} in bucket {BucketName}: {ErrorMessage}",
+                    key, bucketName, storeResult.ErrorMessage);
+                return S3Error("BadDigest", storeResult.ErrorMessage!, $"/{bucketName}/{key}", 400);
             }
 
             // If we had a chunk validator and the operation failed, it's likely due to invalid signature

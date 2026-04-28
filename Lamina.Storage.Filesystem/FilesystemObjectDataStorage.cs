@@ -52,6 +52,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
         PipeReader dataReader,
         IChunkSignatureValidator? chunkValidator,
         ChecksumRequest? checksumRequest,
+        byte[]? expectedMd5 = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -135,6 +136,12 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
             }
 
             var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
+
+            if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
+            {
+                File.Delete(tempPath);
+                return StorageResult<PreparedData>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
+            }
 
             var preparedData = new PreparedData
             {

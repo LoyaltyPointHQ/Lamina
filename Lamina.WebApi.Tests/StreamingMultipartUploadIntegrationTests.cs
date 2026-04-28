@@ -68,8 +68,9 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
         // Step 1: Initiate multipart upload
         var uploadId = await InitiateMultipartUploadAsync(bucketName, key);
 
-        // Step 2: Upload parts with streaming authentication
-        var part1Data = "Part 1 data with streaming auth"u8.ToArray();
+        // Step 2: Upload parts with streaming authentication (part 1 must be >= 5MB for non-last parts)
+        var part1Data = new byte[5 * 1024 * 1024];
+        Array.Fill(part1Data, (byte)'A');
         var part2Data = "Part 2 data with streaming auth"u8.ToArray();
 
         var part1ETag = await UploadPartWithStreamingAuth(bucketName, key, uploadId, 1, part1Data);
@@ -131,8 +132,9 @@ public class StreamingMultipartUploadIntegrationTests : IClassFixture<WebApplica
         // Step 1: Initiate multipart upload
         var uploadId = await InitiateMultipartUploadAsync(bucketName, key);
 
-        // Step 2: Upload one part with streaming, one without
-        var part1Data = "Part 1 with streaming"u8.ToArray();
+        // Step 2: Upload one part with streaming, one without (part 1 must be >= 5MB for non-last parts)
+        var part1Data = new byte[5 * 1024 * 1024];
+        Array.Fill(part1Data, (byte)'A');
         var part2Data = "Part 2 without streaming"u8.ToArray();
 
         var part1ETag = await UploadPartWithStreamingAuth(bucketName, key, uploadId, 1, part1Data);

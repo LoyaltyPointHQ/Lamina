@@ -298,7 +298,7 @@ public class BucketsControllerIntegrationTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task DeleteBucket_BucketWithFiles_Returns204()
+    public async Task DeleteBucket_BucketWithFiles_Returns409BucketNotEmpty()
     {
         var bucketName = $"delete-with-files-{Guid.NewGuid()}";
 
@@ -309,13 +309,37 @@ public class BucketsControllerIntegrationTests : IntegrationTestBase
         var putResponse = await Client.PutAsync($"/{bucketName}/file1.txt", new StringContent("content1"));
         Assert.Equal(HttpStatusCode.OK, putResponse.StatusCode);
 
-        // Delete bucket (should delete all files)
+        // Delete bucket (should fail with BucketNotEmpty per S3 spec)
+        var deleteResponse = await Client.DeleteAsync($"/{bucketName}");
+        Assert.Equal(HttpStatusCode.Conflict, deleteResponse.StatusCode);
+
+        var errorXml = await deleteResponse.Content.ReadAsStringAsync();
+        Assert.Contains("BucketNotEmpty", errorXml);
+
+        // Verify bucket still exists
+        var bucketResponse = await Client.GetAsync($"/{bucketName}?location");
+        Assert.Equal(HttpStatusCode.OK, bucketResponse.StatusCode);
+
+        // Verify file still exists
+        var fileResponse = await Client.GetAsync($"/{bucketName}/file1.txt");
+        Assert.Equal(HttpStatusCode.OK, fileResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteBucket_AfterDeletingAllObjects_Returns204()
+    {
+        var bucketName = $"delete-after-clear-{Guid.NewGuid()}";
+
+        // Create bucket and add file
+        await Client.PutAsync($"/{bucketName}", null);
+        await Client.PutAsync($"/{bucketName}/file1.txt", new StringContent("content"));
+
+        // Delete the file
+        await Client.DeleteAsync($"/{bucketName}/file1.txt");
+
+        // Now delete bucket should succeed
         var deleteResponse = await Client.DeleteAsync($"/{bucketName}");
         Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
-
-        // Verify bucket is gone
-        var bucketResponse = await Client.GetAsync($"/{bucketName}");
-        Assert.Equal(HttpStatusCode.NotFound, bucketResponse.StatusCode);
     }
 
     [Fact]

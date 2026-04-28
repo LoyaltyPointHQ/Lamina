@@ -209,8 +209,8 @@ if (usesFilesystemData)
 }
 else
 {
-    builder.Services.AddSingleton<IBucketDataStorage, InMemoryBucketDataStorage>();
     builder.Services.AddSingleton<IObjectDataStorage, InMemoryObjectDataStorage>();
+    builder.Services.AddSingleton<IBucketDataStorage, InMemoryBucketDataStorage>();
     builder.Services.AddSingleton<IMultipartUploadDataStorage, InMemoryMultipartUploadDataStorage>();
 }
 

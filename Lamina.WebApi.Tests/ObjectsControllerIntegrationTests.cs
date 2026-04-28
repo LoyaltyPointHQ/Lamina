@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Serialization;
 using Lamina.Core.Models;
@@ -426,10 +427,11 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
         Assert.NotNull(initResult);
 
-        // Upload parts
+        // Upload parts (part 1 must be >= 5MB per S3 spec for non-last parts)
+        var part1Content = new string('A', 5 * 1024 * 1024);
         var part1Response = await Client.PutAsync(
             $"/{bucketName}/complete.bin?partNumber=1&uploadId={initResult.UploadId}",
-            new StringContent("Part 1 ", Encoding.UTF8));
+            new StringContent(part1Content, Encoding.UTF8));
         Assert.Equal(HttpStatusCode.OK, part1Response.StatusCode);
         var part1ETag = part1Response.Headers.GetValues("ETag").First().Trim('"');
 
@@ -469,7 +471,9 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         var content = await getResponse.Content.ReadAsStringAsync();
         var contentLength = getResponse.Content.Headers.ContentLength;
         Assert.True(contentLength > 0, $"Content length should be greater than 0, but was {contentLength}");
-        Assert.Equal("Part 1 Part 2", content);
+        Assert.Equal(5 * 1024 * 1024 + 6, content.Length); // part1Content (5MB) + "Part 2"
+        Assert.StartsWith(new string('A', 100), content);
+        Assert.EndsWith("Part 2", content);
     }
 
     [Fact]
@@ -1199,4 +1203,100 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
         var responseContent = await response.Content.ReadAsStringAsync();
         Assert.Equal(content, responseContent);
     }
+
+    #region Content-MD5 Validation Tests
+
+    [Fact]
+    public async Task PutObject_WithValidContentMd5_Succeeds()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var content = "test content"u8.ToArray();
+        var md5 = MD5.HashData(content);
+        var md5Base64 = Convert.ToBase64String(md5);
+
+        var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/md5-valid.txt")
+        {
+            Content = new ByteArrayContent(content)
+        };
+        request.Content.Headers.Add("Content-MD5", md5Base64);
+
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task PutObject_WithMismatchingContentMd5_ReturnsBadDigest()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var content = "test content"u8.ToArray();
+        var wrongMd5Base64 = Convert.ToBase64String(new byte[16]);
+
+        var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/md5-bad.txt")
+        {
+            Content = new ByteArrayContent(content)
+        };
+        request.Content.Headers.Add("Content-MD5", wrongMd5Base64);
+
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("BadDigest", body);
+
+        // Verify object was not created
+        var getResponse = await Client.GetAsync($"/{bucketName}/md5-bad.txt");
+        Assert.Equal(HttpStatusCode.NotFound, getResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task PutObject_WithMalformedContentMd5_ReturnsInvalidDigest()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/md5-malformed.txt")
+        {
+            Content = new ByteArrayContent("content"u8.ToArray())
+        };
+        request.Content.Headers.TryAddWithoutValidation("Content-MD5", "not-valid-base64!!!");
+
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("InvalidDigest", body);
+    }
+
+    [Fact]
+    public async Task PutObject_WithWrongLengthContentMd5_ReturnsInvalidDigest()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var shortMd5Base64 = Convert.ToBase64String(new byte[8]); // 8 bytes instead of 16
+
+        var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/md5-short.txt")
+        {
+            Content = new ByteArrayContent("content"u8.ToArray())
+        };
+        request.Content.Headers.Add("Content-MD5", shortMd5Base64);
+
+        var response = await Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("InvalidDigest", body);
+    }
+
+    [Fact]
+    public async Task PutObject_WithoutContentMd5_Succeeds()
+    {
+        var bucketName = await CreateTestBucketAsync();
+
+        var response = await Client.PutAsync(
+            $"/{bucketName}/no-md5.txt",
+            new StringContent("content"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    #endregion
 }

@@ -27,6 +27,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         PipeReader dataReader,
         IChunkSignatureValidator? chunkValidator,
         ChecksumRequest? checksumRequest,
+        byte[]? expectedMd5 = null,
         CancellationToken cancellationToken = default)
     {
         byte[] combinedData;
@@ -57,6 +58,11 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         }
 
         var etag = ETagHelper.ComputeETag(combinedData);
+
+        if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
+        {
+            return StorageResult<PreparedData>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
+        }
 
         var checksums = new Dictionary<string, string>();
         if (checksumRequest != null)

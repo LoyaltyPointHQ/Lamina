@@ -32,10 +32,11 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
         Assert.NotNull(initResult);
 
-        // Upload parts
+        // Upload parts (part 1 must be >= 5MB per S3 spec for non-last parts)
+        var part1Content = new string('A', 5 * 1024 * 1024);
         var part1Response = await Client.PutAsync(
             $"/{bucketName}/s3-compliance-test.bin?partNumber=1&uploadId={initResult.UploadId}",
-            new StringContent("Test part 1 content", Encoding.UTF8));
+            new StringContent(part1Content, Encoding.UTF8));
         Assert.Equal(HttpStatusCode.OK, part1Response.StatusCode);
         var part1ETag = part1Response.Headers.GetValues("ETag").First().Trim('"');
 
@@ -369,8 +370,10 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
     {
         var bucketName = await CreateTestBucketAsync();
 
-        // Create large source object
-        var sourceContent = new string('A', 10000) + new string('B', 10000) + new string('C', 10000); // 30KB
+        // Create large source object (>= 5MB for part 1 per S3 spec)
+        var part1Size = 5 * 1024 * 1024;
+        var part2Size = 1000;
+        var sourceContent = new string('A', part1Size) + new string('B', part2Size);
         await Client.PutAsync($"/{bucketName}/large-source.bin",
             new StringContent(sourceContent, Encoding.UTF8));
 
@@ -382,14 +385,14 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
         Assert.NotNull(initResult);
 
-        // Copy part 1: bytes 0-9999 (10KB of 'A')
+        // Copy part 1: bytes 0 to part1Size-1 (5MB of 'A')
         var copy1Request = new HttpRequestMessage(HttpMethod.Put,
             $"/{bucketName}/large-dest.bin?partNumber=1&uploadId={initResult.UploadId}");
         copy1Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/large-source.bin");
-        copy1Request.Headers.Add("x-amz-copy-source-range", "bytes=0-9999");
+        copy1Request.Headers.Add("x-amz-copy-source-range", $"bytes=0-{part1Size - 1}");
         var copy1Response = await Client.SendAsync(copy1Request);
         Assert.Equal(HttpStatusCode.OK, copy1Response.StatusCode);
-        
+
         // Extract ETag from XML response body for part 1
         var copy1Xml = await copy1Response.Content.ReadAsStringAsync();
         var copy1Serializer = new XmlSerializer(typeof(CopyPartResult));
@@ -398,14 +401,14 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         Assert.NotNull(copy1Result);
         var part1ETag = copy1Result.ETag.Trim('\"');
 
-        // Copy part 2: bytes 10000-19999 (10KB of 'B')
+        // Copy part 2: remaining bytes (1KB of 'B', last part can be small)
         var copy2Request = new HttpRequestMessage(HttpMethod.Put,
             $"/{bucketName}/large-dest.bin?partNumber=2&uploadId={initResult.UploadId}");
         copy2Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/large-source.bin");
-        copy2Request.Headers.Add("x-amz-copy-source-range", "bytes=10000-19999");
+        copy2Request.Headers.Add("x-amz-copy-source-range", $"bytes={part1Size}-{part1Size + part2Size - 1}");
         var copy2Response = await Client.SendAsync(copy2Request);
         Assert.Equal(HttpStatusCode.OK, copy2Response.StatusCode);
-        
+
         // Extract ETag from XML response body for part 2
         var copy2Xml = await copy2Response.Content.ReadAsStringAsync();
         var copy2Serializer = new XmlSerializer(typeof(CopyPartResult));
@@ -436,9 +439,9 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         // Verify the final object
         var getResponse = await Client.GetAsync($"/{bucketName}/large-dest.bin");
         var resultContent = await getResponse.Content.ReadAsStringAsync();
-        Assert.Equal(20000, resultContent.Length);
-        Assert.StartsWith(new string('A', 10000), resultContent);
-        Assert.StartsWith(new string('B', 10000), resultContent.Substring(10000));
+        Assert.Equal(part1Size + part2Size, resultContent.Length);
+        Assert.StartsWith(new string('A', 100), resultContent);
+        Assert.StartsWith(new string('B', 100), resultContent.Substring(part1Size));
     }
 
     [Fact]
@@ -533,7 +536,7 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
     {
         var bucketName = await CreateTestBucketAsync();
 
-        // Create source object
+        // Create source object (small, will be used as last part)
         var sourceContent = "Copied content from source";
         await Client.PutAsync($"/{bucketName}/source.txt",
             new StringContent(sourceContent, Encoding.UTF8));
@@ -546,20 +549,21 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
         Assert.NotNull(initResult);
 
-        // Part 1: Regular upload
+        // Part 1: Regular upload (must be >= 5MB for non-last part)
+        var part1Content = new string('X', 5 * 1024 * 1024);
         var part1Response = await Client.PutAsync(
             $"/{bucketName}/mixed-upload.bin?partNumber=1&uploadId={initResult.UploadId}",
-            new StringContent("Regular upload part", Encoding.UTF8));
+            new StringContent(part1Content, Encoding.UTF8));
         Assert.Equal(HttpStatusCode.OK, part1Response.StatusCode);
         var part1ETag = part1Response.Headers.GetValues("ETag").First().Trim('\"');
 
-        // Part 2: UploadPartCopy
+        // Part 2: UploadPartCopy (last part, can be small)
         var copy2Request = new HttpRequestMessage(HttpMethod.Put,
             $"/{bucketName}/mixed-upload.bin?partNumber=2&uploadId={initResult.UploadId}");
         copy2Request.Headers.Add("x-amz-copy-source", $"/{bucketName}/source.txt");
         var copy2Response = await Client.SendAsync(copy2Request);
         Assert.Equal(HttpStatusCode.OK, copy2Response.StatusCode);
-        
+
         // Extract ETag from XML response body for part 2
         var copy2Xml = await copy2Response.Content.ReadAsStringAsync();
         var copy2Serializer = new XmlSerializer(typeof(CopyPartResult));
@@ -590,7 +594,7 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         // Verify the combined result
         var getResponse = await Client.GetAsync($"/{bucketName}/mixed-upload.bin");
         var resultContent = await getResponse.Content.ReadAsStringAsync();
-        Assert.Equal("Regular upload part" + sourceContent, resultContent);
+        Assert.Equal(part1Content + sourceContent, resultContent);
     }
 
     [Fact]
@@ -700,8 +704,8 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
     {
         var bucketName = await CreateTestBucketAsync();
 
-        // Create source objects with known content
-        var sourceContent1 = "First part content for SHA256 testing";
+        // Create source objects (part 1 must be >= 5MB for non-last parts)
+        var sourceContent1 = new string('A', 5 * 1024 * 1024);
         var sourceContent2 = "Second part content for SHA256 testing";
 
         await Client.PutAsync($"/{bucketName}/source1.txt",
@@ -967,5 +971,118 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         Assert.Equal(HttpStatusCode.OK, get.StatusCode);
         var getETag = get.Headers.GetValues("ETag").First().Trim('"');
         Assert.Equal(expectedETag, getETag);
+    }
+
+    [Fact]
+    public async Task CompleteMultipartUpload_NonLastPartTooSmall_ReturnsEntityTooSmall()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var key = "small-part-test.bin";
+
+        // Initiate multipart upload
+        var initResponse = await Client.PostAsync($"/{bucketName}/{key}?uploads", null);
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(await initResponse.Content.ReadAsStringAsync());
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Part 1: only 1KB (too small for non-last part)
+        var smallPart = new string('A', 1024);
+        var part1Response = await Client.PutAsync(
+            $"/{bucketName}/{key}?partNumber=1&uploadId={initResult.UploadId}",
+            new StringContent(smallPart, Encoding.UTF8));
+        Assert.Equal(HttpStatusCode.OK, part1Response.StatusCode);
+        var part1ETag = part1Response.Headers.GetValues("ETag").First().Trim('"');
+
+        // Part 2: also small (but it's the last part, which is allowed)
+        var part2Response = await Client.PutAsync(
+            $"/{bucketName}/{key}?partNumber=2&uploadId={initResult.UploadId}",
+            new StringContent(smallPart, Encoding.UTF8));
+        Assert.Equal(HttpStatusCode.OK, part2Response.StatusCode);
+        var part2ETag = part2Response.Headers.GetValues("ETag").First().Trim('"');
+
+        // Complete - should fail because part 1 is < 5MB
+        var completeXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<CompleteMultipartUpload>
+    <Part><PartNumber>1</PartNumber><ETag>{part1ETag}</ETag></Part>
+    <Part><PartNumber>2</PartNumber><ETag>{part2ETag}</ETag></Part>
+</CompleteMultipartUpload>";
+        var completeResponse = await Client.PostAsync(
+            $"/{bucketName}/{key}?uploadId={initResult.UploadId}",
+            new StringContent(completeXml, Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, completeResponse.StatusCode);
+        var errorXml = await completeResponse.Content.ReadAsStringAsync();
+        Assert.Contains("EntityTooSmall", errorXml);
+        Assert.Contains("Part 1", errorXml);
+    }
+
+    [Fact]
+    public async Task CompleteMultipartUpload_LastPartSmall_Succeeds()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var key = "last-part-small.bin";
+
+        var initResponse = await Client.PostAsync($"/{bucketName}/{key}?uploads", null);
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(await initResponse.Content.ReadAsStringAsync());
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Part 1: >= 5MB
+        var largePart = new string('A', 5 * 1024 * 1024);
+        var part1Response = await Client.PutAsync(
+            $"/{bucketName}/{key}?partNumber=1&uploadId={initResult.UploadId}",
+            new StringContent(largePart, Encoding.UTF8));
+        Assert.Equal(HttpStatusCode.OK, part1Response.StatusCode);
+        var part1ETag = part1Response.Headers.GetValues("ETag").First().Trim('"');
+
+        // Part 2: small (last part, allowed)
+        var part2Response = await Client.PutAsync(
+            $"/{bucketName}/{key}?partNumber=2&uploadId={initResult.UploadId}",
+            new StringContent("X", Encoding.UTF8));
+        Assert.Equal(HttpStatusCode.OK, part2Response.StatusCode);
+        var part2ETag = part2Response.Headers.GetValues("ETag").First().Trim('"');
+
+        var completeXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<CompleteMultipartUpload>
+    <Part><PartNumber>1</PartNumber><ETag>{part1ETag}</ETag></Part>
+    <Part><PartNumber>2</PartNumber><ETag>{part2ETag}</ETag></Part>
+</CompleteMultipartUpload>";
+        var completeResponse = await Client.PostAsync(
+            $"/{bucketName}/{key}?uploadId={initResult.UploadId}",
+            new StringContent(completeXml, Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task CompleteMultipartUpload_SingleSmallPart_Succeeds()
+    {
+        var bucketName = await CreateTestBucketAsync();
+        var key = "single-small-part.bin";
+
+        var initResponse = await Client.PostAsync($"/{bucketName}/{key}?uploads", null);
+        var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
+        using var initReader = new StringReader(await initResponse.Content.ReadAsStringAsync());
+        var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
+
+        // Single part: 100 bytes (is last and first, so allowed)
+        var part1Response = await Client.PutAsync(
+            $"/{bucketName}/{key}?partNumber=1&uploadId={initResult.UploadId}",
+            new StringContent(new string('X', 100), Encoding.UTF8));
+        Assert.Equal(HttpStatusCode.OK, part1Response.StatusCode);
+        var part1ETag = part1Response.Headers.GetValues("ETag").First().Trim('"');
+
+        var completeXml = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<CompleteMultipartUpload>
+    <Part><PartNumber>1</PartNumber><ETag>{part1ETag}</ETag></Part>
+</CompleteMultipartUpload>";
+        var completeResponse = await Client.PostAsync(
+            $"/{bucketName}/{key}?uploadId={initResult.UploadId}",
+            new StringContent(completeXml, Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
     }
 }

@@ -211,8 +211,8 @@ public class MultipartUploadStorageFacadeTests
 
         var storedParts = new List<UploadPart>
         {
-            new() { PartNumber = 1, ETag = "d41d8cd98f00b204e9800998ecf8427e" },
-            new() { PartNumber = 2, ETag = "098f6bcd4621d373cade4e832627b4f6" }
+            new() { PartNumber = 1, ETag = "d41d8cd98f00b204e9800998ecf8427e", Size = 5 * 1024 * 1024 },
+            new() { PartNumber = 2, ETag = "098f6bcd4621d373cade4e832627b4f6", Size = 100 }
         };
 
         var partReaders = new List<PipeReader>
@@ -576,8 +576,8 @@ public class MultipartUploadStorageFacadeTests
 
         var storedParts = new List<UploadPart>
         {
-            new() { PartNumber = 1, ETag = "d41d8cd98f00b204e9800998ecf8427e" },
-            new() { PartNumber = 2, ETag = "098f6bcd4621d373cade4e832627b4f6" }
+            new() { PartNumber = 1, ETag = "d41d8cd98f00b204e9800998ecf8427e", Size = 5 * 1024 * 1024 },
+            new() { PartNumber = 2, ETag = "098f6bcd4621d373cade4e832627b4f6", Size = 100 }
         };
 
         var partReaders = new List<PipeReader>

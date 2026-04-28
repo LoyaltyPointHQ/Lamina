@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Xml.Linq;
+using Force.Crc32;
 using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace Lamina.WebApi.Tests.Controllers;
@@ -21,6 +22,12 @@ public class ChecksumCalculationTests : IntegrationTestBase
 
     public ChecksumCalculationTests(WebApplicationFactory<global::Program> factory) : base(factory)
     {
+    }
+
+    private static string ComputeCrc32Base64(byte[] data)
+    {
+        var crc = Crc32Algorithm.Compute(data);
+        return Convert.ToBase64String(BitConverter.GetBytes(crc).Reverse().ToArray());
     }
 
     private async Task<string> CreateTestBucketAsync()
@@ -518,17 +525,21 @@ public class ChecksumCalculationTests : IntegrationTestBase
             .First(e => e.Name.LocalName == "UploadId")
             .Value;
 
-        // Upload part 1 WITH checksum header
-        var content1 = new StringContent(TestData, Encoding.UTF8, "application/octet-stream");
+        // Upload part 1 WITH checksum header (part 1 must be >= 5MB for non-last parts)
+        var part1Data = new byte[5 * 1024 * 1024];
+        Array.Fill(part1Data, (byte)'A');
+        var part1Crc32 = ComputeCrc32Base64(part1Data);
+        var content1 = new ByteArrayContent(part1Data);
+        content1.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
         var part1Request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/mp-complete.txt?partNumber=1&uploadId={uploadId}");
         part1Request.Content = content1;
-        part1Request.Headers.Add("x-amz-checksum-crc32", TestData_CRC32);
+        part1Request.Headers.Add("x-amz-checksum-crc32", part1Crc32);
         var part1Response = await Client.SendAsync(part1Request);
         Assert.Equal(HttpStatusCode.OK, part1Response.StatusCode);
         Assert.True(part1Response.Headers.Contains("x-amz-checksum-crc32"), "Part 1 upload should return checksum in response");
         var etag1 = part1Response.Headers.ETag!.Tag.Trim('"');
 
-        // Upload part 2 WITH checksum header
+        // Upload part 2 WITH checksum header (last part, can be small)
         var content2 = new StringContent(TestData, Encoding.UTF8, "application/octet-stream");
         var part2Request = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/mp-complete.txt?partNumber=2&uploadId={uploadId}");
         part2Request.Content = content2;
@@ -542,7 +553,6 @@ public class ChecksumCalculationTests : IntegrationTestBase
         var listPartsResponse = await Client.GetAsync($"/{bucketName}/mp-complete.txt?uploadId={uploadId}");
         var listPartsXml = await listPartsResponse.Content.ReadAsStringAsync();
         Assert.Contains("ChecksumCRC32", listPartsXml);
-        Assert.Contains(TestData_CRC32, listPartsXml);
 
         // Complete multipart upload
         var completeXml = $@"
@@ -550,7 +560,7 @@ public class ChecksumCalculationTests : IntegrationTestBase
     <Part>
         <PartNumber>1</PartNumber>
         <ETag>{etag1}</ETag>
-        <ChecksumCRC32>{TestData_CRC32}</ChecksumCRC32>
+        <ChecksumCRC32>{part1Crc32}</ChecksumCRC32>
     </Part>
     <Part>
         <PartNumber>2</PartNumber>
@@ -654,16 +664,37 @@ public class ChecksumCalculationTests : IntegrationTestBase
             .First(e => e.Name.LocalName == "UploadId")
             .Value;
 
-        // Upload 3 parts WITH checksum headers
+        // Upload 3 parts WITH checksum headers (parts 1-2 must be >= 5MB, part 3 can be small)
+        var largePartData = new byte[5 * 1024 * 1024];
+        Array.Fill(largePartData, (byte)'A');
+        var largePartCrc32 = ComputeCrc32Base64(largePartData);
+
         var etags = new List<string>();
+        var checksums = new List<string>();
+
         for (int i = 1; i <= 3; i++)
         {
-            var content = new StringContent(TestData, Encoding.UTF8, "application/octet-stream");
+            HttpContent content;
+            string checksum;
+
+            if (i < 3)
+            {
+                content = new ByteArrayContent(largePartData);
+                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                checksum = largePartCrc32;
+            }
+            else
+            {
+                content = new StringContent(TestData, Encoding.UTF8, "application/octet-stream");
+                checksum = TestData_CRC32;
+            }
+
             var partRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}/mp-aggregate.txt?partNumber={i}&uploadId={uploadId}");
             partRequest.Content = content;
-            partRequest.Headers.Add("x-amz-checksum-crc32", TestData_CRC32);
+            partRequest.Headers.Add("x-amz-checksum-crc32", checksum);
             var partResponse = await Client.SendAsync(partRequest);
             etags.Add(partResponse.Headers.ETag!.Tag.Trim('"'));
+            checksums.Add(checksum);
         }
 
         // Complete multipart upload with all parts
@@ -671,7 +702,7 @@ public class ChecksumCalculationTests : IntegrationTestBase
     <Part>
         <PartNumber>{index + 1}</PartNumber>
         <ETag>{etag}</ETag>
-        <ChecksumCRC32>{TestData_CRC32}</ChecksumCRC32>
+        <ChecksumCRC32>{checksums[index]}</ChecksumCRC32>
     </Part>"));
 
         var completeXml = $@"

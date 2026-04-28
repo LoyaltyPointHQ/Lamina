@@ -54,7 +54,7 @@ public class BucketStorageFacade : IBucketStorageFacade
         if (bucket == null)
         {
             // Rollback data creation if metadata storage failed
-            await _dataStorage.DeleteBucketAsync(bucketName, cancellationToken);
+            await _dataStorage.DeleteBucketAsync(bucketName, force: true, cancellationToken);
             _logger.LogError("Failed to store metadata for bucket {BucketName}", bucketName);
             return null;
         }
@@ -77,13 +77,16 @@ public class BucketStorageFacade : IBucketStorageFacade
         };
     }
 
-    public async Task<bool> DeleteBucketAsync(string bucketName, bool force = false, CancellationToken cancellationToken = default)
+    public async Task<DeleteBucketResult> DeleteBucketAsync(string bucketName, bool force = false, CancellationToken cancellationToken = default)
     {
-        // Delete metadata first
-        await _metadataStorage.DeleteBucketMetadataAsync(bucketName, cancellationToken);
+        var result = await _dataStorage.DeleteBucketAsync(bucketName, force, cancellationToken);
+        if (result != DeleteBucketResult.Success)
+        {
+            return result;
+        }
 
-        // Then delete the actual bucket
-        return await _dataStorage.DeleteBucketAsync(bucketName, cancellationToken);
+        await _metadataStorage.DeleteBucketMetadataAsync(bucketName, cancellationToken);
+        return DeleteBucketResult.Success;
     }
 
     public async Task<bool> BucketExistsAsync(string bucketName, CancellationToken cancellationToken = default)

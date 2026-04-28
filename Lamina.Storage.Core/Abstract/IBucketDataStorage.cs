@@ -1,9 +1,16 @@
 namespace Lamina.Storage.Core.Abstract;
 
+public enum DeleteBucketResult
+{
+    Success,
+    NotFound,
+    NotEmpty
+}
+
 public interface IBucketDataStorage
 {
     Task<bool> CreateBucketAsync(string bucketName, CancellationToken cancellationToken = default);
-    Task<bool> DeleteBucketAsync(string bucketName, CancellationToken cancellationToken = default);
+    Task<DeleteBucketResult> DeleteBucketAsync(string bucketName, bool force = false, CancellationToken cancellationToken = default);
     Task<bool> BucketExistsAsync(string bucketName, CancellationToken cancellationToken = default);
     Task<List<string>> ListBucketNamesAsync(CancellationToken cancellationToken = default);
 

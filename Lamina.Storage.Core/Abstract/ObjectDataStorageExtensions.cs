@@ -20,7 +20,7 @@ public static class ObjectDataStorageExtensions
         ChecksumRequest? checksumRequest,
         CancellationToken cancellationToken = default)
     {
-        var prepareResult = await storage.PrepareDataAsync(bucketName, key, dataReader, chunkValidator, checksumRequest, cancellationToken);
+        var prepareResult = await storage.PrepareDataAsync(bucketName, key, dataReader, chunkValidator, checksumRequest, null, cancellationToken);
 
         if (!prepareResult.IsSuccess)
         {

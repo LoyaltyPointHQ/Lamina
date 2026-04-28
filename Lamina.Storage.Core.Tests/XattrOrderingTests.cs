@@ -61,7 +61,7 @@ public class XattrOrderingTests
 
         var preparedData = MakePreparedData(bucket, key);
         _dataStorageMock
-            .Setup(x => x.PrepareDataAsync(bucket, key, It.IsAny<PipeReader>(), null, It.IsAny<ChecksumRequest>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.PrepareDataAsync(bucket, key, It.IsAny<PipeReader>(), null, It.IsAny<ChecksumRequest>(), It.IsAny<byte[]?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(StorageResult<PreparedData>.Success(preparedData));
 
         _dataStorageMock
@@ -96,7 +96,7 @@ public class XattrOrderingTests
 
         var preparedData = MakePreparedData(bucket, key);
         _dataStorageMock
-            .Setup(x => x.PrepareDataAsync(bucket, key, It.IsAny<PipeReader>(), null, It.IsAny<ChecksumRequest>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.PrepareDataAsync(bucket, key, It.IsAny<PipeReader>(), null, It.IsAny<ChecksumRequest>(), It.IsAny<byte[]?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(StorageResult<PreparedData>.Success(preparedData));
 
         _dataStorageMock

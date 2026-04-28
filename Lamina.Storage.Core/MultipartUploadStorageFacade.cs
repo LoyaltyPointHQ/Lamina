@@ -17,6 +17,8 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
     private readonly ILogger<MultipartUploadStorageFacade> _logger;
     private readonly IChunkedDataParser _chunkedDataParser;
 
+    private const long MinimumPartSizeBytes = 5 * 1024 * 1024; // 5 MiB per AWS S3 spec
+
     // Per-upload serialisation for metadata mutations. MultipartUpload.Parts is a plain
     // Dictionary<int, PartMetadata> shared across concurrent UploadPart requests for the same
     // uploadId (aws s3 cp fires ~10 parallel parts). Without this lock, Get→Mutate→Update racing
@@ -208,9 +210,23 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             {
                 return StorageResult<CompleteMultipartUploadResponse>.Error("InvalidPart", $"Part number {requestedPart.PartNumber} ETag does not match. Expected: {storedPart.ETag}, Got: {requestedPart.ETag}");
             }
+        }
 
-            // Note: Part size validation (5MB minimum) should be enforced during upload, not here.
-            // S3 allows completing multipart uploads with parts smaller than 5MB as long as they were accepted during upload.
+        // Validate minimum part size: all parts except the last must be >= 5 MiB
+        var maxPartNumber = request.Parts.Max(p => p.PartNumber);
+        foreach (var requestedPart in request.Parts)
+        {
+            var storedPart = storedPartsDict[requestedPart.PartNumber];
+
+            if (requestedPart.PartNumber == maxPartNumber)
+                continue;
+
+            if (storedPart.Size < MinimumPartSizeBytes)
+            {
+                return StorageResult<CompleteMultipartUploadResponse>.Error(
+                    "EntityTooSmall",
+                    $"Your proposed upload is smaller than the minimum allowed size. Part {requestedPart.PartNumber} is {storedPart.Size} bytes, minimum is {MinimumPartSizeBytes}.");
+            }
         }
 
         // Use already retrieved metadata for S3 compliance, but fall back to defaults if missing (data-first resilience)

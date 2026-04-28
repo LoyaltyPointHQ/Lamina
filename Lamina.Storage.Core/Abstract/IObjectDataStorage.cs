@@ -46,7 +46,7 @@ public class PreparedData : IDisposable
 public interface IObjectDataStorage
 {
     // Two-phase commit: prepare processes data without making it visible
-    Task<StorageResult<PreparedData>> PrepareDataAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, ChecksumRequest? checksumRequest, CancellationToken cancellationToken = default);
+    Task<StorageResult<PreparedData>> PrepareDataAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default);
     Task CommitPreparedDataAsync(PreparedData preparedData, CancellationToken cancellationToken = default);
     Task AbortPreparedDataAsync(PreparedData preparedData, CancellationToken cancellationToken = default);
 

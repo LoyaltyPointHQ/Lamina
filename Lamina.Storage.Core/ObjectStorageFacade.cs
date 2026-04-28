@@ -32,12 +32,12 @@ public class ObjectStorageFacade : IObjectStorageFacade
         _contentTypeDetector = contentTypeDetector;
     }
 
-    public async Task<StorageResult<S3Object>> PutObjectAsync(string bucketName, string key, PipeReader dataReader, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<S3Object>> PutObjectAsync(string bucketName, string key, PipeReader dataReader, PutObjectRequest? request = null, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
     {
-        return await PutObjectAsync(bucketName, key, dataReader, null, request, cancellationToken);
+        return await PutObjectAsync(bucketName, key, dataReader, null, request, expectedMd5, cancellationToken);
     }
 
-    public async Task<StorageResult<S3Object>> PutObjectAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, PutObjectRequest? request = null, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<S3Object>> PutObjectAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, PutObjectRequest? request = null, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -72,7 +72,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
             }
 
             // Phase 1: Prepare data (process to temp storage, not yet visible)
-            var prepareResult = await _dataStorage.PrepareDataAsync(bucketName, key, dataReader, chunkValidator, checksumRequest, cancellationToken);
+            var prepareResult = await _dataStorage.PrepareDataAsync(bucketName, key, dataReader, chunkValidator, checksumRequest, expectedMd5, cancellationToken);
 
             if (!prepareResult.IsSuccess)
             {
