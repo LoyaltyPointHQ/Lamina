@@ -64,35 +64,29 @@ public class DirectoryBucketIntegrationTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task ListBuckets_IncludesBucketTypes()
+    public async Task ListBuckets_BucketTypeNotInXml_AvailableViaHeadBucket()
     {
         var generalPurposeBucket = $"gp-bucket-{Guid.NewGuid()}";
         var directoryBucket = $"dir-bucket-{Guid.NewGuid()}";
 
-        // Create General Purpose bucket
         await Client.PutAsync($"/{generalPurposeBucket}", null);
 
-        // Create Directory bucket
         var directoryRequest = new HttpRequestMessage(HttpMethod.Put, $"/{directoryBucket}");
         directoryRequest.Headers.Add("x-amz-bucket-type", "Directory");
         await Client.SendAsync(directoryRequest);
 
-        // List buckets
-        var response = await Client.GetAsync("/");
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        // ListBuckets XML should not contain BucketType
+        var listResponse = await Client.GetAsync("/");
+        Assert.Equal(HttpStatusCode.OK, listResponse.StatusCode);
+        var xml = await listResponse.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("<BucketType>", xml);
 
-        var xml = await response.Content.ReadAsStringAsync();
-        var serializer = new XmlSerializer(typeof(ListAllMyBucketsResult));
-        using var reader = new StringReader(xml);
-        var result = (ListAllMyBucketsResult)serializer.Deserialize(reader)!;
+        // BucketType is available via HeadBucket header
+        var gpHead = await Client.SendAsync(new HttpRequestMessage(HttpMethod.Head, $"/{generalPurposeBucket}"));
+        Assert.Equal("GeneralPurpose", gpHead.Headers.GetValues("x-amz-bucket-type").FirstOrDefault());
 
-        var gpBucket = result.Buckets.FirstOrDefault(b => b.Name == generalPurposeBucket);
-        var dirBucket = result.Buckets.FirstOrDefault(b => b.Name == directoryBucket);
-
-        Assert.NotNull(gpBucket);
-        Assert.NotNull(dirBucket);
-        Assert.Equal("GeneralPurpose", gpBucket.BucketType);
-        Assert.Equal("Directory", dirBucket.BucketType);
+        var dirHead = await Client.SendAsync(new HttpRequestMessage(HttpMethod.Head, $"/{directoryBucket}"));
+        Assert.Equal("Directory", dirHead.Headers.GetValues("x-amz-bucket-type").FirstOrDefault());
     }
 
     [Fact]

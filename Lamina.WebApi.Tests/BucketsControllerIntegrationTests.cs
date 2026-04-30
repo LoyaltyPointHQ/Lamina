@@ -579,4 +579,79 @@ public class BucketsControllerIntegrationTests : IntegrationTestBase
         Assert.Contains("<EncodingType>url</EncodingType>", xmlContent);
         Assert.Contains("test%20file.txt", xmlContent);
     }
+
+    // Task #11: BucketType should not appear in ListBuckets XML
+    [Fact]
+    public async Task ListBuckets_ResponseXml_DoesNotContainBucketType()
+    {
+        var bucketName = $"list-test-{Guid.NewGuid()}";
+        await Client.PutAsync($"/{bucketName}", null);
+
+        var response = await Client.GetAsync("/");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var xml = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("<BucketType>", xml);
+    }
+
+    // Task #11: HeadBucket should still return x-amz-bucket-type header
+    [Fact]
+    public async Task HeadBucket_ReturnsAMZBucketTypeHeader()
+    {
+        var bucketName = $"head-type-{Guid.NewGuid()}";
+        await Client.PutAsync($"/{bucketName}", null);
+
+        var response = await Client.SendAsync(new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.Contains("x-amz-bucket-type"));
+    }
+
+    // Task #9: CreateBucket with valid CreateBucketConfiguration XML body
+    [Fact]
+    public async Task CreateBucket_WithLocationConstraintXmlBody_Returns200()
+    {
+        var bucketName = $"xml-body-{Guid.NewGuid()}";
+        const string body = """
+            <CreateBucketConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+              <LocationConstraint>eu-west-1</LocationConstraint>
+            </CreateBucketConfiguration>
+            """;
+
+        var response = await Client.PutAsync($"/{bucketName}",
+            new StringContent(body, System.Text.Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    // Task #9: CreateBucket with malformed XML body should return 400 MalformedXML
+    [Fact]
+    public async Task CreateBucket_WithMalformedXmlBody_Returns400()
+    {
+        var bucketName = $"xml-bad-{Guid.NewGuid()}";
+        const string body = "<CreateBucketConfiguration>this is not valid xml<<";
+
+        var response = await Client.PutAsync($"/{bucketName}",
+            new StringContent(body, System.Text.Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var xml = await response.Content.ReadAsStringAsync();
+        Assert.Contains("MalformedXML", xml);
+    }
+
+    // Task #10: Reserved suffixes should be rejected
+    [Theory]
+    [InlineData("my-bucket-s3alias")]
+    [InlineData("bucket--ol-s3")]
+    [InlineData("my-bucket.mrap")]
+    [InlineData("bucket--x-s3")]
+    [InlineData("my-bucket--table-s3")]
+    public async Task CreateBucket_ReservedSuffix_Returns400(string bucketName)
+    {
+        var response = await Client.PutAsync($"/{bucketName}", null);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var xml = await response.Content.ReadAsStringAsync();
+        Assert.Contains("InvalidBucketName", xml);
+    }
 }

@@ -399,7 +399,7 @@ public class S3MultipartController : S3ControllerBase
                 // Otherwise, generic error
                 _logger.LogError("Failed to upload part {PartNumber} of upload {UploadId}: {ErrorCode} - {ErrorMessage}",
                     partNumber, uploadId, partResult.ErrorCode, partResult.ErrorMessage);
-                return StatusCode(500);
+                return StorageError(partResult, $"/{bucketName}/{key}");
             }
 
             var part = partResult.Value!;
@@ -524,6 +524,30 @@ public class S3MultipartController : S3ControllerBase
                 "UploadPartCopy: source={SourceBucket}/{SourceKey}, dest={DestBucket}/{DestKey}, part={PartNumber}, uploadId={UploadId}, range={RangeStart}-{RangeEnd}",
                 sourceBucketName, sourceKey, bucketName, key, partNumber, uploadId, byteRangeStart, byteRangeEnd);
 
+            // Evaluate copy-source conditional headers
+            var hasCopySourceConditionals =
+                Request.Headers.ContainsKey("x-amz-copy-source-if-match") ||
+                Request.Headers.ContainsKey("x-amz-copy-source-if-none-match") ||
+                Request.Headers.ContainsKey("x-amz-copy-source-if-modified-since") ||
+                Request.Headers.ContainsKey("x-amz-copy-source-if-unmodified-since");
+
+            if (hasCopySourceConditionals)
+            {
+                var sourceInfo = await _objectStorage.GetObjectInfoAsync(sourceBucketName, sourceKey, cancellationToken);
+                if (sourceInfo == null)
+                    return S3Error("NoSuchKey", "The specified source key does not exist.", $"/{sourceBucketName}/{sourceKey}", 404);
+
+                var condStatus = ConditionalRequestEvaluator.EvaluateCopySource(
+                    sourceInfo.ETag,
+                    sourceInfo.LastModified,
+                    Request.Headers["x-amz-copy-source-if-match"],
+                    Request.Headers["x-amz-copy-source-if-none-match"],
+                    Request.Headers["x-amz-copy-source-if-modified-since"],
+                    Request.Headers["x-amz-copy-source-if-unmodified-since"]);
+                if (condStatus == 412)
+                    return S3Error("PreconditionFailed", "At least one of the pre-conditions you specified did not hold.", $"/{sourceBucketName}/{sourceKey}", 412);
+            }
+
             // Parse and validate checksum headers
             var checksum = ChecksumHeaderParser.Parse(Request.Headers);
             if (!checksum.IsValid)
@@ -578,7 +602,7 @@ public class S3MultipartController : S3ControllerBase
                 }
 
                 // Generic error
-                return StatusCode(500);
+                return S3Error("InternalError", "We encountered an internal error. Please try again.", $"/{bucketName}/{key}", 500);
             }
 
             // Return success with copy metadata
@@ -618,7 +642,7 @@ public class S3MultipartController : S3ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error in UploadPartCopy for {Bucket}/{Key} part {PartNumber}", bucketName, key, partNumber);
-            return StatusCode(500);
+            return S3Error("InternalError", "We encountered an internal error. Please try again.", $"/{bucketName}/{key}", 500);
         }
     }
 

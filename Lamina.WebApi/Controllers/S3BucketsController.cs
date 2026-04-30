@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Xml.Serialization;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Configuration;
@@ -49,11 +50,12 @@ public class S3BucketsController : S3ControllerBase
         }
 
         // Parse bucket configuration from request body or headers
-        var createRequest = ParseCreateBucketRequest();
+        var (createRequest, parseError) = await ParseCreateBucketRequestAsync(bucketName, cancellationToken);
+        if (parseError != null) return parseError;
 
         // Get authenticated user from claims
         var authenticatedUser = GetS3UserFromClaims();
-        createRequest.OwnerId = authenticatedUser?.AccessKeyId ?? "anonymous";
+        createRequest!.OwnerId = authenticatedUser?.AccessKeyId ?? "anonymous";
         createRequest.OwnerDisplayName = authenticatedUser?.Name ?? "anonymous";
 
         var bucket = await _bucketStorage.CreateBucketAsync(bucketName, createRequest, cancellationToken);
@@ -72,40 +74,71 @@ public class S3BucketsController : S3ControllerBase
     }
 
 
-    private CreateBucketRequest ParseCreateBucketRequest()
+    private async Task<(CreateBucketRequest? Request, IActionResult? Error)> ParseCreateBucketRequestAsync(
+        string bucketName, CancellationToken cancellationToken)
     {
         var request = new CreateBucketRequest();
 
-        // Check for bucket type in header
         if (Request.Headers.TryGetValue("x-amz-bucket-type", out var bucketTypeHeader))
         {
             if (Enum.TryParse<BucketType>(bucketTypeHeader.ToString(), true, out var bucketType))
-            {
                 request.Type = bucketType;
+        }
+
+        if (Request.Headers.TryGetValue("x-amz-storage-class", out var storageClassHeader))
+            request.StorageClass = storageClassHeader.ToString();
+
+        if (Request.ContentLength > 0)
+        {
+            var xmlContent = await PipeReaderHelper.ReadAllTextAsync(Request.BodyReader, false, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(xmlContent))
+            {
+                if (!TryDeserializeCreateBucketConfiguration(xmlContent, out var config))
+                    return (null, S3Error("MalformedXML",
+                        "The XML you provided was not well-formed or did not validate against our published schema.",
+                        $"/{bucketName}", 400));
+
+                if (config?.LocationConstraint != null)
+                    _logger.LogDebug("CreateBucket: ignoring LocationConstraint={Region}", config.LocationConstraint);
             }
         }
 
-        // Check for storage class in header
-        if (Request.Headers.TryGetValue("x-amz-storage-class", out var storageClassHeader))
-        {
-            request.StorageClass = storageClassHeader.ToString();
-        }
-
-        // TODO: Parse XML request body for CreateBucketConfiguration if needed
-        // For now, we'll just use headers and apply defaults
-
-        // Apply defaults from configuration when not specified
         if (!request.Type.HasValue)
-        {
             request.Type = _bucketDefaults.Type;
-        }
 
         if (string.IsNullOrEmpty(request.StorageClass) && !string.IsNullOrEmpty(_bucketDefaults.StorageClass))
-        {
             request.StorageClass = _bucketDefaults.StorageClass;
+
+        return (request, null);
+    }
+
+    private static bool TryDeserializeCreateBucketConfiguration(string xmlContent, out CreateBucketConfiguration? config)
+    {
+        config = null;
+        try
+        {
+            var serializer = new XmlSerializer(typeof(CreateBucketConfiguration));
+            using var reader = new StringReader(xmlContent);
+            config = serializer.Deserialize(reader) as CreateBucketConfiguration;
+            return true;
+        }
+        catch
+        {
+            // Try without namespace
         }
 
-        return request;
+        try
+        {
+            var serializer = new XmlSerializer(typeof(CreateBucketConfigurationNoNs));
+            using var reader = new StringReader(xmlContent);
+            var noNs = serializer.Deserialize(reader) as CreateBucketConfigurationNoNs;
+            config = noNs == null ? null : new CreateBucketConfiguration { LocationConstraint = noNs.LocationConstraint };
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     [HttpGet("")]
@@ -138,8 +171,7 @@ public class S3BucketsController : S3ControllerBase
             Buckets = filteredBuckets.Select(b => new BucketInfo
             {
                 Name = b.Name,
-                CreationDate = b.CreationDate.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
-                BucketType = b.Type.ToString()
+                CreationDate = b.CreationDate.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'")
             }).ToList()
         };
 

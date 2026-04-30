@@ -39,9 +39,6 @@ public class BucketInfo
 
     [XmlElement("CreationDate")]
     public string CreationDate { get; set; } = string.Empty;
-
-    [XmlElement("BucketType")]
-    public string? BucketType { get; set; }
 }
 
 [XmlRoot("ListBucketResult", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
@@ -503,6 +500,20 @@ public class CompletedPartXmlNoNamespace
     public bool ShouldSerializeChecksumCRC64NVME() => !string.IsNullOrEmpty(ChecksumCRC64NVME);
     public bool ShouldSerializeChecksumSHA1() => !string.IsNullOrEmpty(ChecksumSHA1);
     public bool ShouldSerializeChecksumSHA256() => !string.IsNullOrEmpty(ChecksumSHA256);
+}
+
+[XmlRoot("CreateBucketConfiguration", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
+public class CreateBucketConfiguration
+{
+    [XmlElement("LocationConstraint")]
+    public string? LocationConstraint { get; set; }
+}
+
+[XmlRoot("CreateBucketConfiguration")]
+public class CreateBucketConfigurationNoNs
+{
+    [XmlElement("LocationConstraint")]
+    public string? LocationConstraint { get; set; }
 }
 
 [XmlRoot("LocationConstraint", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]

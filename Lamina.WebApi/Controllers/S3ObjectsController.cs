@@ -330,7 +330,7 @@ public class S3ObjectsController : S3ControllerBase
 
             _logger.LogError("Failed to put object {Key} in bucket {BucketName}: {ErrorCode} - {ErrorMessage}",
                 key, bucketName, storeResult.ErrorCode, storeResult.ErrorMessage);
-            return StatusCode(500);
+            return StorageError(storeResult, $"/{bucketName}/{key}");
         }
 
         var s3Object = storeResult.Value!;
@@ -395,6 +395,30 @@ public class S3ObjectsController : S3ControllerBase
         if (!await _bucketStorage.BucketExistsAsync(sourceBucketName, cancellationToken))
         {
             return S3Error("NoSuchBucket", "The specified source bucket does not exist", sourceBucketName, 404);
+        }
+
+        // Evaluate copy-source conditional headers (x-amz-copy-source-if-*)
+        var hasCopySourceConditionals =
+            Request.Headers.ContainsKey("x-amz-copy-source-if-match") ||
+            Request.Headers.ContainsKey("x-amz-copy-source-if-none-match") ||
+            Request.Headers.ContainsKey("x-amz-copy-source-if-modified-since") ||
+            Request.Headers.ContainsKey("x-amz-copy-source-if-unmodified-since");
+
+        if (hasCopySourceConditionals)
+        {
+            var sourceInfo = await _objectStorage.GetObjectInfoAsync(sourceBucketName, sourceKey, cancellationToken);
+            if (sourceInfo == null)
+                return S3Error("NoSuchKey", "The specified source key does not exist.", $"/{sourceBucketName}/{sourceKey}", 404);
+
+            var condStatus = ConditionalRequestEvaluator.EvaluateCopySource(
+                sourceInfo.ETag,
+                sourceInfo.LastModified,
+                Request.Headers["x-amz-copy-source-if-match"],
+                Request.Headers["x-amz-copy-source-if-none-match"],
+                Request.Headers["x-amz-copy-source-if-modified-since"],
+                Request.Headers["x-amz-copy-source-if-unmodified-since"]);
+            if (condStatus == 412)
+                return S3Error("PreconditionFailed", "At least one of the pre-conditions you specified did not hold.", $"/{sourceBucketName}/{sourceKey}", 412);
         }
 
         // Get metadata directive (COPY or REPLACE)
@@ -510,6 +534,16 @@ public class S3ObjectsController : S3ControllerBase
             _logger.LogWarning("Object not found: {Key} in bucket {BucketName}", key, bucketName);
             return S3Error("NoSuchKey", "The specified key does not exist.", $"{bucketName}/{key}", 404);
         }
+
+        var condStatus = ConditionalRequestEvaluator.EvaluateGet(
+            metadata.ETag,
+            metadata.LastModified,
+            Request.Headers["If-Match"],
+            Request.Headers["If-None-Match"],
+            Request.Headers["If-Modified-Since"],
+            Request.Headers["If-Unmodified-Since"]);
+        if (condStatus == 304) return StatusCode(304);
+        if (condStatus == 412) return S3Error("PreconditionFailed", "At least one of the pre-conditions you specified did not hold.", $"/{bucketName}/{key}", 412);
 
         // Parse Range header if present
         long? byteRangeStart = null;
@@ -686,6 +720,16 @@ public class S3ObjectsController : S3ControllerBase
             Response.ContentType = "application/xml";
             return new EmptyResult();
         }
+
+        var condStatus = ConditionalRequestEvaluator.EvaluateGet(
+            objectInfo.ETag,
+            objectInfo.LastModified,
+            Request.Headers["If-Match"],
+            Request.Headers["If-None-Match"],
+            Request.Headers["If-Modified-Since"],
+            Request.Headers["If-Unmodified-Since"]);
+        if (condStatus == 304) return StatusCode(304);
+        if (condStatus == 412) return StatusCode(412);
 
         Response.Headers.Append("ETag", $"\"{objectInfo.ETag}\"");
         Response.Headers.Append("Content-Length", objectInfo.Size.ToString());

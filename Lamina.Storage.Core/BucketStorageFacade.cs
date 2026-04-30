@@ -1,5 +1,5 @@
-using System.Text.RegularExpressions;
 using Lamina.Core.Models;
+using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Configuration;
 using Microsoft.Extensions.Logging;
@@ -13,9 +13,6 @@ public class BucketStorageFacade : IBucketStorageFacade
     private readonly IBucketMetadataStorage _metadataStorage;
     private readonly BucketDefaultsSettings _bucketDefaults;
     private readonly ILogger<BucketStorageFacade> _logger;
-    private static readonly Regex BucketNameRegex = new(@"^[a-z0-9][a-z0-9.-]*[a-z0-9]$", RegexOptions.Compiled);
-    private static readonly Regex IpAddressRegex = new(@"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", RegexOptions.Compiled);
-
     public BucketStorageFacade(
         IBucketDataStorage dataStorage,
         IBucketMetadataStorage metadataStorage,
@@ -30,7 +27,7 @@ public class BucketStorageFacade : IBucketStorageFacade
 
     public async Task<Bucket?> CreateBucketAsync(string bucketName, CreateBucketRequest? request = null, CancellationToken cancellationToken = default)
     {
-        if (!IsValidBucketName(bucketName))
+        if (!BucketNameValidator.IsValid(bucketName))
         {
             _logger.LogWarning("Invalid bucket name: {BucketName}", bucketName);
             return null;
@@ -97,33 +94,6 @@ public class BucketStorageFacade : IBucketStorageFacade
     public async Task<Bucket?> UpdateBucketTagsAsync(string bucketName, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
     {
         return await _metadataStorage.UpdateBucketTagsAsync(bucketName, tags, cancellationToken);
-    }
-
-    private static bool IsValidBucketName(string bucketName)
-    {
-        if (string.IsNullOrWhiteSpace(bucketName))
-            return false;
-
-        if (bucketName.Length < 3 || bucketName.Length > 63)
-            return false;
-
-        if (!BucketNameRegex.IsMatch(bucketName))
-            return false;
-
-        if (bucketName.Contains("..") || bucketName.Contains(".-") || bucketName.Contains("-."))
-            return false;
-
-        if (IpAddressRegex.IsMatch(bucketName))
-            return false;
-
-        string[] reservedPrefixes = { "xn--", "sthree-", "amzn-s3-demo-" };
-        foreach (var prefix in reservedPrefixes)
-        {
-            if (bucketName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                return false;
-        }
-
-        return true;
     }
 
     public Task<bool> UpdateBucketLifecycleAsync(string bucketName, LifecycleConfiguration? lifecycle, CancellationToken cancellationToken = default)
