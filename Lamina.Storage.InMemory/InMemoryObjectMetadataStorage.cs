@@ -6,7 +6,7 @@ using Lamina.Storage.Core.Helpers;
 
 namespace Lamina.Storage.InMemory;
 
-public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
+public class InMemoryObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMetadataStorage
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, S3Object>> _metadata = new();
     private readonly IObjectDataStorage? _dataStorage;
@@ -209,4 +209,39 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage
         s3Object.Tags = new Dictionary<string, string>();
         return Task.FromResult(true);
     }
+
+    public Task<Dictionary<string, S3ObjectInfo?>> GetMetadataBatchAsync(
+        string bucketName,
+        IEnumerable<string> keys,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<string, S3ObjectInfo?>();
+        _metadata.TryGetValue(bucketName, out var bucketMeta);
+        foreach (var key in keys)
+        {
+            S3ObjectInfo? info = null;
+            if (bucketMeta != null && bucketMeta.TryGetValue(key, out var s3Object))
+                info = MapToInfo(s3Object);
+            result[key] = info;
+        }
+        return Task.FromResult(result);
+    }
+
+    private static S3ObjectInfo MapToInfo(S3Object s3Object) => new()
+    {
+        Key = s3Object.Key,
+        LastModified = s3Object.LastModified,
+        ETag = s3Object.ETag,
+        Size = s3Object.Size,
+        ContentType = s3Object.ContentType,
+        Metadata = s3Object.Metadata,
+        Tags = s3Object.Tags,
+        OwnerId = s3Object.OwnerId,
+        OwnerDisplayName = s3Object.OwnerDisplayName,
+        ChecksumCRC32 = s3Object.ChecksumCRC32,
+        ChecksumCRC32C = s3Object.ChecksumCRC32C,
+        ChecksumCRC64NVME = s3Object.ChecksumCRC64NVME,
+        ChecksumSHA1 = s3Object.ChecksumSHA1,
+        ChecksumSHA256 = s3Object.ChecksumSHA256
+    };
 }

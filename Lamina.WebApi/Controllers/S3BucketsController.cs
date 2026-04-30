@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Xml.Serialization;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Configuration;
@@ -7,6 +6,7 @@ using Lamina.Storage.Core.Helpers;
 using Lamina.WebApi.Authorization;
 using Lamina.WebApi.Controllers.Attributes;
 using Lamina.WebApi.Controllers.Base;
+using Lamina.WebApi.Helpers;
 using Lamina.WebApi.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -93,13 +93,14 @@ public class S3BucketsController : S3ControllerBase
             var xmlContent = await PipeReaderHelper.ReadAllTextAsync(Request.BodyReader, false, cancellationToken);
             if (!string.IsNullOrWhiteSpace(xmlContent))
             {
-                if (!TryDeserializeCreateBucketConfiguration(xmlContent, out var config))
-                    return (null, S3Error("MalformedXML",
-                        "The XML you provided was not well-formed or did not validate against our published schema.",
-                        $"/{bucketName}", 400));
+                var configResult = S3XmlDeserializer.Deserialize<CreateBucketConfiguration, CreateBucketConfigurationNoNs>(
+                    xmlContent,
+                    noNs => new CreateBucketConfiguration { LocationConstraint = noNs.LocationConstraint });
+                if (!configResult.IsSuccess)
+                    return (null, S3Error("MalformedXML", configResult.ErrorMessage!, $"/{bucketName}", 400));
 
-                if (config?.LocationConstraint != null)
-                    _logger.LogDebug("CreateBucket: ignoring LocationConstraint={Region}", config.LocationConstraint);
+                if (configResult.Value?.LocationConstraint != null)
+                    _logger.LogDebug("CreateBucket: ignoring LocationConstraint={Region}", configResult.Value.LocationConstraint);
             }
         }
 
@@ -112,34 +113,6 @@ public class S3BucketsController : S3ControllerBase
         return (request, null);
     }
 
-    private static bool TryDeserializeCreateBucketConfiguration(string xmlContent, out CreateBucketConfiguration? config)
-    {
-        config = null;
-        try
-        {
-            var serializer = new XmlSerializer(typeof(CreateBucketConfiguration));
-            using var reader = new StringReader(xmlContent);
-            config = serializer.Deserialize(reader) as CreateBucketConfiguration;
-            return true;
-        }
-        catch
-        {
-            // Try without namespace
-        }
-
-        try
-        {
-            var serializer = new XmlSerializer(typeof(CreateBucketConfigurationNoNs));
-            using var reader = new StringReader(xmlContent);
-            var noNs = serializer.Deserialize(reader) as CreateBucketConfigurationNoNs;
-            config = noNs == null ? null : new CreateBucketConfiguration { LocationConstraint = noNs.LocationConstraint };
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
 
     [HttpGet("")]
     [Route("/")]

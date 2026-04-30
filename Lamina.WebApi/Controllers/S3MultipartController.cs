@@ -41,33 +41,11 @@ public class S3MultipartController : S3ControllerBase
 
     private static XmlDeserializationResult<List<CompletedPart>> TryDeserializeCompleteRequest(string xmlContent)
     {
-        // Try without namespace first (for compatibility with most clients)
-        if (TryDeserializeWithoutNamespace(xmlContent, out var partsNoNs))
-        {
-            return XmlDeserializationResult<List<CompletedPart>>.Success(partsNoNs);
-        }
-
-        // Try with S3 namespace
-        if (TryDeserializeWithNamespace(xmlContent, out var partsWithNs))
-        {
-            return XmlDeserializationResult<List<CompletedPart>>.Success(partsWithNs);
-        }
-
-        return XmlDeserializationResult<List<CompletedPart>>.Error("The XML you provided was not well-formed or did not validate against our published schema.");
-    }
-
-    private static bool TryDeserializeWithoutNamespace(string xmlContent, out List<CompletedPart> parts)
-    {
-        parts = new List<CompletedPart>();
-        try
-        {
-            var serializer = new XmlSerializer(typeof(CompleteMultipartUploadXmlNoNamespace));
-            using var stringReader = new StringReader(xmlContent);
-            var completeRequest = serializer.Deserialize(stringReader) as CompleteMultipartUploadXmlNoNamespace;
-
-            if (completeRequest?.Parts != null)
+        var result = S3XmlDeserializer.Deserialize<CompleteMultipartUploadXml, CompleteMultipartUploadXmlNoNamespace>(
+            xmlContent,
+            noNs => new CompleteMultipartUploadXml
             {
-                parts = completeRequest.Parts.Select(p => new CompletedPart
+                Parts = noNs.Parts.Select(p => new CompletedPartXml
                 {
                     PartNumber = p.PartNumber,
                     ETag = p.ETag,
@@ -76,46 +54,23 @@ public class S3MultipartController : S3ControllerBase
                     ChecksumCRC64NVME = p.ChecksumCRC64NVME,
                     ChecksumSHA1 = p.ChecksumSHA1,
                     ChecksumSHA256 = p.ChecksumSHA256
-                }).ToList();
-                return parts.Count > 0;
-            }
-            return false;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+                }).ToList()
+            });
 
-    private static bool TryDeserializeWithNamespace(string xmlContent, out List<CompletedPart> parts)
-    {
-        parts = new List<CompletedPart>();
-        try
-        {
-            var serializer = new XmlSerializer(typeof(CompleteMultipartUploadXml));
-            using var stringReader = new StringReader(xmlContent);
-            var completeRequest = serializer.Deserialize(stringReader) as CompleteMultipartUploadXml;
+        if (!result.IsSuccess)
+            return XmlDeserializationResult<List<CompletedPart>>.Error(result.ErrorMessage!);
 
-            if (completeRequest?.Parts != null)
+        return XmlDeserializationResult<List<CompletedPart>>.Success(
+            result.Value!.Parts.Select(p => new CompletedPart
             {
-                parts = completeRequest.Parts.Select(p => new CompletedPart
-                {
-                    PartNumber = p.PartNumber,
-                    ETag = p.ETag,
-                    ChecksumCRC32 = p.ChecksumCRC32,
-                    ChecksumCRC32C = p.ChecksumCRC32C,
-                    ChecksumCRC64NVME = p.ChecksumCRC64NVME,
-                    ChecksumSHA1 = p.ChecksumSHA1,
-                    ChecksumSHA256 = p.ChecksumSHA256
-                }).ToList();
-                return parts.Count > 0;
-            }
-            return false;
-        }
-        catch
-        {
-            return false;
-        }
+                PartNumber = p.PartNumber,
+                ETag = p.ETag,
+                ChecksumCRC32 = p.ChecksumCRC32,
+                ChecksumCRC32C = p.ChecksumCRC32C,
+                ChecksumCRC64NVME = p.ChecksumCRC64NVME,
+                ChecksumSHA1 = p.ChecksumSHA1,
+                ChecksumSHA256 = p.ChecksumSHA256
+            }).ToList());
     }
 
     [HttpGet("")]

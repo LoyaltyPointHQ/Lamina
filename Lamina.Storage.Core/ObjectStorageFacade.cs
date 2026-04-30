@@ -308,17 +308,36 @@ public class ObjectStorageFacade : IObjectStorageFacade
         }
 
         // Process keys to get object metadata
-        foreach (var key in dataResult.Keys)
+        if (_metadataStorage is IBatchObjectMetadataStorage batchStorage)
         {
-            var meta = await _metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
-            if (meta == null)
+            var batch = await batchStorage.GetMetadataBatchAsync(bucketName, dataResult.Keys, cancellationToken);
+            foreach (var key in dataResult.Keys)
             {
-                var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-                if (dataInfo != null)
-                    meta = await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
+                var meta = batch.GetValueOrDefault(key);
+                if (meta == null)
+                {
+                    var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+                    if (dataInfo != null)
+                        meta = await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
+                }
+                if (meta != null)
+                    response.Contents.Add(meta);
             }
-            if (meta != null)
-                response.Contents.Add(meta);
+        }
+        else
+        {
+            foreach (var key in dataResult.Keys)
+            {
+                var meta = await _metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
+                if (meta == null)
+                {
+                    var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+                    if (dataInfo != null)
+                        meta = await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
+                }
+                if (meta != null)
+                    response.Contents.Add(meta);
+            }
         }
 
         return StorageResult<ListObjectsResponse>.Success(response);

@@ -95,17 +95,6 @@ public class S3ObjectsController : S3ControllerBase
 
         var objects = result.Value!;
 
-        // Get bucket information to check if it's a Directory bucket for response ordering
-        var bucket = await _bucketStorage.GetBucketAsync(bucketName, cancellationToken);
-        var isDirectoryBucket = bucket?.Type == BucketType.Directory;
-
-        // For Directory buckets, objects should not be in lexicographical order
-        if (isDirectoryBucket)
-        {
-            // Randomize the order to simulate non-lexicographical ordering
-            objects.Contents = objects.Contents.OrderBy(x => Random.Shared.Next()).ToList();
-        }
-
         Response.ContentType = "application/xml";
 
         if (isV2)
@@ -762,69 +751,10 @@ public class S3ObjectsController : S3ControllerBase
         return Ok();
     }
 
-    private static XmlDeserializationResult<DeleteMultipleObjectsRequest> TryDeserializeDeleteRequest(string xmlContent)
-    {
-        // Try without namespace first (for compatibility with most clients)
-        if (TryDeserializeDeleteWithoutNamespace(xmlContent, out var deleteRequestNoNs))
-        {
-            return XmlDeserializationResult<DeleteMultipleObjectsRequest>.Success(deleteRequestNoNs);
-        }
-
-        // Try with S3 namespace
-        if (TryDeserializeDeleteWithNamespace(xmlContent, out var deleteRequestWithNs))
-        {
-            return XmlDeserializationResult<DeleteMultipleObjectsRequest>.Success(deleteRequestWithNs);
-        }
-
-        return XmlDeserializationResult<DeleteMultipleObjectsRequest>.Error("The XML you provided was not well-formed or did not validate against our published schema.");
-    }
-
-    private static bool TryDeserializeDeleteWithoutNamespace(string xmlContent, out DeleteMultipleObjectsRequest deleteRequest)
-    {
-        deleteRequest = null!;
-        try
-        {
-            var serializer = new XmlSerializer(typeof(DeleteMultipleObjectsRequestNoNamespace));
-            using var stringReader = new StringReader(xmlContent);
-            var deleteRequestNoNamespace = serializer.Deserialize(stringReader) as DeleteMultipleObjectsRequestNoNamespace;
-
-            if (deleteRequestNoNamespace?.Objects != null)
-            {
-                deleteRequest = new DeleteMultipleObjectsRequest
-                {
-                    Objects = deleteRequestNoNamespace.Objects,
-                    Quiet = deleteRequestNoNamespace.Quiet
-                };
-                return true;
-            }
-            return false;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool TryDeserializeDeleteWithNamespace(string xmlContent, out DeleteMultipleObjectsRequest deleteRequest)
-    {
-        deleteRequest = null!;
-        try
-        {
-            var serializer = new XmlSerializer(typeof(DeleteMultipleObjectsRequest));
-            using var stringReader = new StringReader(xmlContent);
-            var result = serializer.Deserialize(stringReader) as DeleteMultipleObjectsRequest;
-            if (result?.Objects != null)
-            {
-                deleteRequest = result;
-                return true;
-            }
-            return false;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    private static XmlDeserializationResult<DeleteMultipleObjectsRequest> TryDeserializeDeleteRequest(string xmlContent) =>
+        S3XmlDeserializer.Deserialize<DeleteMultipleObjectsRequest, DeleteMultipleObjectsRequestNoNamespace>(
+            xmlContent,
+            noNs => new DeleteMultipleObjectsRequest { Objects = noNs.Objects, Quiet = noNs.Quiet });
 
     [HttpPost("")]
     [RequireQueryParameter("delete")]

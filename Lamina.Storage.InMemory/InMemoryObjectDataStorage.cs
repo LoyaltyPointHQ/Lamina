@@ -259,7 +259,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
 
         IEnumerable<string> keys = bucketType == BucketType.GeneralPurpose
             ? bucketData.Keys.OrderBy(k => k, StringComparer.Ordinal)
-            : bucketData.Keys;
+            : bucketData.Keys.OrderBy(DirectoryBucketHashOrder);
 
         if (!string.IsNullOrEmpty(prefix))
         {
@@ -380,4 +380,18 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
     }
 
     private static string GetPendingKey(string bucketName, string key) => $"{bucketName}/{key}";
+
+    // FNV-1a hash for stable, non-lexicographic directory bucket ordering
+    private static uint DirectoryBucketHashOrder(string key)
+    {
+        var hash = 2166136261u;
+        foreach (var c in key)
+        {
+            hash ^= (byte)(c & 0xFF);
+            hash *= 16777619u;
+            hash ^= (byte)(c >> 8);
+            hash *= 16777619u;
+        }
+        return hash;
+    }
 }

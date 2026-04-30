@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Lamina.Storage.Sql;
 
-public class SqlObjectMetadataStorage : IObjectMetadataStorage
+public class SqlObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMetadataStorage
 {
     private readonly LaminaDbContext _context;
     private readonly IObjectDataStorage _dataStorage;
@@ -270,5 +270,19 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage
     public Task<bool> DeleteObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         return SetObjectTagsAsync(bucketName, key, new Dictionary<string, string>(), cancellationToken);
+    }
+
+    public async Task<Dictionary<string, S3ObjectInfo?>> GetMetadataBatchAsync(
+        string bucketName,
+        IEnumerable<string> keys,
+        CancellationToken cancellationToken = default)
+    {
+        var keyList = keys.ToList();
+        var entities = await _context.Objects
+            .Where(o => o.BucketName == bucketName && keyList.Contains(o.Key))
+            .ToListAsync(cancellationToken);
+
+        var byKey = entities.ToDictionary(e => e.Key, e => (S3ObjectInfo?)e.ToS3ObjectInfo());
+        return keyList.ToDictionary(k => k, k => byKey.GetValueOrDefault(k));
     }
 }

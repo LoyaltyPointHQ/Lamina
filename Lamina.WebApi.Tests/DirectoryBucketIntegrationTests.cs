@@ -144,45 +144,31 @@ public class DirectoryBucketIntegrationTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task ListObjects_DirectoryBucket_NonLexicographicalOrder()
+    public async Task ListObjects_DirectoryBucket_SameOrderOnRepeatedCalls()
     {
-        var bucketName = $"dir-order-{Guid.NewGuid()}";
+        var bucketName = $"dir-stable-order-{Guid.NewGuid()}";
 
-        // Create Directory bucket
         var createRequest = new HttpRequestMessage(HttpMethod.Put, $"/{bucketName}");
         createRequest.Headers.Add("x-amz-bucket-type", "Directory");
         await Client.SendAsync(createRequest);
 
-        // Create multiple objects
-        var objectKeys = new[] { "a-object", "b-object", "c-object", "d-object" };
-        foreach (var key in objectKeys)
-        {
+        foreach (var key in new[] { "a-object", "b-object", "c-object", "d-object" })
             await Client.PutAsync($"/{bucketName}/{key}", new StringContent("test content"));
-        }
 
-        // List objects multiple times and check if order varies
         var orders = new List<string[]>();
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < 3; i++)
         {
             var response = await Client.GetAsync($"/{bucketName}");
-            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-
             var xml = await response.Content.ReadAsStringAsync();
             var serializer = new XmlSerializer(typeof(ListBucketResultV2));
             using var reader = new StringReader(xml);
             var result = (ListBucketResultV2)serializer.Deserialize(reader)!;
-
-            var keys = result.ContentsList.Select(c => c.Key).ToArray();
-            orders.Add(keys);
+            orders.Add(result.ContentsList.Select(c => c.Key).ToArray());
         }
 
-        // Check that not all orders are the same (indicating non-lexicographical ordering)
         var firstOrder = orders[0];
-        var hasVariation = orders.Any(order => !order.SequenceEqual(firstOrder));
-
-        // Note: Due to randomization, there's a small chance all orders could be the same
-        // This test might occasionally fail, but it demonstrates the non-lexicographical behavior
-        Assert.True(hasVariation || orders.Count == 1, "Directory bucket objects should not always be in lexicographical order");
+        Assert.All(orders, order => Assert.True(order.SequenceEqual(firstOrder),
+            "Directory bucket listing order must be deterministic across repeated calls"));
     }
 
     [Fact]
