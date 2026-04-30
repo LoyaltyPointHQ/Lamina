@@ -31,7 +31,8 @@ namespace Lamina.Migrations.PostgreSql
                     b.Property<DateTime>("CreationDate")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("LifecycleConfigurationJson")
+                    b.Property<string>("Lifecycle")
+                        .HasColumnName("Lifecycle")
                         .HasColumnType("jsonb");
 
                     b.Property<string>("OwnerDisplayName")

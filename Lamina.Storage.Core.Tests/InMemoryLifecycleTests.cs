@@ -36,14 +36,14 @@ public class InMemoryLifecycleTests
     {
         var storage = await CreateWithBucketAsync("b");
 
-        var result = await storage.SetLifecycleConfigurationAsync("b", MakeConfig());
+        var result = await storage.UpdateBucketLifecycleAsync("b", MakeConfig());
 
         Assert.True(result);
-        var cfg = await storage.GetLifecycleConfigurationAsync("b");
-        Assert.NotNull(cfg);
-        Assert.Single(cfg.Rules);
-        Assert.Equal("expire-logs", cfg.Rules[0].Id);
-        Assert.Equal(7, cfg.Rules[0].Expiration?.Days);
+        var bucket = await storage.GetBucketMetadataAsync("b");
+        Assert.NotNull(bucket?.Lifecycle);
+        Assert.Single(bucket.Lifecycle.Rules);
+        Assert.Equal("expire-logs", bucket.Lifecycle.Rules[0].Id);
+        Assert.Equal(7, bucket.Lifecycle.Rules[0].Expiration?.Days);
     }
 
     [Fact]
@@ -51,9 +51,9 @@ public class InMemoryLifecycleTests
     {
         var storage = await CreateWithBucketAsync("b");
 
-        var cfg = await storage.GetLifecycleConfigurationAsync("b");
+        var bucket = await storage.GetBucketMetadataAsync("b");
 
-        Assert.Null(cfg);
+        Assert.Null(bucket?.Lifecycle);
     }
 
     [Fact]
@@ -62,9 +62,9 @@ public class InMemoryLifecycleTests
         var dataStorage = new InMemoryBucketDataStorage();
         var storage = new InMemoryBucketMetadataStorage(dataStorage);
 
-        var cfg = await storage.GetLifecycleConfigurationAsync("missing");
+        var bucket = await storage.GetBucketMetadataAsync("missing");
 
-        Assert.Null(cfg);
+        Assert.Null(bucket);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class InMemoryLifecycleTests
         var dataStorage = new InMemoryBucketDataStorage();
         var storage = new InMemoryBucketMetadataStorage(dataStorage);
 
-        var result = await storage.SetLifecycleConfigurationAsync("missing", MakeConfig());
+        var result = await storage.UpdateBucketLifecycleAsync("missing", MakeConfig());
 
         Assert.False(result);
     }
@@ -82,39 +82,39 @@ public class InMemoryLifecycleTests
     public async Task Delete_RemovesConfig()
     {
         var storage = await CreateWithBucketAsync("b");
-        await storage.SetLifecycleConfigurationAsync("b", MakeConfig());
+        await storage.UpdateBucketLifecycleAsync("b", MakeConfig());
 
-        var result = await storage.DeleteLifecycleConfigurationAsync("b");
+        var result = await storage.UpdateBucketLifecycleAsync("b", null);
 
         Assert.True(result);
-        var cfg = await storage.GetLifecycleConfigurationAsync("b");
-        Assert.Null(cfg);
+        var bucket = await storage.GetBucketMetadataAsync("b");
+        Assert.Null(bucket?.Lifecycle);
     }
 
     [Fact]
-    public async Task Delete_NoConfig_ReturnsFalse()
+    public async Task Delete_NoConfig_ReturnsTrue()
     {
         var storage = await CreateWithBucketAsync("b");
 
-        var result = await storage.DeleteLifecycleConfigurationAsync("b");
+        var result = await storage.UpdateBucketLifecycleAsync("b", null);
 
-        Assert.False(result);
+        Assert.True(result);
     }
 
     [Fact]
     public async Task Set_ReplacesExistingConfig()
     {
         var storage = await CreateWithBucketAsync("b");
-        await storage.SetLifecycleConfigurationAsync("b", MakeConfig());
+        await storage.UpdateBucketLifecycleAsync("b", MakeConfig());
 
         var newCfg = new LifecycleConfiguration
         {
             Rules = new() { new LifecycleRule { Id = "new", Filter = new LifecycleFilter { Prefix = "x/" }, Expiration = new LifecycleExpiration { Days = 1 } } }
         };
-        await storage.SetLifecycleConfigurationAsync("b", newCfg);
+        await storage.UpdateBucketLifecycleAsync("b", newCfg);
 
-        var cfg = await storage.GetLifecycleConfigurationAsync("b");
-        Assert.Single(cfg!.Rules);
-        Assert.Equal("new", cfg.Rules[0].Id);
+        var bucket = await storage.GetBucketMetadataAsync("b");
+        Assert.Single(bucket!.Lifecycle!.Rules);
+        Assert.Equal("new", bucket.Lifecycle.Rules[0].Id);
     }
 }

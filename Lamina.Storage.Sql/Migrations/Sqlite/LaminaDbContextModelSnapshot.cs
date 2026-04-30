@@ -38,6 +38,10 @@ namespace Lamina.Migrations.Sqlite
                         .HasMaxLength(50)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Lifecycle")
+                        .HasColumnName("Lifecycle")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("TagsJson")
                         .IsRequired()
                         .HasColumnType("TEXT");

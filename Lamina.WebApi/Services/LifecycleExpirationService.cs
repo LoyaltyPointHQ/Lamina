@@ -64,7 +64,7 @@ public class LifecycleExpirationService : BackgroundService
         {
             if (cancellationToken.IsCancellationRequested) break;
 
-            var config = await bucketStorage.GetLifecycleConfigurationAsync(bucket.Name, cancellationToken);
+            var config = bucket.Lifecycle;
             if (config == null || config.Rules.Count == 0) continue;
 
             var enabledRules = config.Rules.Where(r => r.Status == LifecycleRuleStatus.Enabled).ToList();

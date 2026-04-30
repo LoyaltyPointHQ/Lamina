@@ -72,6 +72,7 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
         public Dictionary<string, string>? Tags { get; set; }
         public string? OwnerId { get; set; }
         public string? OwnerDisplayName { get; set; }
+        public LifecycleConfiguration? Lifecycle { get; set; }
     }
 
     private class CachedBucketMetadata
@@ -198,6 +199,7 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
                 bucket.Tags = metadata.Tags ?? new Dictionary<string, string>();
                 bucket.OwnerId = metadata.OwnerId;
                 bucket.OwnerDisplayName = metadata.OwnerDisplayName;
+                bucket.Lifecycle = metadata.Lifecycle;
             }
         }
 
@@ -277,7 +279,8 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
                 StorageClass = bucket.StorageClass,
                 Tags = bucket.Tags,
                 OwnerId = bucket.OwnerId,
-                OwnerDisplayName = bucket.OwnerDisplayName
+                OwnerDisplayName = bucket.OwnerDisplayName,
+                Lifecycle = bucket.Lifecycle
             };
 
             var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
@@ -372,51 +375,19 @@ public class FilesystemBucketMetadataStorage : IBucketMetadataStorage
         return $"bucket:{bucketName}";
     }
 
-    public async Task<LifecycleConfiguration?> GetLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
+    public async Task<bool> UpdateBucketLifecycleAsync(string bucketName, LifecycleConfiguration? lifecycle, CancellationToken cancellationToken = default)
     {
-        if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
-        {
-            return null;
-        }
+        InvalidateCache(bucketName);
 
-        var path = GetLifecyclePath(bucketName);
-        if (!File.Exists(path))
-        {
-            return null;
-        }
-
-        return await _lockManager.ReadFileAsync(path, content =>
-            Task.FromResult(JsonSerializer.Deserialize<LifecycleConfiguration>(content)), cancellationToken);
-    }
-
-    public async Task<bool> SetLifecycleConfigurationAsync(string bucketName, LifecycleConfiguration configuration, CancellationToken cancellationToken = default)
-    {
-        if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
+        var bucket = await GetBucketMetadataAsync(bucketName, cancellationToken);
+        if (bucket == null)
         {
             return false;
         }
 
-        var path = GetLifecyclePath(bucketName);
-        var directory = Path.GetDirectoryName(path)!;
-        await _networkHelper.EnsureDirectoryExistsAsync(directory, $"SetLifecycle-{bucketName}");
-
-        var json = JsonSerializer.Serialize(configuration, new JsonSerializerOptions { WriteIndented = true });
-        await _lockManager.WriteFileAsync(path, json, cancellationToken);
+        bucket.Lifecycle = lifecycle;
+        await SaveBucketMetadataAsync(bucket, cancellationToken);
+        await CacheBucketAsync(bucket, cancellationToken);
         return true;
-    }
-
-    public async Task<bool> DeleteLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
-    {
-        var path = GetLifecyclePath(bucketName);
-        return await _lockManager.DeleteFile(path);
-    }
-
-    private string GetLifecyclePath(string bucketName)
-    {
-        if (_metadataMode == MetadataStorageMode.SeparateDirectory)
-        {
-            return Path.Combine(_metadataDirectory!, "_buckets", $"{bucketName}-lifecycle.json");
-        }
-        return Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_buckets", $"{bucketName}-lifecycle.json");
     }
 }

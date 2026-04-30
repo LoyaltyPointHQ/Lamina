@@ -1,0 +1,28 @@
+using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+
+namespace Lamina.Migrations.Sqlite
+{
+    /// <inheritdoc />
+    public partial class RenameLifecycleColumn : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.RenameColumn(
+                name: "LifecycleConfigurationJson",
+                table: "Buckets",
+                newName: "Lifecycle");
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.RenameColumn(
+                name: "Lifecycle",
+                table: "Buckets",
+                newName: "LifecycleConfigurationJson");
+        }
+    }
+}

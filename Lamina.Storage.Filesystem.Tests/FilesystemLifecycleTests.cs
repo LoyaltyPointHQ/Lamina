@@ -78,14 +78,14 @@ public class FilesystemLifecycleTests : IDisposable
     public async Task Set_ThenGet_RoundTripsThroughFile()
     {
         await SeedBucketAsync("b");
-        await _storage.SetLifecycleConfigurationAsync("b", MakeConfig());
+        await _storage.UpdateBucketLifecycleAsync("b", MakeConfig());
 
-        var cfg = await _storage.GetLifecycleConfigurationAsync("b");
+        var bucket = await _storage.GetBucketMetadataAsync("b");
 
-        Assert.NotNull(cfg);
-        Assert.Single(cfg.Rules);
-        Assert.Equal("r1", cfg.Rules[0].Id);
-        Assert.Equal(7, cfg.Rules[0].Expiration?.Days);
+        Assert.NotNull(bucket?.Lifecycle);
+        Assert.Single(bucket.Lifecycle.Rules);
+        Assert.Equal("r1", bucket.Lifecycle.Rules[0].Id);
+        Assert.Equal(7, bucket.Lifecycle.Rules[0].Expiration?.Days);
     }
 
     [Fact]
@@ -93,29 +93,47 @@ public class FilesystemLifecycleTests : IDisposable
     {
         await SeedBucketAsync("b");
 
-        var cfg = await _storage.GetLifecycleConfigurationAsync("b");
+        var bucket = await _storage.GetBucketMetadataAsync("b");
 
-        Assert.Null(cfg);
+        Assert.Null(bucket?.Lifecycle);
     }
 
     [Fact]
     public async Task Get_NonExistentBucket_ReturnsNull()
     {
-        var cfg = await _storage.GetLifecycleConfigurationAsync("missing");
+        var bucket = await _storage.GetBucketMetadataAsync("missing");
 
-        Assert.Null(cfg);
+        Assert.Null(bucket);
     }
 
     [Fact]
     public async Task Delete_RemovesConfig()
     {
         await SeedBucketAsync("b");
-        await _storage.SetLifecycleConfigurationAsync("b", MakeConfig());
+        await _storage.UpdateBucketLifecycleAsync("b", MakeConfig());
 
-        var result = await _storage.DeleteLifecycleConfigurationAsync("b");
+        var result = await _storage.UpdateBucketLifecycleAsync("b", null);
 
         Assert.True(result);
-        var cfg = await _storage.GetLifecycleConfigurationAsync("b");
-        Assert.Null(cfg);
+        var bucket = await _storage.GetBucketMetadataAsync("b");
+        Assert.Null(bucket?.Lifecycle);
+    }
+
+    [Fact]
+    public async Task Set_ThenDelete_ThenSet_Works()
+    {
+        await SeedBucketAsync("b");
+        await _storage.UpdateBucketLifecycleAsync("b", MakeConfig());
+        await _storage.UpdateBucketLifecycleAsync("b", null);
+
+        var newCfg = new LifecycleConfiguration
+        {
+            Rules = new() { new LifecycleRule { Id = "new-rule", Filter = new LifecycleFilter { Prefix = "" }, Expiration = new LifecycleExpiration { Days = 30 } } }
+        };
+        await _storage.UpdateBucketLifecycleAsync("b", newCfg);
+
+        var bucket = await _storage.GetBucketMetadataAsync("b");
+        Assert.NotNull(bucket?.Lifecycle);
+        Assert.Equal("new-rule", bucket.Lifecycle.Rules[0].Id);
     }
 }

@@ -15,6 +15,7 @@ public class Bucket
     public Dictionary<string, string> Tags { get; set; } = new();
     public string? OwnerId { get; set; }
     public string? OwnerDisplayName { get; set; }
+    public LifecycleConfiguration? Lifecycle { get; set; }
 }
 
 public class CreateBucketRequest

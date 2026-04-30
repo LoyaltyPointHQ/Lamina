@@ -149,6 +149,22 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
             // Get tags from xattr
             var tags = GetBucketTags(bucketPath);
 
+            LifecycleConfiguration? lifecycle = null;
+            var supplementPath = GetBucketSupplementPath(bucketName);
+            if (File.Exists(supplementPath))
+            {
+                try
+                {
+                    var supplementJson = await File.ReadAllTextAsync(supplementPath, cancellationToken);
+                    var supplement = System.Text.Json.JsonSerializer.Deserialize<BucketSupplement>(supplementJson);
+                    lifecycle = supplement?.Lifecycle;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to read bucket supplement for {BucketName}", bucketName);
+                }
+            }
+
             return new Bucket
             {
                 Name = bucketName,
@@ -157,7 +173,8 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
                 StorageClass = storageClass,
                 Tags = tags,
                 OwnerId = ownerId,
-                OwnerDisplayName = ownerDisplayName
+                OwnerDisplayName = ownerDisplayName,
+                Lifecycle = lifecycle
             };
         }
         catch (Exception ex)
@@ -299,53 +316,37 @@ public class XattrBucketMetadataStorage : IBucketMetadataStorage
         }
     }
 
-    public async Task<LifecycleConfiguration?> GetLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
-    {
-        if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
-        {
-            return null;
-        }
-
-        var path = GetLifecyclePath(bucketName);
-        if (!File.Exists(path))
-        {
-            return null;
-        }
-
-        var content = await File.ReadAllTextAsync(path, cancellationToken);
-        return string.IsNullOrWhiteSpace(content)
-            ? null
-            : System.Text.Json.JsonSerializer.Deserialize<LifecycleConfiguration>(content);
-    }
-
-    public async Task<bool> SetLifecycleConfigurationAsync(string bucketName, LifecycleConfiguration configuration, CancellationToken cancellationToken = default)
+    public async Task<bool> UpdateBucketLifecycleAsync(string bucketName, LifecycleConfiguration? lifecycle, CancellationToken cancellationToken = default)
     {
         if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return false;
         }
 
-        var path = GetLifecyclePath(bucketName);
+        var path = GetBucketSupplementPath(bucketName);
+
+        if (lifecycle == null)
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+            return true;
+        }
+
         _networkHelper.EnsureDirectoryExists(Path.GetDirectoryName(path)!);
-        var json = System.Text.Json.JsonSerializer.Serialize(configuration, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            new BucketSupplement { Lifecycle = lifecycle },
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(path, json, cancellationToken);
         return true;
     }
 
-    public Task<bool> DeleteLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
-    {
-        var path = GetLifecyclePath(bucketName);
-        if (File.Exists(path))
-        {
-            File.Delete(path);
-            return Task.FromResult(true);
-        }
-        return Task.FromResult(false);
-    }
+    private string GetBucketSupplementPath(string bucketName) =>
+        Path.Combine(_dataDirectory, bucketName, ".lamina-bucket.json");
 
-    private string GetLifecyclePath(string bucketName)
+    private class BucketSupplement
     {
-        // Xattr mode: store lifecycle JSON as a hidden file in bucket root directory.
-        return Path.Combine(_dataDirectory, bucketName, ".lamina-lifecycle.json");
+        public LifecycleConfiguration? Lifecycle { get; set; }
     }
 }

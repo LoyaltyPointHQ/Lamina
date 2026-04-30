@@ -29,7 +29,7 @@ public class LifecycleExpirationServiceTests : IntegrationTestBase
     {
         using var scope = Factory.Services.CreateScope();
         var bucketStorage = scope.ServiceProvider.GetRequiredService<IBucketStorageFacade>();
-        await bucketStorage.SetLifecycleConfigurationAsync(bucket, config);
+        await bucketStorage.UpdateBucketLifecycleAsync(bucket, config);
     }
 
     private Task PutObjectAsync(string bucket, string key, string content = "data") =>

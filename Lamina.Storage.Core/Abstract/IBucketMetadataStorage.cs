@@ -10,7 +10,5 @@ public interface IBucketMetadataStorage
     Task<bool> DeleteBucketMetadataAsync(string bucketName, CancellationToken cancellationToken = default);
     Task<Bucket?> UpdateBucketTagsAsync(string bucketName, Dictionary<string, string> tags, CancellationToken cancellationToken = default);
 
-    Task<LifecycleConfiguration?> GetLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default);
-    Task<bool> SetLifecycleConfigurationAsync(string bucketName, LifecycleConfiguration configuration, CancellationToken cancellationToken = default);
-    Task<bool> DeleteLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default);
+    Task<bool> UpdateBucketLifecycleAsync(string bucketName, LifecycleConfiguration? lifecycle, CancellationToken cancellationToken = default);
 }

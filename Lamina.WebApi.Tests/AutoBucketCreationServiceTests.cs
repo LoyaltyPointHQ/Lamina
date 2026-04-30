@@ -315,12 +315,12 @@ public class AutoBucketCreationServiceTests
         };
         _mockBucketStorage.Setup(x => x.CreateBucketAsync("lc-bucket", It.IsAny<CreateBucketRequest?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Bucket { Name = "lc-bucket", CreationDate = DateTime.UtcNow });
-        _mockBucketStorage.Setup(x => x.SetLifecycleConfigurationAsync("lc-bucket", It.IsAny<LifecycleConfiguration>(), It.IsAny<CancellationToken>()))
+        _mockBucketStorage.Setup(x => x.UpdateBucketLifecycleAsync("lc-bucket", It.IsAny<LifecycleConfiguration>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         await CreateService(settings).CreateConfiguredBucketsAsync();
 
-        _mockBucketStorage.Verify(x => x.SetLifecycleConfigurationAsync(
+        _mockBucketStorage.Verify(x => x.UpdateBucketLifecycleAsync(
             "lc-bucket",
             It.Is<LifecycleConfiguration>(c => c.Rules.Count == 1 && c.Rules[0].Id == "expire-logs"),
             It.IsAny<CancellationToken>()), Times.Once);
@@ -346,12 +346,12 @@ public class AutoBucketCreationServiceTests
         };
         _mockBucketStorage.Setup(x => x.CreateBucketAsync("existing", It.IsAny<CreateBucketRequest?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Bucket?)null);
-        _mockBucketStorage.Setup(x => x.SetLifecycleConfigurationAsync("existing", It.IsAny<LifecycleConfiguration>(), It.IsAny<CancellationToken>()))
+        _mockBucketStorage.Setup(x => x.UpdateBucketLifecycleAsync("existing", It.IsAny<LifecycleConfiguration>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         await CreateService(settings).CreateConfiguredBucketsAsync();
 
-        _mockBucketStorage.Verify(x => x.SetLifecycleConfigurationAsync(
+        _mockBucketStorage.Verify(x => x.UpdateBucketLifecycleAsync(
             "existing", It.IsAny<LifecycleConfiguration>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -379,7 +379,7 @@ public class AutoBucketCreationServiceTests
 
         await CreateService(settings).CreateConfiguredBucketsAsync();
 
-        _mockBucketStorage.Verify(x => x.SetLifecycleConfigurationAsync(
+        _mockBucketStorage.Verify(x => x.UpdateBucketLifecycleAsync(
             It.IsAny<string>(), It.IsAny<LifecycleConfiguration>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -396,7 +396,7 @@ public class AutoBucketCreationServiceTests
 
         await CreateService(settings).CreateConfiguredBucketsAsync();
 
-        _mockBucketStorage.Verify(x => x.SetLifecycleConfigurationAsync(
+        _mockBucketStorage.Verify(x => x.UpdateBucketLifecycleAsync(
             It.IsAny<string>(), It.IsAny<LifecycleConfiguration>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

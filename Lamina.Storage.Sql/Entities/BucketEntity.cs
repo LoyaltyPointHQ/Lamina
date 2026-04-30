@@ -24,8 +24,8 @@ public class BucketEntity
     [Column(TypeName = "TEXT")]
     public string TagsJson { get; set; } = "{}";
 
-    [Column(TypeName = "TEXT")]
-    public string? LifecycleConfigurationJson { get; set; }
+    [Column("Lifecycle", TypeName = "TEXT")]
+    public string? Lifecycle { get; set; }
 
     [MaxLength(256)]
     public string? OwnerId { get; set; }
@@ -73,7 +73,10 @@ public class BucketEntity
             StorageClass = StorageClass,
             Tags = Tags,
             OwnerId = OwnerId,
-            OwnerDisplayName = OwnerDisplayName
+            OwnerDisplayName = OwnerDisplayName,
+            Lifecycle = string.IsNullOrEmpty(Lifecycle)
+                ? null
+                : System.Text.Json.JsonSerializer.Deserialize<LifecycleConfiguration>(Lifecycle)
         };
     }
 }

@@ -7,7 +7,6 @@ namespace Lamina.Storage.InMemory;
 public class InMemoryBucketMetadataStorage : IBucketMetadataStorage
 {
     private readonly ConcurrentDictionary<string, Bucket> _bucketMetadata = new();
-    private readonly ConcurrentDictionary<string, LifecycleConfiguration> _lifecycleConfigs = new();
     private readonly IBucketDataStorage _dataStorage;
 
     public InMemoryBucketMetadataStorage(IBucketDataStorage dataStorage)
@@ -17,7 +16,6 @@ public class InMemoryBucketMetadataStorage : IBucketMetadataStorage
 
     public async Task<Bucket?> StoreBucketMetadataAsync(string bucketName, CreateBucketRequest request, CancellationToken cancellationToken = default)
     {
-        // Check if bucket exists in data service
         if (!await _dataStorage.BucketExistsAsync(bucketName, cancellationToken))
         {
             return null;
@@ -81,28 +79,13 @@ public class InMemoryBucketMetadataStorage : IBucketMetadataStorage
         return null;
     }
 
-    public Task<LifecycleConfiguration?> GetLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
+    public Task<bool> UpdateBucketLifecycleAsync(string bucketName, LifecycleConfiguration? lifecycle, CancellationToken cancellationToken = default)
     {
-        if (!_bucketMetadata.ContainsKey(bucketName))
-        {
-            return Task.FromResult<LifecycleConfiguration?>(null);
-        }
-        _lifecycleConfigs.TryGetValue(bucketName, out var config);
-        return Task.FromResult(config);
-    }
-
-    public Task<bool> SetLifecycleConfigurationAsync(string bucketName, LifecycleConfiguration configuration, CancellationToken cancellationToken = default)
-    {
-        if (!_bucketMetadata.ContainsKey(bucketName))
+        if (!_bucketMetadata.TryGetValue(bucketName, out var bucket))
         {
             return Task.FromResult(false);
         }
-        _lifecycleConfigs[bucketName] = configuration;
+        bucket.Lifecycle = lifecycle;
         return Task.FromResult(true);
-    }
-
-    public Task<bool> DeleteLifecycleConfigurationAsync(string bucketName, CancellationToken cancellationToken = default)
-    {
-        return Task.FromResult(_lifecycleConfigs.TryRemove(bucketName, out _));
     }
 }

@@ -98,7 +98,7 @@ public class AutoBucketCreationService : IAutoBucketCreationService
             return;
         }
 
-        var applied = await _bucketStorage.SetLifecycleConfigurationAsync(bucketName, configuration, cancellationToken);
+        var applied = await _bucketStorage.UpdateBucketLifecycleAsync(bucketName, configuration, cancellationToken);
         if (applied)
         {
             _logger.LogInformation("Applied lifecycle configuration to bucket {BucketName} ({RuleCount} rules)",

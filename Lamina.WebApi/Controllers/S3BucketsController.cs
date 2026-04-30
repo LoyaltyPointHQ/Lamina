@@ -292,7 +292,7 @@ public class S3BucketsController : S3ControllerBase
                 : S3Error("MalformedXML", parseResult.ErrorMessage!, bucketName, 400);
         }
 
-        var set = await _bucketStorage.SetLifecycleConfigurationAsync(bucketName, parseResult.Configuration!, cancellationToken);
+        var set = await _bucketStorage.UpdateBucketLifecycleAsync(bucketName, parseResult.Configuration!, cancellationToken);
         if (!set)
         {
             return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
@@ -307,18 +307,18 @@ public class S3BucketsController : S3ControllerBase
     [S3Authorize(S3Operations.Read, S3ResourceType.Bucket)]
     public async Task<IActionResult> GetBucketLifecycleConfiguration(string bucketName, CancellationToken cancellationToken = default)
     {
-        if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
+        var bucket = await _bucketStorage.GetBucketAsync(bucketName, cancellationToken);
+        if (bucket == null)
         {
             return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
         }
 
-        var config = await _bucketStorage.GetLifecycleConfigurationAsync(bucketName, cancellationToken);
-        if (config == null)
+        if (bucket.Lifecycle == null)
         {
             return S3Error("NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist.", bucketName, 404);
         }
 
-        var result = LifecycleConfigurationXmlMapper.ToXml(config);
+        var result = LifecycleConfigurationXmlMapper.ToXml(bucket.Lifecycle);
         Response.ContentType = "application/xml";
         return Ok(result);
     }
@@ -333,7 +333,7 @@ public class S3BucketsController : S3ControllerBase
             return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
         }
 
-        await _bucketStorage.DeleteLifecycleConfigurationAsync(bucketName, cancellationToken);
+        await _bucketStorage.UpdateBucketLifecycleAsync(bucketName, null, cancellationToken);
         return NoContent();
     }
 }
