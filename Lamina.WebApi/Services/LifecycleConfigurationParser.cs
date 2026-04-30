@@ -1,6 +1,7 @@
 using System.Xml;
 using System.Xml.Serialization;
 using Lamina.Core.Models;
+using Lamina.WebApi.Helpers;
 
 namespace Lamina.WebApi.Services;
 
@@ -23,22 +24,15 @@ public static class LifecycleConfigurationParser
             return rejectionResult.Value;
         }
 
-        LifecycleConfigurationXml? xmlDoc;
-        try
+        var xmlDeserResult = S3XmlDeserializer.Deserialize<LifecycleConfigurationXml, LifecycleConfigurationXmlNoNamespace>(
+            xmlContent,
+            noNs => new LifecycleConfigurationXml { Rules = noNs.Rules });
+        if (!xmlDeserResult.IsSuccess)
         {
-            var serializer = new XmlSerializer(typeof(LifecycleConfigurationXml));
-            using var reader = new StringReader(xmlContent);
-            xmlDoc = serializer.Deserialize(reader) as LifecycleConfigurationXml;
-        }
-        catch (Exception ex)
-        {
-            return LifecycleParseResult.Failure($"The XML you provided was not well-formed or did not validate against our published schema: {ex.Message}");
+            return LifecycleParseResult.Failure($"The XML you provided was not well-formed or did not validate against our published schema: {xmlDeserResult.ErrorMessage}");
         }
 
-        if (xmlDoc == null)
-        {
-            return LifecycleParseResult.Failure("The XML you provided was not well-formed or did not validate against our published schema.");
-        }
+        var xmlDoc = xmlDeserResult.Value!;
 
         if (xmlDoc.Rules.Count > MaxRules)
         {

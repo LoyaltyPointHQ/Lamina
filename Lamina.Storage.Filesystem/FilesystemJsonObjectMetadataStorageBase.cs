@@ -396,15 +396,18 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
 
         var updated = await _lockManager.UpdateFileAsync(metadataPath, current =>
         {
+            S3ObjectMetadata metadata;
             if (string.IsNullOrEmpty(current))
             {
-                return Task.FromResult<string?>(null);
+                // No metadata file yet — create a minimal stub so tags can be persisted.
+                // Other fields (ETag, content type) will be regenerated on-the-fly
+                // by GetMetadataAsync when the object is next read.
+                metadata = new S3ObjectMetadata { BucketName = bucketName, ETag = string.Empty };
             }
-
-            var metadata = JsonSerializer.Deserialize<S3ObjectMetadata>(current);
-            if (metadata == null)
+            else
             {
-                return Task.FromResult<string?>(null);
+                metadata = JsonSerializer.Deserialize<S3ObjectMetadata>(current)
+                    ?? new S3ObjectMetadata { BucketName = bucketName, ETag = string.Empty };
             }
 
             metadata.Tags = new Dictionary<string, string>(tags);

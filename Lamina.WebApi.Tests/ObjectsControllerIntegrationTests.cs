@@ -944,6 +944,7 @@ public class ObjectsControllerIntegrationTests : IntegrationTestBase
 
         // Verify checksum is copied to destination object
         var headRequest = new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}/destination-with-checksum.txt");
+        headRequest.Headers.Add("x-amz-checksum-mode", "ENABLED");
         var headResponse = await Client.SendAsync(headRequest);
         Assert.Equal(HttpStatusCode.OK, headResponse.StatusCode);
         Assert.True(headResponse.Headers.Contains("x-amz-checksum-sha256"),

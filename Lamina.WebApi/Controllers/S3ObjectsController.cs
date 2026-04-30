@@ -622,11 +622,15 @@ public class S3ObjectsController : S3ControllerBase
             Response.Headers.Append("x-amz-tagging-count", metadata.Tags.Count.ToString());
         }
 
-        // AWS S3 spec: for ranged GET, the checksum header must be for the returned range,
-        // not the full object. Since we don't compute per-range checksums, omit the header.
-        // AWS CRT clients (default aws-cli v2 with x-amz-checksum-mode=ENABLED) verify the
-        // header against the bytes they received and fail if it doesn't match.
-        if (!isRangeRequest)
+        // AWS S3 spec: checksums are only returned when the client sends x-amz-checksum-mode: ENABLED.
+        // For ranged GET the checksum must cover only the returned range, which we don't compute,
+        // so checksums are always omitted for range requests regardless of checksum-mode.
+        // Multipart objects carry composite checksums; x-amz-checksum-type: COMPOSITE must
+        // accompany them so clients (boto3, AWS CRT) don't try to validate as full-object CRC.
+        var checksumModeEnabled = string.Equals(
+            Request.Headers["x-amz-checksum-mode"].ToString(), "ENABLED",
+            StringComparison.OrdinalIgnoreCase);
+        if (!isRangeRequest && checksumModeEnabled)
         {
             if (!string.IsNullOrEmpty(metadata.ChecksumCRC32))
                 Response.Headers.Append("x-amz-checksum-crc32", metadata.ChecksumCRC32);
@@ -638,6 +642,14 @@ public class S3ObjectsController : S3ControllerBase
                 Response.Headers.Append("x-amz-checksum-sha256", metadata.ChecksumSHA256);
             if (!string.IsNullOrEmpty(metadata.ChecksumCRC64NVME))
                 Response.Headers.Append("x-amz-checksum-crc64nvme", metadata.ChecksumCRC64NVME);
+
+            var hasChecksum = !string.IsNullOrEmpty(metadata.ChecksumCRC32)
+                || !string.IsNullOrEmpty(metadata.ChecksumCRC32C)
+                || !string.IsNullOrEmpty(metadata.ChecksumSHA1)
+                || !string.IsNullOrEmpty(metadata.ChecksumSHA256)
+                || !string.IsNullOrEmpty(metadata.ChecksumCRC64NVME);
+            if (hasChecksum && ETagHelper.IsMultipartETag(metadata.ETag))
+                Response.Headers.Append("x-amz-checksum-type", "COMPOSITE");
         }
 
         // Calculate content length and set status code
@@ -736,17 +748,31 @@ public class S3ObjectsController : S3ControllerBase
             Response.Headers.Append("x-amz-tagging-count", objectInfo.Tags.Count.ToString());
         }
 
-        // Add checksum headers if present
-        if (!string.IsNullOrEmpty(objectInfo.ChecksumCRC32))
-            Response.Headers.Append("x-amz-checksum-crc32", objectInfo.ChecksumCRC32);
-        if (!string.IsNullOrEmpty(objectInfo.ChecksumCRC32C))
-            Response.Headers.Append("x-amz-checksum-crc32c", objectInfo.ChecksumCRC32C);
-        if (!string.IsNullOrEmpty(objectInfo.ChecksumSHA1))
-            Response.Headers.Append("x-amz-checksum-sha1", objectInfo.ChecksumSHA1);
-        if (!string.IsNullOrEmpty(objectInfo.ChecksumSHA256))
-            Response.Headers.Append("x-amz-checksum-sha256", objectInfo.ChecksumSHA256);
-        if (!string.IsNullOrEmpty(objectInfo.ChecksumCRC64NVME))
-            Response.Headers.Append("x-amz-checksum-crc64nvme", objectInfo.ChecksumCRC64NVME);
+        // Per S3 spec, checksums are returned only when x-amz-checksum-mode: ENABLED is present.
+        var headChecksumModeEnabled = string.Equals(
+            Request.Headers["x-amz-checksum-mode"].ToString(), "ENABLED",
+            StringComparison.OrdinalIgnoreCase);
+        if (headChecksumModeEnabled)
+        {
+            if (!string.IsNullOrEmpty(objectInfo.ChecksumCRC32))
+                Response.Headers.Append("x-amz-checksum-crc32", objectInfo.ChecksumCRC32);
+            if (!string.IsNullOrEmpty(objectInfo.ChecksumCRC32C))
+                Response.Headers.Append("x-amz-checksum-crc32c", objectInfo.ChecksumCRC32C);
+            if (!string.IsNullOrEmpty(objectInfo.ChecksumSHA1))
+                Response.Headers.Append("x-amz-checksum-sha1", objectInfo.ChecksumSHA1);
+            if (!string.IsNullOrEmpty(objectInfo.ChecksumSHA256))
+                Response.Headers.Append("x-amz-checksum-sha256", objectInfo.ChecksumSHA256);
+            if (!string.IsNullOrEmpty(objectInfo.ChecksumCRC64NVME))
+                Response.Headers.Append("x-amz-checksum-crc64nvme", objectInfo.ChecksumCRC64NVME);
+
+            var hasChecksum = !string.IsNullOrEmpty(objectInfo.ChecksumCRC32)
+                || !string.IsNullOrEmpty(objectInfo.ChecksumCRC32C)
+                || !string.IsNullOrEmpty(objectInfo.ChecksumSHA1)
+                || !string.IsNullOrEmpty(objectInfo.ChecksumSHA256)
+                || !string.IsNullOrEmpty(objectInfo.ChecksumCRC64NVME);
+            if (hasChecksum && ETagHelper.IsMultipartETag(objectInfo.ETag))
+                Response.Headers.Append("x-amz-checksum-type", "COMPOSITE");
+        }
 
         return Ok();
     }
@@ -882,23 +908,17 @@ public class S3ObjectsController : S3ControllerBase
             return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", key, 400);
         }
 
-        TaggingXml? taggingXml;
-        try
+        _logger.LogDebug("PutObjectTagging XML: {Xml}", xmlContent);
+
+        var taggingResult = S3XmlDeserializer.Deserialize<TaggingXml, TaggingXmlNoNamespace>(
+            xmlContent,
+            noNs => new TaggingXml { TagSet = noNs.TagSet });
+        if (!taggingResult.IsSuccess)
         {
-            var serializer = new XmlSerializer(typeof(TaggingXml));
-            using var reader = new StringReader(xmlContent);
-            taggingXml = serializer.Deserialize(reader) as TaggingXml;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to deserialize Tagging XML for {Bucket}/{Key}", bucketName, key);
             return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", key, 400);
         }
 
-        if (taggingXml == null)
-        {
-            return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", key, 400);
-        }
+        var taggingXml = taggingResult.Value!;
 
         var tagDict = new Dictionary<string, string>();
         foreach (var tag in taggingXml.TagSet)

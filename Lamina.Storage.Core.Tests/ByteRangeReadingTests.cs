@@ -8,6 +8,7 @@ using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.InMemory;
 using Lamina.WebApi.Services;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace Lamina.Storage.Core.Tests;
@@ -25,7 +26,7 @@ public class ByteRangeReadingTests
     public ByteRangeReadingTests()
     {
         var mockChunkedDataParser = new Mock<IChunkedDataParser>();
-        _inMemoryStorage = new InMemoryObjectDataStorage(mockChunkedDataParser.Object);
+        _inMemoryStorage = new InMemoryObjectDataStorage(mockChunkedDataParser.Object, NullLogger<InMemoryObjectDataStorage>.Instance);
         _metadataStorageMock = new Mock<IObjectMetadataStorage>();
         _bucketStorageMock = new Mock<IBucketStorageFacade>();
         _multipartUploadStorageMock = new Mock<IMultipartUploadStorageFacade>();

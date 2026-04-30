@@ -5,6 +5,7 @@ using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
+using Microsoft.Extensions.Logging;
 
 namespace Lamina.Storage.InMemory;
 
@@ -15,10 +16,12 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, StoredObject>> _data = new();
     private readonly ConcurrentDictionary<string, byte[]> _pendingData = new();
     private readonly IChunkedDataParser _chunkedDataParser;
+    private readonly ILogger<InMemoryObjectDataStorage> _logger;
 
-    public InMemoryObjectDataStorage(IChunkedDataParser chunkedDataParser)
+    public InMemoryObjectDataStorage(IChunkedDataParser chunkedDataParser, ILogger<InMemoryObjectDataStorage> logger)
     {
         _chunkedDataParser = chunkedDataParser;
+        _logger = logger;
     }
 
     public async Task<StorageResult<PreparedData>> PrepareDataAsync(
@@ -260,6 +263,9 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         IEnumerable<string> keys = bucketType == BucketType.GeneralPurpose
             ? bucketData.Keys.OrderBy(k => k, StringComparer.Ordinal)
             : bucketData.Keys.OrderBy(DirectoryBucketHashOrder);
+
+        _logger.LogDebug("ListDataKeysAsync: bucket={Bucket} prefix={Prefix} startAfter={StartAfter} delimiter={Delimiter}",
+            bucketName, prefix, startAfter, delimiter);
 
         if (!string.IsNullOrEmpty(prefix))
         {

@@ -5,6 +5,7 @@ using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.InMemory;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace Lamina.Storage.Core.Tests;
@@ -27,7 +28,7 @@ public class ComputeChecksumsAsyncTests
 
     private static async Task<IObjectDataStorage> CreateInMemoryStorageWithDataAsync()
     {
-        var storage = new InMemoryObjectDataStorage(Mock.Of<IChunkedDataParser>());
+        var storage = new InMemoryObjectDataStorage(Mock.Of<IChunkedDataParser>(), NullLogger<InMemoryObjectDataStorage>.Instance);
         var pipe = new Pipe();
         await pipe.Writer.WriteAsync(Payload);
         await pipe.Writer.CompleteAsync();
@@ -51,7 +52,7 @@ public class ComputeChecksumsAsyncTests
     [Fact]
     public async Task ComputeChecksumsAsync_NonExistentObject_ReturnsEmptyDictionary()
     {
-        var storage = new InMemoryObjectDataStorage(Mock.Of<IChunkedDataParser>());
+        var storage = new InMemoryObjectDataStorage(Mock.Of<IChunkedDataParser>(), NullLogger<InMemoryObjectDataStorage>.Instance);
 
         var result = await storage.ComputeChecksumsAsync(BucketName, Key, new[] { "CRC32", "SHA256" });
 
@@ -127,7 +128,7 @@ public class ComputeChecksumsAsyncTests
     [Fact]
     public async Task ComputeETagAndChecksumsAsync_NonExistentObject_ReturnsNullETagAndEmptyChecksums()
     {
-        var storage = new InMemoryObjectDataStorage(Mock.Of<IChunkedDataParser>());
+        var storage = new InMemoryObjectDataStorage(Mock.Of<IChunkedDataParser>(), NullLogger<InMemoryObjectDataStorage>.Instance);
 
         var (etag, checksums) = await storage.ComputeETagAndChecksumsAsync(BucketName, Key, new[] { "CRC32" });
 

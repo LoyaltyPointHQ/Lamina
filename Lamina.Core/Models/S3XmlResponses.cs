@@ -619,6 +619,14 @@ public class TaggingXml
     public List<TagXml> TagSet { get; set; } = new();
 }
 
+[XmlRoot("Tagging")]
+public class TaggingXmlNoNamespace
+{
+    [XmlArray("TagSet")]
+    [XmlArrayItem("Tag")]
+    public List<TagXml> TagSet { get; set; } = new();
+}
+
 [XmlRoot("Tag")]
 public class TagXml
 {
@@ -631,6 +639,13 @@ public class TagXml
 
 [XmlRoot("LifecycleConfiguration", Namespace = "http://s3.amazonaws.com/doc/2006-03-01/")]
 public class LifecycleConfigurationXml
+{
+    [XmlElement("Rule")]
+    public List<LifecycleRuleXml> Rules { get; set; } = new();
+}
+
+[XmlRoot("LifecycleConfiguration")]
+public class LifecycleConfigurationXmlNoNamespace
 {
     [XmlElement("Rule")]
     public List<LifecycleRuleXml> Rules { get; set; } = new();

@@ -121,6 +121,38 @@ public class FilesystemObjectDataStorageListObjectsTests : IAsyncLifetime
         Assert.Empty(result.CommonPrefixes);
     }
 
+    [Fact]
+    public async Task ListDataKeysAsync_WithPrefixAndStartAfter_ReturnsKeysAfterStartAfter()
+    {
+        // Lexicographic order under "a/b/c/":
+        //   a/b/c/d/file3.txt  (d < f, so comes first)
+        //   a/b/c/file1.txt
+        //   a/b/c/file2.txt
+        // start-after "a/b/c/file1.txt" → only file2.txt is after it
+        var result = await _storage.ListDataKeysAsync(
+            BucketName, BucketType.GeneralPurpose,
+            prefix: "a/b/c/",
+            startAfter: "a/b/c/file1.txt");
+
+        Assert.DoesNotContain("a/b/c/file1.txt", result.Keys);
+        Assert.DoesNotContain("a/b/c/d/file3.txt", result.Keys);
+        Assert.Contains("a/b/c/file2.txt", result.Keys);
+    }
+
+    [Fact]
+    public async Task ListDataKeysAsync_WithPrefixAndStartAfter_StartAfterBeforeAllKeys_ReturnsAllPrefixedKeys()
+    {
+        // start-after value before all keys in the prefix → should return all
+        var result = await _storage.ListDataKeysAsync(
+            BucketName, BucketType.GeneralPurpose,
+            prefix: "a/b/c/",
+            startAfter: "a/b/");
+
+        Assert.Contains("a/b/c/file1.txt", result.Keys);
+        Assert.Contains("a/b/c/file2.txt", result.Keys);
+        Assert.Contains("a/b/c/d/file3.txt", result.Keys);
+    }
+
     public Task DisposeAsync()
     {
         // Clean up test directories

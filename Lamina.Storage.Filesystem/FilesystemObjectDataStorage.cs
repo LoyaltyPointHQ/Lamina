@@ -583,10 +583,13 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
     {
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
+            _logger.LogDebug("DataExistsAsync: key={Key} forbidden", key);
             return Task.FromResult(false);
         }
 
         var dataPath = GetDataPath(bucketName, key);
+        _logger.LogDebug("DataExistsAsync: bucket={Bucket} key={Key} path={Path} exists={Exists}",
+            bucketName, key, dataPath, File.Exists(dataPath));
         if (!File.Exists(dataPath))
         {
             return Task.FromResult(false);
@@ -794,7 +797,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
         if (!string.IsNullOrEmpty(startAfter))
         {
             enumerator = enumerator
-                .SkipWhile(x => string.Compare(EntryNameToKey(path, x), startAfter, StringComparison.Ordinal) <= 0);
+                .SkipWhile(x => string.Compare(EntryNameToKey(bucketName, x), startAfter, StringComparison.Ordinal) <= 0);
         }
 
         foreach (var entryName in enumerator)

@@ -249,6 +249,9 @@ public class ObjectStorageFacade : IObjectStorageFacade
             startAfterKey = request.ContinuationToken;
         }
 
+        _logger.LogDebug("ListObjectsAsync: bucket={Bucket} prefix={Prefix} startAfterKey={StartAfterKey} delimiter={Delimiter} isV2={IsV2}",
+            bucketName, request.Prefix, startAfterKey, request.Delimiter, isV2);
+
         var dataResult = await _dataStorage.ListDataKeysAsync(
             bucketName,
             bucketType,

@@ -289,6 +289,8 @@ public class S3BucketsController : S3ControllerBase
             return S3Error("MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema.", bucketName, 400);
         }
 
+        _logger.LogDebug("PutBucketLifecycle XML: {Xml}", xmlContent);
+
         var parseResult = LifecycleConfigurationParser.Parse(xmlContent);
         if (!parseResult.IsSuccess)
         {

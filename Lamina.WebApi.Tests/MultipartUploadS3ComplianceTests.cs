@@ -827,6 +827,7 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
 
         // Verify the completed object has a checksum via HEAD
         var headRequest = new HttpRequestMessage(HttpMethod.Head, $"/{bucketName}/dest-with-checksum.txt");
+        headRequest.Headers.Add("x-amz-checksum-mode", "ENABLED");
         var headResponse = await Client.SendAsync(headRequest);
         Assert.Equal(HttpStatusCode.OK, headResponse.StatusCode);
         Assert.True(headResponse.Headers.Contains("x-amz-checksum-sha256"),
