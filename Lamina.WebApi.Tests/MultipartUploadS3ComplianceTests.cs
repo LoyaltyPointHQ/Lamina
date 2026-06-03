@@ -1342,5 +1342,49 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         Assert.Equal(3, result.Uploads.Count); // But only 3 uploads exist
     }
 
+    [Fact]
+    public async Task ListMultipartUploads_WithDelimiter_ReturnsCommonPrefixes()
+    {
+        var bucket = await CreateTestBucketAsync();
+        await InitiateMultipleUploadsAsync(bucket, "logs/jan.csv", "logs/feb.csv", "images/photo.jpg", "root.txt");
+
+        var response = await Client.GetAsync($"/{bucket}?uploads&delimiter=/");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = DeserializeListUploads(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(2, result.CommonPrefixesList.Count);
+        Assert.Contains(result.CommonPrefixesList, cp => cp.Prefix == "logs/");
+        Assert.Contains(result.CommonPrefixesList, cp => cp.Prefix == "images/");
+        Assert.Single(result.Uploads);
+        Assert.Equal("root.txt", result.Uploads[0].Key);
+    }
+
+    [Fact]
+    public async Task ListMultipartUploads_WithPrefixAndDelimiter_GroupsIntoCommonPrefixes()
+    {
+        var bucket = await CreateTestBucketAsync();
+        await InitiateMultipleUploadsAsync(bucket, "logs/2024/jan.csv", "logs/2024/feb.csv", "images/photo.jpg");
+
+        var response = await Client.GetAsync($"/{bucket}?uploads&prefix=logs/&delimiter=/");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = DeserializeListUploads(await response.Content.ReadAsStringAsync());
+
+        Assert.Single(result.CommonPrefixesList);
+        Assert.Equal("logs/2024/", result.CommonPrefixesList[0].Prefix);
+        Assert.Empty(result.Uploads);
+    }
+
+    [Fact]
+    public async Task ListMultipartUploads_InvalidEncodingType_ReturnsInvalidArgument()
+    {
+        var bucket = await CreateTestBucketAsync();
+        var response = await Client.GetAsync($"/{bucket}?uploads&encoding-type=csv");
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("<Code>InvalidArgument</Code>", body);
+    }
+
     #endregion
 }

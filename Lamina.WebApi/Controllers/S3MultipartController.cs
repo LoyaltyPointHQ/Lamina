@@ -87,6 +87,11 @@ public class S3MultipartController : S3ControllerBase
         CancellationToken cancellationToken = default
     )
     {
+        if (!string.IsNullOrEmpty(encodingType) && !encodingType.Equals("url", StringComparison.OrdinalIgnoreCase))
+            return S3Error("InvalidArgument",
+                $"Invalid Encoding Method specified in Request. The encoding-type parameter value '{encodingType}' is invalid. Valid value is 'url'.",
+                $"/{bucketName}", 400);
+
         var allUploads = await _multipartStorage.ListMultipartUploadsAsync(bucketName, cancellationToken);
 
         // Cap max-uploads to S3's maximum of 1000
@@ -115,31 +120,57 @@ public class S3MultipartController : S3ControllerBase
             ).ToList();
         }
 
-        // Take only up to effectiveMaxUploads
-        var returnedUploads = sortedUploads.Take(effectiveMaxUploads).ToList();
-        var isTruncated = sortedUploads.Count > effectiveMaxUploads;
+        // Apply delimiter: partition uploads into common prefixes and direct entries
+        var commonPrefixSet = new SortedSet<string>(StringComparer.Ordinal);
+        if (!string.IsNullOrEmpty(delimiter))
+        {
+            var prefixLength = prefix?.Length ?? 0;
+            var directUploads = new List<MultipartUpload>();
+            foreach (var upload in sortedUploads)
+            {
+                var delimIdx = upload.Key.IndexOf(delimiter, prefixLength, StringComparison.Ordinal);
+                if (delimIdx >= 0)
+                    commonPrefixSet.Add(upload.Key[..(delimIdx + delimiter.Length)]);
+                else
+                    directUploads.Add(upload);
+            }
+            sortedUploads = directUploads;
+        }
+
+        // Pagination: max-uploads counts both common prefixes and direct uploads combined
+        var totalCount = commonPrefixSet.Count + sortedUploads.Count;
+        var returnedPrefixes = commonPrefixSet.Take(effectiveMaxUploads).ToList();
+        var uploadSlots = Math.Max(0, effectiveMaxUploads - returnedPrefixes.Count);
+        var returnedUploads = sortedUploads.Take(uploadSlots).ToList();
+        var isTruncated = totalCount > effectiveMaxUploads;
+
+        var lastKey = returnedUploads.Count > 0 ? returnedUploads.Last().Key : returnedPrefixes.LastOrDefault();
+        var lastUploadId = returnedUploads.Count > 0 ? returnedUploads.Last().UploadId : null;
 
         var result = new ListMultipartUploadsResult
         {
             Bucket = bucketName,
             KeyMarker = keyMarker,
             UploadIdMarker = uploadIdMarker,
-            Prefix = prefix,
+            Prefix = S3UrlEncoder.ConditionalEncode(prefix, encodingType),
             Delimiter = delimiter,
             MaxUploads = effectiveMaxUploads,
             EncodingType = encodingType,
             IsTruncated = isTruncated,
-            NextKeyMarker = isTruncated ? returnedUploads.Last().Key : null,
-            NextUploadIdMarker = isTruncated ? returnedUploads.Last().UploadId : null,
+            NextKeyMarker = isTruncated ? S3UrlEncoder.ConditionalEncode(lastKey, encodingType) : null,
+            NextUploadIdMarker = isTruncated ? lastUploadId : null,
             Uploads = returnedUploads.Select(u => new Upload
             {
-                Key = u.Key,
+                Key = S3UrlEncoder.ConditionalEncode(u.Key, encodingType) ?? u.Key,
                 UploadId = u.UploadId,
                 StorageClass = "STANDARD",
                 Initiated = u.Initiated.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'"),
                 Owner = new Owner(),
                 Initiator = new Owner()
-            }).ToList()
+            }).ToList(),
+            CommonPrefixesList = returnedPrefixes
+                .Select(p => new CommonPrefixes { Prefix = S3UrlEncoder.ConditionalEncode(p, encodingType) ?? p })
+                .ToList()
         };
 
         Response.ContentType = "application/xml";
