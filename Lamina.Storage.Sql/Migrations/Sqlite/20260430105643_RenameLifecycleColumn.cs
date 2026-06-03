@@ -1,3 +1,6 @@
+using Lamina.Storage.Sql.Context;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -5,6 +8,8 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Lamina.Migrations.Sqlite
 {
     /// <inheritdoc />
+    [DbContext(typeof(LaminaDbContext))]
+    [Migration("20260430105643_RenameLifecycleColumn")]
     public partial class RenameLifecycleColumn : Migration
     {
         /// <inheritdoc />
