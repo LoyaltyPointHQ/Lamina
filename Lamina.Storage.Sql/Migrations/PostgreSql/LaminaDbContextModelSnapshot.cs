@@ -8,7 +8,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
 #nullable disable
 
-namespace Lamina.Migrations.PostgreSql
+namespace Lamina.Storage.Sql.Migrations.PostgreSql
 {
     [DbContext(typeof(LaminaDbContext))]
     partial class LaminaDbContextModelSnapshot : ModelSnapshot
@@ -17,7 +17,7 @@ namespace Lamina.Migrations.PostgreSql
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.9")
+                .HasAnnotation("ProductVersion", "10.0.5")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -32,8 +32,8 @@ namespace Lamina.Migrations.PostgreSql
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Lifecycle")
-                        .HasColumnName("Lifecycle")
-                        .HasColumnType("jsonb");
+                        .HasColumnType("jsonb")
+                        .HasColumnName("Lifecycle");
 
                     b.Property<string>("OwnerDisplayName")
                         .HasMaxLength(256)
@@ -95,7 +95,7 @@ namespace Lamina.Migrations.PostgreSql
                         .HasColumnType("jsonb");
 
                     b.Property<string>("PartsMetadataJson")
-                        .HasColumnType("text");
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("TagsJson")
                         .IsRequired()

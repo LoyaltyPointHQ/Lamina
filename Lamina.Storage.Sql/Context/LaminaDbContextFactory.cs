@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Lamina.Storage.Sql.Configuration;
 
 namespace Lamina.Storage.Sql.Context;
@@ -29,6 +30,8 @@ public class LaminaDbContextFactory : IDesignTimeDbContextFactory<LaminaDbContex
                 sqliteOptions.MigrationsAssembly("Lamina.Storage.Sql");
             });
         }
+
+        optionsBuilder.ReplaceService<IMigrationsAssembly, ProviderAwareMigrationsAssembly>();
 
         return new LaminaDbContext(optionsBuilder.Options);
     }

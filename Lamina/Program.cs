@@ -21,6 +21,7 @@ using Lamina.WebApi.Services;
 using Lamina.WebApi.Streaming;
 using Lamina.WebApi.Streaming.Chunked;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
@@ -170,6 +171,8 @@ if (metadataStorageType.Equals("Sql", StringComparison.OrdinalIgnoreCase))
                 sqliteOptions.MigrationsAssembly("Lamina.Storage.Sql");
             });
         }
+
+        options.ReplaceService<IMigrationsAssembly, ProviderAwareMigrationsAssembly>();
 
         if (sqlSettings.EnableSensitiveDataLogging)
         {

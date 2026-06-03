@@ -15,7 +15,7 @@ namespace Lamina.Migrations.Sqlite
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "9.0.0");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.5");
 
             modelBuilder.Entity("Lamina.Storage.Sql.Entities.BucketEntity", b =>
                 {
@@ -170,6 +170,10 @@ namespace Lamina.Migrations.Sqlite
 
                     b.Property<long>("Size")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("TagsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
 
                     b.HasKey("Id");
 
