@@ -607,14 +607,14 @@ public class BucketsControllerIntegrationTests : IntegrationTestBase
         Assert.True(response.Headers.Contains("x-amz-bucket-type"));
     }
 
-    // Task #9: CreateBucket with valid CreateBucketConfiguration XML body
+    // Task #9: CreateBucket with valid CreateBucketConfiguration XML body (supported region)
     [Fact]
     public async Task CreateBucket_WithLocationConstraintXmlBody_Returns200()
     {
         var bucketName = $"xml-body-{Guid.NewGuid()}";
         const string body = """
             <CreateBucketConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
-              <LocationConstraint>eu-west-1</LocationConstraint>
+              <LocationConstraint>us-east-1</LocationConstraint>
             </CreateBucketConfiguration>
             """;
 
@@ -653,5 +653,38 @@ public class BucketsControllerIntegrationTests : IntegrationTestBase
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var xml = await response.Content.ReadAsStringAsync();
         Assert.Contains("InvalidBucketName", xml);
+    }
+
+    // Task #9: LocationConstraint validation
+    [Fact]
+    public async Task CreateBucket_WithUnknownLocationConstraint_ReturnsInvalidLocationConstraint()
+    {
+        var xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <CreateBucketConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+              <LocationConstraint>ap-southeast-1</LocationConstraint>
+            </CreateBucketConfiguration>
+            """;
+        var response = await Client.PutAsync($"/test-bucket-{Guid.NewGuid()}",
+            new StringContent(xml, Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("<Code>InvalidLocationConstraint</Code>", body);
+    }
+
+    [Fact]
+    public async Task CreateBucket_WithUsEast1LocationConstraint_Succeeds()
+    {
+        var xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <CreateBucketConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+              <LocationConstraint>us-east-1</LocationConstraint>
+            </CreateBucketConfiguration>
+            """;
+        var response = await Client.PutAsync($"/test-bucket-{Guid.NewGuid()}",
+            new StringContent(xml, Encoding.UTF8, "application/xml"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 }

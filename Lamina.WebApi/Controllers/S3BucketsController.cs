@@ -15,6 +15,8 @@ namespace Lamina.WebApi.Controllers;
 
 public class S3BucketsController : S3ControllerBase
 {
+    private const string SupportedRegion = "us-east-1";
+
     private readonly IBucketStorageFacade _bucketStorage;
     private readonly IAuthenticationService _authService;
     private readonly BucketDefaultsSettings _bucketDefaults;
@@ -99,8 +101,13 @@ public class S3BucketsController : S3ControllerBase
                 if (!configResult.IsSuccess)
                     return (null, S3Error("MalformedXML", configResult.ErrorMessage!, $"/{bucketName}", 400));
 
-                if (configResult.Value?.LocationConstraint != null)
-                    _logger.LogDebug("CreateBucket: ignoring LocationConstraint={Region}", configResult.Value.LocationConstraint);
+                if (configResult.Value?.LocationConstraint is { Length: > 0 } constraint &&
+                    !constraint.Equals(SupportedRegion, StringComparison.OrdinalIgnoreCase))
+                {
+                    return (null, S3Error("InvalidLocationConstraint",
+                        "The specified location constraint is not valid. For more information about regions, see http://docs.amazonwebservices.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro.",
+                        $"/{bucketName}", 400));
+                }
             }
         }
 
