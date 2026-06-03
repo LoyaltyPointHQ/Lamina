@@ -2,7 +2,7 @@
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
-  name: {{ include "lamina.fullname" . }}
+  name: {{ .Values.imageStream.name | default (include "lamina.fullname" .) }}
   labels:
     {{- include "lamina.labels" . | nindent 4 }}
 spec:
