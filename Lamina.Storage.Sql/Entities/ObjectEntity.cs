@@ -26,7 +26,7 @@ public class ObjectEntity
     public DateTime LastModified { get; set; }
 
     [Required]
-    [MaxLength(34)]
+    [MaxLength(64)]
     public string ETag { get; set; } = string.Empty;
 
     [Required]
