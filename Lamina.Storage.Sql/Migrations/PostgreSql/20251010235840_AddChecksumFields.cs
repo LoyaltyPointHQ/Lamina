@@ -56,15 +56,6 @@ namespace Lamina.Storage.Sql.Migrations.PostgreSql
                 oldType: "TEXT",
                 oldMaxLength: 34);
 
-            migrationBuilder.AlterColumn<int>(
-                name: "Id",
-                table: "UploadParts",
-                type: "integer",
-                nullable: false,
-                oldClrType: typeof(int),
-                oldType: "INTEGER")
-                .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn);
-
             migrationBuilder.AddColumn<string>(
                 name: "ChecksumCRC32",
                 table: "UploadParts",
@@ -185,15 +176,6 @@ namespace Lamina.Storage.Sql.Migrations.PostgreSql
                 oldClrType: typeof(string),
                 oldType: "TEXT",
                 oldMaxLength: 63);
-
-            migrationBuilder.AlterColumn<int>(
-                name: "Id",
-                table: "Objects",
-                type: "integer",
-                nullable: false,
-                oldClrType: typeof(int),
-                oldType: "INTEGER")
-                .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn);
 
             migrationBuilder.AddColumn<string>(
                 name: "ChecksumCRC32",
@@ -361,13 +343,6 @@ namespace Lamina.Storage.Sql.Migrations.PostgreSql
                 oldType: "TEXT",
                 oldMaxLength: 63);
 
-            migrationBuilder.AddForeignKey(
-                name: "FK_UploadParts_MultipartUploads_UploadId",
-                table: "UploadParts",
-                column: "UploadId",
-                principalTable: "MultipartUploads",
-                principalColumn: "UploadId",
-                onDelete: ReferentialAction.Cascade);
         }
 
         /// <inheritdoc />

@@ -8,14 +8,19 @@ using Microsoft.EntityFrameworkCore.Migrations.Internal;
 
 namespace Lamina.Storage.Sql.Context;
 
-// EF Core selects ModelSnapshot by scanning the migrations assembly for the first type that
-// inherits ModelSnapshot and carries [DbContext(typeof(T))]. With two providers sharing one
-// assembly the selection is alphabetical — always the SQLite snapshot — causing a false
-// PendingModelChangesWarning for PostgreSQL. This override picks the correct snapshot based
-// on the active provider's namespace convention (PostgreSql vs non-PostgreSql).
+// Both SQLite and PostgreSQL migrations live in the same assembly (Lamina.Storage.Sql).
+// EF Core scans all migrations decorated with [DbContext(T)] and applies them together,
+// causing "table already exists" failures. It also picks ModelSnapshot alphabetically —
+// always the SQLite one — causing PendingModelChangesWarning for PostgreSQL.
+//
+// This override filters Migrations and ModelSnapshot to the active provider's namespace
+// convention (PostgreSql vs Sqlite). Migrations with neither keyword in their namespace
+// are treated as shared and included for both providers.
 public class ProviderAwareMigrationsAssembly : MigrationsAssembly
 {
+    private readonly bool _isPostgreSql;
     private readonly ModelSnapshot? _providerSnapshot;
+    private IReadOnlyDictionary<string, TypeInfo>? _filteredMigrations;
 
     public ProviderAwareMigrationsAssembly(
         ICurrentDbContext currentContext,
@@ -25,18 +30,32 @@ public class ProviderAwareMigrationsAssembly : MigrationsAssembly
         : base(currentContext, options, idGenerator, logger)
     {
         var providerName = currentContext.Context.Database.ProviderName ?? string.Empty;
-        var isPostgreSql = providerName.Contains("PostgreSQL", StringComparison.OrdinalIgnoreCase);
+        _isPostgreSql = providerName.Contains("PostgreSQL", StringComparison.OrdinalIgnoreCase);
         var contextType = currentContext.Context.GetType();
 
         _providerSnapshot = base.Assembly
             .GetTypes()
             .Where(t => typeof(ModelSnapshot).IsAssignableFrom(t) && !t.IsAbstract)
             .Where(t => t.GetCustomAttribute<DbContextAttribute>()?.ContextType == contextType)
-            .Select(t => (Type: t, IsPostgreSql: t.Namespace?.Contains("PostgreSql", StringComparison.OrdinalIgnoreCase) == true))
-            .Where(t => t.IsPostgreSql == isPostgreSql)
-            .Select(t => (ModelSnapshot?)Activator.CreateInstance(t.Type))
+            .Where(t => IsProviderNamespace(t.Namespace))
+            .Select(t => (ModelSnapshot?)Activator.CreateInstance(t))
             .FirstOrDefault();
     }
 
+    public override IReadOnlyDictionary<string, TypeInfo> Migrations =>
+        _filteredMigrations ??= base.Migrations
+            .Where(kvp => IsProviderNamespace(kvp.Value.Namespace))
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
     public override ModelSnapshot? ModelSnapshot => _providerSnapshot ?? base.ModelSnapshot;
+
+    private bool IsProviderNamespace(string? ns)
+    {
+        ns ??= string.Empty;
+        var isPg = ns.Contains("PostgreSql", StringComparison.OrdinalIgnoreCase);
+        var isSqlite = ns.Contains("Sqlite", StringComparison.OrdinalIgnoreCase);
+        // Shared migrations (neither keyword) are always included.
+        if (!isPg && !isSqlite) return true;
+        return _isPostgreSql ? isPg : isSqlite;
+    }
 }
