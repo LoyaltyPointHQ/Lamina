@@ -19,7 +19,7 @@ image:
 imageStream:
   enabled: auto  # auto, true, or false
   namespace: ""  # Defaults to release namespace
-  name: """
+  name: ""
 
 # Service account configuration
 serviceAccount:
