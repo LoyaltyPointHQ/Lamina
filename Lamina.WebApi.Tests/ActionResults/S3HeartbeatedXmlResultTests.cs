@@ -181,7 +181,26 @@ public class S3HeartbeatedXmlResultTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_SlowFactory_WritesXmlHeaderThenWhitespaceThenBody()
+    public async Task ExecuteAsync_FastFactory_ErrorPayload_HeartbeatNotFired_AppliesFallbackStatusCode()
+    {
+        var (context, body) = CreateContext();
+
+        var error = new S3Error { Code = "EntityTooSmall", Message = "Part too small", Resource = "bucket/key" };
+        var sut = new S3HeartbeatedXmlResult(
+            _ => Task.FromResult(new HeartbeatedXmlPayload(error, FallbackStatusCode: 400)),
+            interval: TimeSpan.FromSeconds(10), // heartbeat won't fire
+            enabled: true);
+
+        await sut.ExecuteResultAsync(context);
+
+        Assert.Equal(400, context.HttpContext.Response.StatusCode);
+
+        var responseText = ReadResponse(body);
+        Assert.Contains("<Code>EntityTooSmall</Code>", responseText);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SlowFactory_ErrorPayload_HeartbeatFired_StatusStays200()
     {
         var (context, body) = CreateContext();
 

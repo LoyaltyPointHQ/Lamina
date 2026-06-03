@@ -74,10 +74,14 @@ public class S3HeartbeatedXmlResult : IActionResult
         else
         {
             payload = await _factory(ct);
-            if (payload.FallbackStatusCode != 200)
-            {
-                response.StatusCode = payload.FallbackStatusCode;
-            }
+        }
+
+        // Apply FallbackStatusCode only when the heartbeat has not written anything yet.
+        // Once the heartbeat emits its XML header, the response has started and the status
+        // code is locked at 200 (S3 heartbeat / "200 with error" pattern per AWS spec).
+        if (!_xmlHeaderWritten && payload.FallbackStatusCode != 200)
+        {
+            response.StatusCode = payload.FallbackStatusCode;
         }
 
         // Skip XML declaration during serialization if the heartbeat loop already wrote it
