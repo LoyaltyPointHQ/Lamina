@@ -167,6 +167,80 @@ public class FilesystemMultipartUploadDataStorageTests : IDisposable
         Assert.False(hasAny);
     }
 
+    [Fact]
+    public async Task ConcurrentStoreAndGetStoredParts_DoNotCollideOnPartFileLock()
+    {
+        // Regression: a part being written holds an exclusive file lock (FileShare.None) for the whole
+        // write. A concurrent GetStoredPartsAsync with no metadata hint recomputes ETag by opening the
+        // same file (FileShare.Read), which collides with the writer's lock and throws
+        // IOException "the process cannot access the file because it is being used by another process".
+        // This reproduces the production UploadPartCopy failure (parallel copy + idempotent ListParts).
+        const string bucketName = "bucket";
+        const string key = "object";
+        const string uploadId = "upload-concurrent";
+        const int partCount = 6;
+
+        // ~4MB per part so the write window is wide enough to overlap concurrent reads.
+        var payload = new byte[4 * 1024 * 1024];
+        new Random(12345).NextBytes(payload);
+
+        // Seed all parts once so the listers always have files to read.
+        foreach (var pn in Enumerable.Range(1, partCount))
+        {
+            await StorePartBytesAsync(bucketName, key, uploadId, pn, payload);
+        }
+
+        var exceptions = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        using var cts = new CancellationTokenSource();
+
+        // Continuous listers forcing the ETag-recompute fallback (knownMetadata: null).
+        var listers = Enumerable.Range(0, 4).Select(_ => Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try
+                {
+                    await _storage.GetStoredPartsAsync(bucketName, key, uploadId, knownMetadata: null);
+                }
+                catch (Exception ex)
+                {
+                    exceptions.Enqueue(ex);
+                    return;
+                }
+            }
+        })).ToArray();
+
+        try
+        {
+            // Repeatedly overwrite all parts concurrently while the listers spin.
+            for (int iteration = 0; iteration < 40 && exceptions.IsEmpty; iteration++)
+            {
+                await Parallel.ForEachAsync(
+                    Enumerable.Range(1, partCount),
+                    new ParallelOptions { MaxDegreeOfParallelism = partCount },
+                    async (pn, ct) =>
+                    {
+                        try
+                        {
+                            await StorePartBytesAsync(bucketName, key, uploadId, pn, payload);
+                        }
+                        catch (Exception ex)
+                        {
+                            exceptions.Enqueue(ex);
+                        }
+                    });
+            }
+        }
+        finally
+        {
+            cts.Cancel();
+            await Task.WhenAll(listers);
+        }
+
+        Assert.True(exceptions.IsEmpty,
+            $"Concurrent store/list collided: {string.Join("; ", exceptions.Select(e => $"{e.GetType().Name}: {e.Message}"))}");
+    }
+
     private async Task<UploadPart> StorePartAsync(string bucketName, string key, string uploadId, int partNumber, string content)
     {
         var pipe = new Pipe();
@@ -174,6 +248,24 @@ public class FilesystemMultipartUploadDataStorageTests : IDisposable
         await pipe.Writer.CompleteAsync();
 
         var result = await _storage.StorePartDataAsync(bucketName, key, uploadId, partNumber, pipe.Reader, checksumRequest: null);
+        Assert.True(result.IsSuccess, result.ErrorMessage);
+        Assert.NotNull(result.Value);
+        return result.Value!;
+    }
+
+    private async Task<UploadPart> StorePartBytesAsync(string bucketName, string key, string uploadId, int partNumber, byte[] content)
+    {
+        var pipe = new Pipe();
+        // Stream the payload concurrently with the store so Pipe backpressure can't deadlock on a
+        // payload larger than the pause threshold, and so the file is held open for a realistic window.
+        var writeTask = Task.Run(async () =>
+        {
+            await pipe.Writer.WriteAsync(content);
+            await pipe.Writer.CompleteAsync();
+        });
+
+        var result = await _storage.StorePartDataAsync(bucketName, key, uploadId, partNumber, pipe.Reader, checksumRequest: null);
+        await writeTask;
         Assert.True(result.IsSuccess, result.ErrorMessage);
         Assert.NotNull(result.Value);
         return result.Value!;

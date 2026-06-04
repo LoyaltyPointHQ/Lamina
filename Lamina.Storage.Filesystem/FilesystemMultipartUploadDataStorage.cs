@@ -50,6 +50,14 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage,
         var partDir = Path.GetDirectoryName(partPath)!;
         await _networkHelper.EnsureDirectoryExistsAsync(partDir, $"StorePartData-{uploadId}/{partNumber}");
 
+        // Write to a private temp file and atomically rename it into place, mirroring the chunked
+        // overload below. This keeps the part write atomic w.r.t. concurrent readers: a parallel
+        // GetStoredPartsAsync (which recomputes ETag by opening the part file with FileShare.Read)
+        // would otherwise collide with the writer's exclusive FileShare.None handle on the final
+        // file and throw "the process cannot access the file ... being used by another process".
+        // Readers now only ever see a fully-written part_N.
+        var tempPath = Path.Combine(partDir, $".lamina-tmp-{Guid.NewGuid():N}");
+
         long bytesWritten = 0;
 
         // Initialize checksum calculator if needed
@@ -61,9 +69,9 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage,
 
         try
         {
-            // Write the data to file, ensuring proper disposal before computing ETag
+            // Write the data to the temp file, ensuring proper disposal before computing ETag
             {
-                await using var fileStream = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
+                await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
                 // Use helper to write and calculate checksums in one pass
                 bytesWritten = await ChecksumStreamHelper.WriteDataWithChecksumsAsync(dataReader, fileStream, checksumCalculator, cancellationToken);
@@ -71,14 +79,14 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage,
                 await fileStream.FlushAsync(cancellationToken);
             } // FileStream is fully disposed here
 
-            var etag = await ETagHelper.ComputeETagFromFileAsync(partPath);
+            var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
 
             // AWS: if client sent Content-MD5, server MUST validate against the received bytes and
             // return BadDigest on mismatch. We compare against the freshly-computed ETag (MD5 of the
-            // file we just wrote) and clean up the orphaned part file on failure.
+            // file we just wrote) and clean up the orphaned temp file on failure.
             if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
             {
-                TryDeletePartFile(partPath);
+                TryDeletePartFile(tempPath);
                 return StorageResult<UploadPart>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
             }
 
@@ -90,9 +98,12 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage,
                 if (!result.IsValid)
                 {
                     // Checksum validation failed - clean up and return null
-                    TryDeletePartFile(partPath);
+                    TryDeletePartFile(tempPath);
                     return StorageResult<UploadPart>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
                 }
+
+                // Atomically promote the validated temp file to the final part location
+                File.Move(tempPath, partPath, overwrite: true);
 
                 // Populate checksum fields
                 var part = new UploadPart
@@ -118,7 +129,9 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage,
             }
             else
             {
-                // No checksums requested
+                // No checksums requested - atomically promote the temp file to the final location
+                File.Move(tempPath, partPath, overwrite: true);
+
                 var part = new UploadPart
                 {
                     PartNumber = partNumber,
@@ -129,6 +142,15 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage,
 
                 return StorageResult<UploadPart>.Success(part);
             }
+        }
+        catch
+        {
+            // Clean up the temp file on any unexpected error so we don't leak staging files.
+            if (File.Exists(tempPath))
+            {
+                TryDeletePartFile(tempPath);
+            }
+            throw;
         }
         finally
         {
