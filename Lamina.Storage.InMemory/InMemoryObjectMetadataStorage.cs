@@ -37,7 +37,7 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage, IBatchObjec
             Size = size,
             LastModified = lastModified ?? DateTime.UtcNow,
             ETag = etag,
-            ContentType = request?.ContentType ?? "application/octet-stream",
+            ContentType = string.IsNullOrEmpty(request?.ContentType) ? "application/octet-stream" : request.ContentType,
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),
             Tags = request?.Tags ?? new Dictionary<string, string>(),
             OwnerId = request?.OwnerId,

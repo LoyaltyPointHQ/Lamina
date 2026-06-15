@@ -82,7 +82,7 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
                 dataInfo.Value.lastModified.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
 
             // Store Content-Type if provided
-            var contentType = request?.ContentType ?? "application/octet-stream";
+            var contentType = string.IsNullOrEmpty(request?.ContentType) ? "application/octet-stream" : request.ContentType;
             if (!_xattrHelper.SetAttribute(dataPath, ContentTypeAttributeName, contentType))
             {
                 _logger.LogWarning("Failed to store Content-Type attribute for {Key} in bucket {BucketName}", key, bucketName);

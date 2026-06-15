@@ -233,7 +233,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         var putRequest = new PutObjectRequest
         {
             Key = key,
-            ContentType = uploadMetadata?.ContentType ?? "application/octet-stream",
+            ContentType = string.IsNullOrEmpty(uploadMetadata?.ContentType) ? "application/octet-stream" : uploadMetadata.ContentType,
             Metadata = uploadMetadata?.Metadata ?? new Dictionary<string, string>(),
             Tags = uploadMetadata?.Tags ?? new Dictionary<string, string>()
         };

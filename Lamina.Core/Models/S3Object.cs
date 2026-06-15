@@ -53,7 +53,7 @@ public class S3ObjectInfo
     public long Size { get; set; }
     public DateTime LastModified { get; set; }
     public string ETag { get; set; } = string.Empty;
-    public string ContentType { get; set; } = string.Empty;
+    public string ContentType { get; set; } = "application/octet-stream";
     public Dictionary<string, string> Metadata { get; set; } = new();
     public Dictionary<string, string> Tags { get; set; } = new();
     public string? OwnerId { get; set; }

@@ -113,7 +113,7 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
             BucketName = bucketName,
             ETag = etag,
             LastModified = resolvedLastModified,
-            ContentType = request?.ContentType ?? "application/octet-stream",
+            ContentType = string.IsNullOrEmpty(request?.ContentType) ? "application/octet-stream" : request.ContentType,
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),
             Tags = request?.Tags ?? new Dictionary<string, string>(),
             OwnerId = request?.OwnerId,

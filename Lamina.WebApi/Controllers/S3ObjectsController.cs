@@ -687,7 +687,8 @@ public class S3ObjectsController : S3ControllerBase
             }
         });
 
-        return new FileStreamResult(pipe.Reader.AsStream(), metadata.ContentType);
+        var effectiveContentType = string.IsNullOrEmpty(metadata.ContentType) ? "application/octet-stream" : metadata.ContentType;
+        return new FileStreamResult(pipe.Reader.AsStream(), effectiveContentType);
     }
 
     [HttpDelete("{*key}")]
@@ -734,7 +735,7 @@ public class S3ObjectsController : S3ControllerBase
 
         Response.Headers.Append("ETag", $"\"{objectInfo.ETag}\"");
         Response.Headers.Append("Content-Length", objectInfo.Size.ToString());
-        Response.Headers.Append("Content-Type", objectInfo.ContentType);
+        Response.Headers.Append("Content-Type", string.IsNullOrEmpty(objectInfo.ContentType) ? "application/octet-stream" : objectInfo.ContentType);
         Response.Headers.Append("Last-Modified", objectInfo.LastModified.ToString("R"));
 
         // Add custom metadata headers with x-amz-meta- prefix
