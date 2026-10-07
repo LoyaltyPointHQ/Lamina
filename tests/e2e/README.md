@@ -103,6 +103,11 @@ profile. Modern Linux tmpfs supports `user.*` xattrs; `/tmp` need not be tmpfs.
   UTF-8 ordering, start-after, batch delete, same/cross-bucket copy, metadata,
   tagging/directives, lifecycle CRUD and validation, explicit CRC32/SHA1/SHA256,
   rejected Content-MD5, presigned PUT/GET, concurrent independent objects.
+- **Opaque upload bodies:** boto3/presigned PutObject and presigned UploadPart
+  preserve raw bytes for URL-encoded Content-Type (with/without charset),
+  multipart/form-data (payload deliberately not a valid form), and octet-stream.
+  Checks include binary/form-like bytes, length, ETag and object Content-Type;
+  UploadPart also covers ListParts, Complete and metadata set at initiation.
 - **Authentication:** real SigV4, rejection of anonymous/bad signatures, read-only
   permissions (read/list succeed; write/delete/tag/multipart initiation denied),
   anonymous health endpoint.

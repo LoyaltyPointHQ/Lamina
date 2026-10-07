@@ -9,8 +9,6 @@ fixes and their focused verification are recorded separately below.
 
 | Scenario | Observed behavior | Required behavior / scope |
 | --- | --- | --- |
-| `test_form_content_type_preserves_object_bytes[boto3]` | `application/x-www-form-urlencoded` PUT fails with a checksum calculated over empty bytes | Store the supplied bytes; all profiles |
-| `test_form_content_type_preserves_object_bytes[presigned]` | Form-content-type presigned PUT returns success, but subsequent GET returns empty bytes | Store the supplied bytes; all profiles. Ordinary octet-stream presigned PUT/GET passes |
 | `test_all_client_interoperability[empty-mc]` | MinIO mc cannot upload a zero-byte file: server returns a missing Content-Length error | Zero-byte upload must work; all profiles. Other clients' empty uploads and mc's nonempty transfers are tested independently |
 | `test_mc_signed_streaming_single_put[empty]` | The explicit HTTP/SigV4 single-PUT path also rejects a zero-byte file with MissingContentLength | Empty-file compatibility edge case; all profiles. This alone does not attribute the defect to Lamina's chunk decoder |
 | `test_delete_bucket_after_external_nested_file_removed` | Empty bucket cannot be deleted when only empty filesystem directories remain | Delete the bucket when it contains no S3 objects; Filesystem data profiles |
@@ -34,8 +32,6 @@ corrupted chunk signatures remain outside this E2E group.
 
 Read-only investigation confirmed:
 
-- Form-urlencoded payload consumption is content-type-specific, not a generic
-  presigned-signature failure. Explicit octet-stream passes the same transfer.
 - `FilesystemBucketDataStorage` checks for remaining directory entries, so empty
   directories left by external filesystem edits trigger `BucketNotEmpty`.
 - The Xattr preflight successfully writes and reads a `user.*` attribute. Its
@@ -81,13 +77,50 @@ Concurrent upload/abort races and filesystem bucket/key identity checks were
 not changed by this fix. E2E runtime directories and owned containers were cleaned;
 no new container volumes remained.
 
-## Historical full run, before the ListParts fix — 2026-10-07 UTC
+## Resolved: form Content-Type consuming upload bytes — 2026-10-07 UTC
+
+Default MVC form value providers parsed request bodies before PutObject and
+UploadPart could read their raw streams. URL-encoded bodies were consumed;
+multipart/form-data with non-form object bytes was rejected. This was not a
+generic presigned-authentication or storage defect.
+
+An action-scoped resource filter now removes FormValueProviderFactory,
+FormFileValueProviderFactory and JQueryFormValueProviderFactory before model
+binding, only on PutObject and UploadPart. Route/query/header binding, checksum
+validation and streaming stay intact; no body buffering or rewinding was added.
+This follows the [ASP.NET Core streaming upload pattern](https://learn.microsoft.com/en-us/aspnet/core/mvc/models/file-uploads?view=aspnetcore-10.0#upload-large-files-with-streaming).
+
+TDD evidence before the fix:
+
+- New HTTP regressions: **6 failed, 2 passed**. Form content types failed on both
+  actions; octet-stream controls passed. Requests included valid Content-MD5.
+- Expanded real-process E2E on fs-inline: **9 failed, 3 passed** across boto3
+  PutObject, presigned PutObject and presigned UploadPart. All three form types
+  failed, while octet-stream controls passed.
+
+Verification after the fix:
+
+- `Lamina.WebApi.Tests`: **573 passed**, including 8 new HTTP cases and 2 filter
+  cases, plus existing checksum, authentication, streaming and copy tests.
+- `uv run --project tests/e2e --locked pytest tests/e2e/test_s3_api.py -k 'form_content_type or multipart or copy or presigned' --storage-matrix all`:
+  **220 passed, 264 deselected in 80.28 seconds**. This includes **132 content-type
+  cases** (88 PutObject, 44 UploadPart), and 88 multipart/copy/presigned regressions.
+- All 11 storage profiles passed. Payloads include form-like syntax and binary
+  bytes. Tests verify full bytes, length, ETag and Content-Type; UploadPart also
+  verifies ListParts, Complete and preservation of metadata set at initiation.
+- Ruff lint/format, locked dependencies and `git diff --check` passed. E2E storage
+  and owned processes/containers were cleaned; no extra container volumes remained.
+
+The full suite was not rerun. The historical totals and local HTML report below
+are not updated whole-suite results. Other endpoints' form binding is unchanged.
+
+## Historical full run, before the ListParts and form Content-Type fixes — 2026-10-07 UTC
 
 **935 cases: 832 passed, 76 failed, 27 skipped, 0 errors.**
 Executed as three independent parallel batches: 514.38 seconds summed suite time,
 185.59 seconds from the first suite start to the last suite end.
 All four clients ran across all 11 profiles. The 76 failed cases repeated the
-findings above, including the now-resolved ListParts failures, across profiles;
+findings above, including the now-resolved ListParts and form Content-Type failures, across profiles;
 they were not 76 independent root causes.
 The new signed-streaming group contributes **99 cases: 88 passed, 11 failed**;
 only the empty-input case fails, once per profile.

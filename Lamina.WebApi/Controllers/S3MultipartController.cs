@@ -255,6 +255,7 @@ public class S3MultipartController : S3ControllerBase
     [HttpPut("{*key}")]
     [RequireQueryParameter("partNumber", "uploadId")]
     [DisableRequestSizeLimit]
+    [DisableFormValueModelBinding]
     [S3Authorize(S3Operations.Write, S3ResourceType.Object)]
     public async Task<IActionResult> UploadPart(
         string bucketName,

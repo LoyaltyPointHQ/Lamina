@@ -160,6 +160,7 @@ public class S3ObjectsController : S3ControllerBase
     [HttpPut("{*key}")]
     [RequireNoQueryParameters("partNumber", "uploadId", "tagging")]
     [DisableRequestSizeLimit]
+    [DisableFormValueModelBinding]
     [S3Authorize(S3Operations.Write, S3ResourceType.Object)]
     public async Task<IActionResult> PutObject(
         string bucketName,

@@ -468,11 +468,21 @@ def test_presigned_put_and_get(s3, bucket):
     assert read_object(s3, bucket, key) == body
 
 
+FORM_CONTENT_TYPES = [
+    pytest.param("application/x-www-form-urlencoded", id="urlencoded"),
+    pytest.param("application/x-www-form-urlencoded; charset=utf-8", id="urlencoded-charset"),
+    pytest.param("multipart/form-data; boundary=lamina-test", id="multipart-form"),
+    pytest.param("application/octet-stream", id="octet-stream"),
+]
+FORM_BODY = b"first=value+with+spaces&second=percent%25&binary=\x00\xff\x80=tail"
+
+
+@pytest.mark.parametrize("content_type", FORM_CONTENT_TYPES)
 @pytest.mark.parametrize("transport", ["boto3", "presigned"])
-def test_form_content_type_preserves_object_bytes(s3, bucket, transport):
+def test_form_content_type_preserves_object_bytes(s3, bucket, transport, content_type):
     key = f"form-body-{transport}"
-    body = b"first=value+with+spaces&second=percent%25"
-    content_type = "application/x-www-form-urlencoded"
+    # The payload is opaque object data, not a form (even for multipart/form-data).
+    body = FORM_BODY
     params = {"Bucket": bucket, "Key": key, "ContentType": content_type}
     if transport == "boto3":
         s3.put_object(**params, Body=body)
@@ -485,6 +495,47 @@ def test_form_content_type_preserves_object_bytes(s3, bucket, transport):
     head = s3.head_object(Bucket=bucket, Key=key)
     assert head["ContentLength"] == len(body)
     assert head["ContentType"] == content_type
+    assert head["ETag"] == f'"{hashlib.md5(body).hexdigest()}"'
+
+
+@pytest.mark.parametrize("content_type", FORM_CONTENT_TYPES)
+def test_multipart_form_content_type_preserves_part_bytes(s3, bucket, content_type):
+    key = "form-part"
+    body = FORM_BODY
+    object_content_type = "application/x-lamina-object"
+    upload = s3.create_multipart_upload(Bucket=bucket, Key=key, ContentType=object_content_type)[
+        "UploadId"
+    ]
+    url = s3.generate_presigned_url(
+        "upload_part",
+        Params={"Bucket": bucket, "Key": key, "UploadId": upload, "PartNumber": 1},
+        ExpiresIn=60,
+        HttpMethod="PUT",
+    )
+    request = Request(url, data=body, method="PUT", headers={"Content-Type": content_type})
+    with urlopen(request, timeout=15) as response:
+        assert response.status == 200
+        part_etag = response.headers["ETag"]
+    assert part_etag == f'"{hashlib.md5(body).hexdigest()}"'
+    listed = s3.list_parts(Bucket=bucket, Key=key, UploadId=upload)
+    assert [(part["PartNumber"], part["Size"], part["ETag"]) for part in listed["Parts"]] == [
+        (1, len(body), part_etag)
+    ]
+    completed = s3.complete_multipart_upload(
+        Bucket=bucket,
+        Key=key,
+        UploadId=upload,
+        MultipartUpload={"Parts": [{"PartNumber": 1, "ETag": part_etag}]},
+    )
+    expected_etag = f'"{hashlib.md5(hashlib.md5(body).digest()).hexdigest()}-1"'
+    assert completed["ETag"] == expected_etag
+    assert read_object(s3, bucket, key) == body
+    head = s3.head_object(Bucket=bucket, Key=key)
+    assert head["ContentLength"] == len(body)
+    assert head["ETag"] == expected_etag
+    # UploadPart's Content-Type must not replace metadata from initiation.
+    assert head["ContentType"] == object_content_type
+    assert s3.list_multipart_uploads(Bucket=bucket).get("Uploads", []) == []
 
 
 def test_copy_between_buckets(s3, bucket):

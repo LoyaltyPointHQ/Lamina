@@ -41,7 +41,9 @@ SCOPE = {
     "copy między bucketami, metadane i tagi, konfiguracja lifecycle i walidacja; "
     "CRC32/SHA1/SHA256 i błędny Content-MD5; multipart, list-parts, abort, "
     "UploadPartCopy całego obiektu i zakresu bajtów, "
-    "błędny ETag części; presigned PUT/GET, form Content-Type, równoległe niezależne obiekty.",
+    "błędny ETag części; presigned PUT/GET; surowe bajty PutObject i UploadPart dla "
+    "urlencoded (także charset), multipart/form-data i octet-stream; "
+    "równoległe niezależne obiekty.",
     "test_storage": "Zmiany plików poza API i odświeżanie metadanych, ukrywanie plików "
     "wewnętrznych, kasowanie bucketa z pustymi katalogami; restart procesu i trwałość "
     "danych, metadanych, tagów, lifecycle oraz niedokończonego multipart. "
