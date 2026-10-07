@@ -1,8 +1,10 @@
 using System.IO.Pipelines;
+using System.Diagnostics;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
+using Lamina.Storage.Core.Listing;
 using Microsoft.Extensions.Logging;
 
 namespace Lamina.Storage.Core;
@@ -213,137 +215,141 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
     public async Task<StorageResult<ListObjectsResponse>> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         request ??= new ListObjectsRequest();
-        var effectiveMaxKeys = Math.Min(request.MaxKeys, 1000); // S3 limits to 1000
-        var isV2 = request.ListType == 2;
+        if (request.MaxKeys < 0)
+            return StorageResult<ListObjectsResponse>.Error("InvalidArgument", "max-keys must not be negative.");
 
-        // Get bucket type for storage optimization
         var bucket = await _bucketStorage.GetBucketAsync(bucketName, cancellationToken);
         var bucketType = bucket?.Type ?? BucketType.GeneralPurpose;
-
-        // Validate Directory bucket constraints
+        var isDirectory = bucketType == BucketType.Directory;
+        var isV2 = request.ListType == 2;
         var validationError = ValidateDirectoryBucketListRequest(bucketType, request.Prefix, request.Delimiter);
         if (validationError != null)
-        {
             return StorageResult<ListObjectsResponse>.Error("InvalidArgument", validationError);
-        }
 
-        // Determine the effective start-after key for pagination
-        string? startAfterKey = null;
-        if (isV2)
+        ListingPosition? after = null;
+        if (isDirectory)
         {
-            // V2: continuation-token takes precedence, then start-after
-            if (!string.IsNullOrEmpty(request.ContinuationToken))
-            {
-                // Decode opaque token, fall back to raw key for backward compatibility
-                startAfterKey = ContinuationToken.Decode(request.ContinuationToken) ?? request.ContinuationToken;
-            }
-            else if (!string.IsNullOrEmpty(request.StartAfter))
-            {
-                startAfterKey = request.StartAfter;
-            }
+            if (!string.IsNullOrEmpty(request.StartAfter))
+                return StorageResult<ListObjectsResponse>.Error("InvalidArgument", "Directory buckets do not support start-after; use a continuation token.");
+            if (!string.IsNullOrEmpty(request.ContinuationToken)
+                && !DirectoryListingToken.TryDecode(request.ContinuationToken, bucketName, request.Prefix, request.Delimiter, out after))
+                return StorageResult<ListObjectsResponse>.Error("InvalidArgument", "Invalid Directory continuation token or query context. Restart listing without a token.");
         }
         else
         {
-            // V1: marker is raw key
-            startAfterKey = request.ContinuationToken;
+            var key = isV2
+                ? (!string.IsNullOrEmpty(request.ContinuationToken)
+                    ? ContinuationToken.Decode(request.ContinuationToken) ?? request.ContinuationToken
+                    : request.StartAfter)
+                : request.ContinuationToken;
+            if (!string.IsNullOrEmpty(key))
+                after = new ListingPosition(ListingOrder.Lexicographical, key);
         }
 
-        _logger.LogDebug("ListObjectsAsync: bucket={Bucket} prefix={Prefix} startAfterKey={StartAfterKey} delimiter={Delimiter} isV2={IsV2}",
-            bucketName, request.Prefix, startAfterKey, request.Delimiter, isV2);
-
-        var dataResult = await _dataStorage.ListDataKeysAsync(
-            bucketName,
-            bucketType,
-            request.Prefix,
-            request.Delimiter,
-            startAfterKey,
-            effectiveMaxKeys,
-            cancellationToken);
-
-        // For V2, encode NextContinuationToken as opaque; for V1, keep raw key
-        var nextToken = dataResult.IsTruncated && !string.IsNullOrEmpty(dataResult.StartAfter)
-            ? (isV2 ? ContinuationToken.Encode(dataResult.StartAfter) : dataResult.StartAfter)
-            : null;
-
+        var query = new ListingQuery(bucketType, request.Prefix, request.Delimiter, after, request.MaxKeys);
         var response = new ListObjectsResponse
         {
             Prefix = request.Prefix,
             Delimiter = request.Delimiter,
-            MaxKeys = effectiveMaxKeys,
-            IsTruncated = dataResult.IsTruncated,
-            NextContinuationToken = nextToken,
-            CommonPrefixes = dataResult.CommonPrefixes ?? new List<string>()
+            MaxKeys = query.MaxKeys
         };
-
-        // For Directory buckets with delimiter, include prefixes from in-progress multipart uploads in CommonPrefixes
-        if (bucketType == BucketType.Directory && !string.IsNullOrEmpty(request.Delimiter))
+        var statistics = new ListingStatistics();
+        var started = Stopwatch.GetTimestamp();
+        var scanElapsed = TimeSpan.Zero;
+        var metadataElapsed = TimeSpan.Zero;
+        var outcome = "completed";
+        try
         {
-            var multipartUploads = await _multipartUploadStorage.ListMultipartUploadsAsync(bucketName, cancellationToken);
+            if (query.MaxKeys == 0)
+                return StorageResult<ListObjectsResponse>.Success(response);
 
-            // Extract prefixes from multipart upload keys
-            var prefixLength = request.Prefix?.Length ?? 0;
-            var multipartPrefixes = new HashSet<string>();
+            var data = await _dataStorage.ListDataCandidatesAsync(bucketName, query, cancellationToken);
+            statistics = data.Statistics;
+            var selector = new ListingPageSelector(query, statistics);
+            foreach (var entry in data.Entries)
+                selector.ConsiderEntry(entry.Name, entry.IsCommonPrefix);
 
-            foreach (var upload in multipartUploads)
+            if (isDirectory && query.Delimiter != null)
             {
-                // Filter by prefix if specified
-                if (!string.IsNullOrEmpty(request.Prefix) && !upload.Key.StartsWith(request.Prefix))
-                    continue;
-
-                // Find the first delimiter after the prefix
-                var delimiterIndex = upload.Key.IndexOf(request.Delimiter, prefixLength, StringComparison.Ordinal);
-                if (delimiterIndex > 0)
+                await foreach (var key in _multipartUploadStorage.EnumerateUploadKeysAsync(bucketName, cancellationToken))
                 {
-                    var prefix = upload.Key.Substring(0, delimiterIndex + request.Delimiter.Length);
-                    multipartPrefixes.Add(prefix);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    statistics.MultipartUploads++;
+                    if (_dataStorage is IObjectListingFilter filter && !filter.IsVisibleInListing(key))
+                    {
+                        statistics.ExcludedEntries++;
+                        continue;
+                    }
+                    selector.ConsiderKey(key, prefixesOnly: true);
                 }
             }
 
-            // Merge multipart prefixes into CommonPrefixes (avoiding duplicates)
-            foreach (var prefix in multipartPrefixes)
+            var combined = selector.Finish();
+            var page = combined.Entries.Take(query.MaxKeys).ToArray();
+            response.IsTruncated = combined.Entries.Count > query.MaxKeys;
+            if (response.IsTruncated)
             {
-                if (!response.CommonPrefixes.Contains(prefix))
+                var last = page[^1].Name;
+                response.NextContinuationToken = isDirectory
+                    ? DirectoryListingToken.Encode(bucketName, query, last)
+                    : (isV2 ? ContinuationToken.Encode(last) : last);
+            }
+            foreach (var entry in page)
+                if (entry.IsCommonPrefix)
+                    response.CommonPrefixes.Add(entry.Name);
+            var keys = page.Where(e => !e.IsCommonPrefix).Select(e => e.Name).ToArray();
+            scanElapsed = Stopwatch.GetElapsedTime(started);
+            var metadataStarted = Stopwatch.GetTimestamp();
+
+            Dictionary<string, S3ObjectInfo?>? batch = null;
+            if (keys.Length > 0 && _metadataStorage is IBatchObjectMetadataStorage batchStorage)
+                batch = await batchStorage.GetMetadataBatchAsync(bucketName, keys, cancellationToken);
+            foreach (var key in keys)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
                 {
-                    response.CommonPrefixes.Add(prefix);
+                    var meta = batch != null ? batch.GetValueOrDefault(key)
+                        : await _metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
+                    if (meta == null)
+                    {
+                        var info = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+                        if (info != null)
+                            meta = await GenerateMetadataOnTheFlyAsync(bucketName, key, info.Value.size, info.Value.lastModified, cancellationToken);
+                    }
+                    if (meta != null)
+                        response.Contents.Add(meta);
+                }
+                catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    // Data can disappear between selecting a page and reading its metadata.
+                    // Keep the selected boundary so pagination still makes progress.
                 }
             }
+            metadataElapsed = Stopwatch.GetElapsedTime(metadataStarted);
+            cancellationToken.ThrowIfCancellationRequested();
+            return StorageResult<ListObjectsResponse>.Success(response);
         }
-
-        // Process keys to get object metadata
-        if (_metadataStorage is IBatchObjectMetadataStorage batchStorage)
+        catch (OperationCanceledException)
         {
-            var batch = await batchStorage.GetMetadataBatchAsync(bucketName, dataResult.Keys, cancellationToken);
-            foreach (var key in dataResult.Keys)
-            {
-                var meta = batch.GetValueOrDefault(key);
-                if (meta == null)
-                {
-                    var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-                    if (dataInfo != null)
-                        meta = await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
-                }
-                if (meta != null)
-                    response.Contents.Add(meta);
-            }
+            outcome = "cancelled";
+            throw;
         }
-        else
+        catch
         {
-            foreach (var key in dataResult.Keys)
-            {
-                var meta = await _metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
-                if (meta == null)
-                {
-                    var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-                    if (dataInfo != null)
-                        meta = await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
-                }
-                if (meta != null)
-                    response.Contents.Add(meta);
-            }
+            outcome = "error";
+            throw;
         }
-
-        return StorageResult<ListObjectsResponse>.Success(response);
+        finally
+        {
+            _logger.LogDebug(
+                "Object listing {Outcome}: order={Order} scanned={Scanned} excluded={Excluded} excludedSubtrees={ExcludedSubtrees} uploads={Uploads} peakCandidatesPerSelector={PeakCandidates} objects={Objects} prefixes={Prefixes} scanMs={ScanMs} metadataMs={MetadataMs} totalMs={TotalMs}",
+                outcome, query.Order, statistics.ScannedEntries, statistics.ExcludedEntries, statistics.ExcludedSubtrees,
+                statistics.MultipartUploads, statistics.PeakCandidates, response.Contents.Count, response.CommonPrefixes.Count,
+                scanElapsed.TotalMilliseconds, metadataElapsed.TotalMilliseconds, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        }
     }
 
     public async Task<bool> ObjectExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default)

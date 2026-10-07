@@ -410,7 +410,10 @@ Lamina supports S3 UploadPartCopy for server-side copying of data:
 
 ### Performance Optimizations
 
-- **Delimiter-based listing**: Single directory scans for `delimiter="/"`
+- **Bounded object listing**: Filesystem and InMemory retain at most `max-keys + 1` candidates; GeneralPurpose uses UTF-8 lexicographical order. Each page still rescans the matching range; no listing cache or index.
+- **Early listing filtering**: Metadata directories (`.lamina-meta` and configured inline name), temporary files and other internal entries are excluded before selection/sorting; metadata subtrees are not traversed.
+- **Directory pagination**: Stable FNV-1a ordering with full-key collision tie-breaking and stateless `d1:` tokens works across replicas. Old Directory listings must restart after upgrade; all serving replicas must understand the new token. Explicit `start-after` is rejected; Lamina's Directory V1 extension carries the token in `marker`/`NextMarker`.
+- **Delimiter-based listing**: Single directory scans for `delimiter="/"`; object and multipart common prefixes share the page limit.
 - **Streaming multipart assembly**: No memory overhead for large uploads
 - **Optimized metadata**: Only store non-default values
 

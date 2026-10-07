@@ -4,6 +4,7 @@ using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
+using Lamina.Storage.Core.Listing;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
 using Microsoft.Extensions.Logging;
@@ -12,7 +13,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Lamina.Storage.Filesystem;
 
-public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObjectDataStorage
+public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObjectDataStorage, IObjectListingFilter
 {
     private readonly string _dataDirectory;
     private readonly MetadataStorageMode _metadataMode;
@@ -628,34 +629,32 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
     }
 
 
-    public Task<ListDataResult> ListDataKeysAsync(
-        string bucketName,
-        BucketType bucketType,
-        string? prefix = null,
-        string? delimiter = null,
-        string? startAfter = null,
-        int maxKeys = 1000,
-        CancellationToken cancellationToken = default
-    )
+    public bool IsVisibleInListing(string key) =>
+        !FilesystemStorageHelper.HasInternalListingSegment(key, _inlineMetadataDirectoryName, _tempFilePrefix);
+
+    public async Task<ListDataResult> ListDataKeysAsync(
+        string bucketName, BucketType bucketType, string? prefix = null, string? delimiter = null,
+        string? startAfter = null, int maxKeys = 1000, CancellationToken cancellationToken = default)
     {
-        var validationResult = ValidateAndPreparePath(bucketName, prefix);
-        if (!validationResult.IsValid)
+        var order = bucketType == BucketType.Directory ? ListingOrder.DirectoryHashV1 : ListingOrder.Lexicographical;
+        var query = new ListingQuery(bucketType, prefix, delimiter,
+            string.IsNullOrEmpty(startAfter) ? null : new ListingPosition(order, startAfter), maxKeys);
+        var candidates = await ListDataCandidatesAsync(bucketName, query, cancellationToken);
+        return candidates.ToDataPage(query.MaxKeys);
+    }
+
+    public Task<ListingCandidates> ListDataCandidatesAsync(string bucketName, ListingQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var selector = new ListingPageSelector(query);
+        if (!FilesystemStorageHelper.IsKeyForbidden(bucketName, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
-            return Task.FromResult(new ListDataResult());
+            using var walker = new FilesystemListingWalker(Path.Combine(_dataDirectory, bucketName),
+                _inlineMetadataDirectoryName, _tempFilePrefix, query, selector, cancellationToken);
+            walker.Walk();
         }
-
-        var config = CreateTraversalConfiguration(bucketType, prefix, delimiter);
-
-        var result = DoDirectoryTraversal(
-            validationResult.Path,
-            bucketName,
-            prefix,
-            delimiter,
-            config,
-            startAfter,
-            maxKeys);
-
-        return Task.FromResult(result);
+        return Task.FromResult(selector.Finish());
     }
 
     public Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default)
@@ -728,234 +727,6 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
 
         var (etag, checksums) = await ChecksumHelper.ComputeETagAndChecksumsFromFileAsync(dataPath, checksumAlgorithms, cancellationToken);
         return (etag, checksums);
-    }
-
-    private (bool IsValid, string Path) ValidateAndPreparePath(string bucketName, string? prefix)
-    {
-        if (FilesystemStorageHelper.IsKeyForbidden(bucketName, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
-        {
-            return (false, string.Empty);
-        }
-
-        var bucketPath = Path.Combine(_dataDirectory, bucketName);
-        if (!Directory.Exists(bucketPath))
-        {
-            return (false, string.Empty);
-        }
-
-        var path = Path.Combine(_dataDirectory, bucketPath, (prefix ?? "").Replace('/', Path.DirectorySeparatorChar));
-        if (!string.IsNullOrEmpty(prefix))
-            path = Path.GetDirectoryName(path)!;
-
-        if (!path.StartsWith(Path.Combine(_dataDirectory, bucketPath)))
-            throw new InvalidOperationException("Invalid prefix to bucket");
-
-        return (true, path);
-    }
-
-    private TraversalConfiguration CreateTraversalConfiguration(BucketType bucketType, string? prefix, string? delimiter)
-    {
-        return new TraversalConfiguration
-        {
-            AllRecursive = delimiter != "/",
-            NeedsFilter = delimiter is not null && delimiter != "/" || prefix?.EndsWith('/') == false,
-            OrderedLexically = bucketType switch
-            {
-                BucketType.GeneralPurpose => true,
-                BucketType.Directory => false,
-                _ => throw new ArgumentOutOfRangeException(nameof(bucketType), bucketType, null)
-            }
-        };
-    }
-
-    private class TraversalConfiguration
-    {
-        public bool AllRecursive { get; set; }
-        public bool NeedsFilter { get; set; }
-        public bool OrderedLexically { get; set; }
-    }
-
-    private ListDataResult DoDirectoryTraversal(
-        string path,
-        string bucketName,
-        string? prefix,
-        string? delimiter,
-        TraversalConfiguration config,
-        string? startAfter,
-        int maxKeys
-    )
-    {
-        var result = new ListDataResult();
-        if (!Directory.Exists(path))
-            return result;
-
-        var commonPrefixSet = new HashSet<string>();
-        var traversalState = new TraversalState(result, commonPrefixSet, maxKeys);
-
-        // Skip entries up to and INCLUDING startAfter (S3 start-after means "keys greater than")
-        var enumerator = GetFilesystemEnumerator(path, config.OrderedLexically, config.AllRecursive);
-        if (!string.IsNullOrEmpty(startAfter))
-        {
-            enumerator = enumerator
-                .SkipWhile(x => string.Compare(EntryNameToKey(bucketName, x), startAfter, StringComparison.Ordinal) <= 0);
-        }
-
-        foreach (var entryName in enumerator)
-        {
-            prefix ??= "";
-
-            if (ShouldSkipEntry(entryName, bucketName, prefix, config.NeedsFilter, out var key))
-                continue;
-
-            if (HasReachedLimit(traversalState))
-            {
-                result.IsTruncated = true;
-                // Use last added key as StartAfter, not the current key
-                result.StartAfter = traversalState.LastAddedKey;
-                break;
-            }
-
-            ProcessFileSystemEntry(entryName, key, prefix, delimiter, config.AllRecursive, traversalState);
-            traversalState.LastAddedKey = key;
-        }
-
-        FinalizeCommonPrefixes(traversalState, config.OrderedLexically);
-        return result;
-    }
-
-    private class TraversalState
-    {
-        public ListDataResult Result { get; }
-        public HashSet<string> CommonPrefixSet { get; }
-        public int MaxKeys { get; }
-        public string? LastAddedKey { get; set; }
-
-        public TraversalState(ListDataResult result, HashSet<string> commonPrefixSet, int maxKeys)
-        {
-            Result = result;
-            CommonPrefixSet = commonPrefixSet;
-            MaxKeys = maxKeys;
-        }
-    }
-
-    private bool ShouldSkipEntry(string entryName, string bucketName, string prefix, bool needsFilter, out string key)
-    {
-        key = string.Empty;
-
-        if (IsEntryNameForbidden(entryName))
-            return true;
-
-        key = EntryNameToKey(bucketName, entryName);
-
-        if (needsFilter && !string.IsNullOrEmpty(prefix) && !key.StartsWith(prefix))
-            return true;
-
-        return false;
-    }
-
-    private bool HasReachedLimit(TraversalState state)
-    {
-        return state.Result.Keys.Count + state.Result.CommonPrefixes.Count + state.CommonPrefixSet.Count >= state.MaxKeys;
-    }
-
-    private void ProcessFileSystemEntry(
-        string entryName,
-        string key,
-        string prefix,
-        string? delimiter,
-        bool allRecursive,
-        TraversalState state)
-    {
-        if (Directory.Exists(entryName))
-        {
-            ProcessDirectory(key, delimiter, allRecursive, state);
-        }
-        else
-        {
-            ProcessFile(key, prefix, delimiter, state);
-        }
-    }
-
-    private void ProcessDirectory(string key, string? delimiter, bool allRecursive, TraversalState state)
-    {
-        if (!allRecursive && delimiter == "/")
-        {
-            state.Result.CommonPrefixes.Add($"{key}/");
-        }
-    }
-
-    private void ProcessFile(string key, string prefix, string? delimiter, TraversalState state)
-    {
-        if (delimiter != null && delimiter != "/")
-        {
-            HandleDelimiterGrouping(key, prefix, delimiter, state);
-        }
-        else
-        {
-            state.Result.Keys.Add(key);
-        }
-    }
-
-    private void HandleDelimiterGrouping(string key, string prefix, string delimiter, TraversalState state)
-    {
-        var localKey = key[prefix.Length..];
-        if (localKey.Contains(delimiter))
-        {
-            var commonPrefix = $"{prefix}{localKey[..(localKey.IndexOf(delimiter, StringComparison.Ordinal) + 1)]}";
-            state.CommonPrefixSet.Add(commonPrefix);
-        }
-        else
-        {
-            state.Result.Keys.Add(key);
-        }
-    }
-
-    private void FinalizeCommonPrefixes(TraversalState state, bool orderedLexically)
-    {
-        if (state.CommonPrefixSet.Count > 0)
-        {
-            state.Result.CommonPrefixes.AddRange(state.CommonPrefixSet);
-            if (orderedLexically)
-            {
-                state.Result.CommonPrefixes = state.Result.CommonPrefixes
-                    .OrderBy(x => x, StringComparer.Ordinal)
-                    .ToList();
-            }
-        }
-    }
-
-    private static IEnumerable<string> GetFilesystemEnumerator(string path, bool orderedLexically, bool allRecursive)
-    {
-        if (allRecursive)
-        {
-            if (orderedLexically)
-                return Directory.EnumerateFileSystemEntries(path, "*", SearchOption.AllDirectories).OrderBy(x => x, StringComparer.Ordinal);
-
-            return Directory.EnumerateFileSystemEntries(path, "*", SearchOption.AllDirectories);
-        }
-
-        if (orderedLexically)
-            return Directory.EnumerateFileSystemEntries(path).OrderBy(x => x, StringComparer.Ordinal);
-
-        return Directory.EnumerateFileSystemEntries(path);
-    }
-
-    private string EntryNameToKey(string bucketName, string entryName) => Path.GetRelativePath(Path.Combine(_dataDirectory, bucketName), entryName);
-
-    private bool IsEntryNameForbidden(string entryName)
-    {
-        var fileName = Path.GetFileName(entryName);
-        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
-        {
-            return true;
-        }
-
-        if (FilesystemStorageHelper.IsMetadataPath(entryName, _metadataMode, _inlineMetadataDirectoryName))
-        {
-            return true;
-        }
-
-        return false;
     }
 
     private string GetDataPath(string bucketName, string key)

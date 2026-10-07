@@ -1,3 +1,4 @@
+using Lamina.Storage.Core.Listing;
 using System.IO.Pipelines;
 using System.Text;
 using Lamina.Core.Models;
@@ -130,12 +131,12 @@ public class DataFirstObjectStorageTests
         var expectedEtag = ETagHelper.ComputeETag(testData);
 
         // Setup the new delimiter-aware method
-        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, It.IsAny<BucketType>(), null, null, null, 1000, default))
-            .ReturnsAsync(new ListDataResult
+        _dataStorageMock.Setup(x => x.ListDataCandidatesAsync(bucketName, It.IsAny<ListingQuery>(), default))
+            .ReturnsAsync(ListingTestData.Candidates(new ListDataResult
             {
                 Keys = new List<string> { "file-with-metadata.txt", "file-without-metadata.txt" },
                 CommonPrefixes = new List<string>()
-            });
+            }));
 
         // Setup metadata for first file (with metadata)
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "file-with-metadata.txt", default))
@@ -273,21 +274,21 @@ public class DataFirstObjectStorageTests
             });
 
         // Setup data storage to return completed objects
-        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, BucketType.Directory, prefix, delimiter, null, 1000, default))
-            .ReturnsAsync(new ListDataResult
+        _dataStorageMock.Setup(x => x.ListDataCandidatesAsync(bucketName, It.IsAny<ListingQuery>(), default))
+            .ReturnsAsync(ListingTestData.Candidates(new ListDataResult
             {
                 Keys = new List<string> { "uploads/completed/file.txt" },
                 CommonPrefixes = new List<string> { "uploads/completed/" }
-            });
+            }));
 
         // Setup multipart uploads with in-progress uploads
-        _multipartUploadStorageMock.Setup(x => x.ListMultipartUploadsAsync(bucketName, default))
-            .ReturnsAsync(new List<MultipartUpload>
+        _multipartUploadStorageMock.Setup(x => x.EnumerateUploadKeysAsync(bucketName, default))
+            .Returns(ListingTestData.UploadKeys(new List<MultipartUpload>
             {
                 new MultipartUpload { Key = "uploads/inprogress/file1.txt", UploadId = "upload1" },
                 new MultipartUpload { Key = "uploads/inprogress/file2.txt", UploadId = "upload2" },
                 new MultipartUpload { Key = "uploads/other/file3.txt", UploadId = "upload3" }
-            });
+            }));
 
         // Setup metadata for completed object
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "uploads/completed/file.txt", default))
@@ -333,19 +334,19 @@ public class DataFirstObjectStorageTests
             });
 
         // Setup data storage to return completed objects
-        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, BucketType.GeneralPurpose, null, delimiter, null, 1000, default))
-            .ReturnsAsync(new ListDataResult
+        _dataStorageMock.Setup(x => x.ListDataCandidatesAsync(bucketName, It.IsAny<ListingQuery>(), default))
+            .ReturnsAsync(ListingTestData.Candidates(new ListDataResult
             {
                 Keys = new List<string> { "folder/file.txt" },
                 CommonPrefixes = new List<string> { "folder/" }
-            });
+            }));
 
         // Setup multipart uploads (these should NOT be included)
-        _multipartUploadStorageMock.Setup(x => x.ListMultipartUploadsAsync(bucketName, default))
-            .ReturnsAsync(new List<MultipartUpload>
+        _multipartUploadStorageMock.Setup(x => x.EnumerateUploadKeysAsync(bucketName, default))
+            .Returns(ListingTestData.UploadKeys(new List<MultipartUpload>
             {
                 new MultipartUpload { Key = "inprogress/file1.txt", UploadId = "upload1" }
-            });
+            }));
 
         // Setup metadata for completed object
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "folder/file.txt", default))
@@ -373,7 +374,7 @@ public class DataFirstObjectStorageTests
         Assert.DoesNotContain("inprogress/", response.Value.CommonPrefixes);
 
         // Verify multipart upload list was never called for General Purpose buckets
-        _multipartUploadStorageMock.Verify(x => x.ListMultipartUploadsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _multipartUploadStorageMock.Verify(x => x.EnumerateUploadKeysAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -392,19 +393,19 @@ public class DataFirstObjectStorageTests
             });
 
         // Setup data storage to return completed objects
-        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, BucketType.Directory, null, null, null, 1000, default))
-            .ReturnsAsync(new ListDataResult
+        _dataStorageMock.Setup(x => x.ListDataCandidatesAsync(bucketName, It.IsAny<ListingQuery>(), default))
+            .ReturnsAsync(ListingTestData.Candidates(new ListDataResult
             {
                 Keys = new List<string> { "file1.txt" },
                 CommonPrefixes = new List<string>()
-            });
+            }));
 
         // Setup multipart uploads (should NOT be processed without delimiter)
-        _multipartUploadStorageMock.Setup(x => x.ListMultipartUploadsAsync(bucketName, default))
-            .ReturnsAsync(new List<MultipartUpload>
+        _multipartUploadStorageMock.Setup(x => x.EnumerateUploadKeysAsync(bucketName, default))
+            .Returns(ListingTestData.UploadKeys(new List<MultipartUpload>
             {
                 new MultipartUpload { Key = "inprogress/file1.txt", UploadId = "upload1" }
-            });
+            }));
 
         // Setup metadata for completed object
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "file1.txt", default))
@@ -427,7 +428,7 @@ public class DataFirstObjectStorageTests
         Assert.Empty(response.Value.CommonPrefixes);
 
         // Verify multipart upload list was never called (no delimiter)
-        _multipartUploadStorageMock.Verify(x => x.ListMultipartUploadsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _multipartUploadStorageMock.Verify(x => x.EnumerateUploadKeysAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -448,22 +449,22 @@ public class DataFirstObjectStorageTests
             });
 
         // Setup data storage to return no completed objects
-        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, BucketType.Directory, prefix, delimiter, null, 1000, default))
-            .ReturnsAsync(new ListDataResult
+        _dataStorageMock.Setup(x => x.ListDataCandidatesAsync(bucketName, It.IsAny<ListingQuery>(), default))
+            .ReturnsAsync(ListingTestData.Candidates(new ListDataResult
             {
                 Keys = new List<string>(),
                 CommonPrefixes = new List<string>()
-            });
+            }));
 
         // Setup multipart uploads - some match prefix, some don't
-        _multipartUploadStorageMock.Setup(x => x.ListMultipartUploadsAsync(bucketName, default))
-            .ReturnsAsync(new List<MultipartUpload>
+        _multipartUploadStorageMock.Setup(x => x.EnumerateUploadKeysAsync(bucketName, default))
+            .Returns(ListingTestData.UploadKeys(new List<MultipartUpload>
             {
                 new MultipartUpload { Key = "uploads/docs/report.pdf", UploadId = "upload1" },
                 new MultipartUpload { Key = "uploads/docs/presentation.pptx", UploadId = "upload2" },
                 new MultipartUpload { Key = "uploads/images/photo.jpg", UploadId = "upload3" }, // Different prefix
                 new MultipartUpload { Key = "other/file.txt", UploadId = "upload4" } // Different prefix
-            });
+            }));
 
         // Act
         var request = new ListObjectsRequest { Prefix = prefix, Delimiter = delimiter };
@@ -496,20 +497,20 @@ public class DataFirstObjectStorageTests
             });
 
         // Setup data storage to return completed objects with prefix
-        _dataStorageMock.Setup(x => x.ListDataKeysAsync(bucketName, BucketType.Directory, null, delimiter, null, 1000, default))
-            .ReturnsAsync(new ListDataResult
+        _dataStorageMock.Setup(x => x.ListDataCandidatesAsync(bucketName, It.IsAny<ListingQuery>(), default))
+            .ReturnsAsync(ListingTestData.Candidates(new ListDataResult
             {
                 Keys = new List<string> { "folder/completed.txt" },
                 CommonPrefixes = new List<string> { "folder/" }
-            });
+            }));
 
         // Setup multipart uploads with same prefix
-        _multipartUploadStorageMock.Setup(x => x.ListMultipartUploadsAsync(bucketName, default))
-            .ReturnsAsync(new List<MultipartUpload>
+        _multipartUploadStorageMock.Setup(x => x.EnumerateUploadKeysAsync(bucketName, default))
+            .Returns(ListingTestData.UploadKeys(new List<MultipartUpload>
             {
                 new MultipartUpload { Key = "folder/inprogress1.txt", UploadId = "upload1" },
                 new MultipartUpload { Key = "folder/inprogress2.txt", UploadId = "upload2" }
-            });
+            }));
 
         // Setup metadata for completed object
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "folder/completed.txt", default))

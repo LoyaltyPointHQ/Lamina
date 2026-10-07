@@ -4,6 +4,25 @@ namespace Lamina.Storage.Filesystem;
 
 public static class FilesystemStorageHelper
 {
+    public static bool IsInternalListingSegment(ReadOnlySpan<char> name, string metadataDirectoryName, string tempPrefix) =>
+        !name.IsEmpty && (name.Equals(".lamina-meta", StringComparison.Ordinal)
+        || name.Equals(metadataDirectoryName, StringComparison.Ordinal)
+        || (!string.IsNullOrEmpty(tempPrefix) && name.StartsWith(tempPrefix, StringComparison.OrdinalIgnoreCase)));
+
+    public static bool HasInternalListingSegment(ReadOnlySpan<char> path, string metadataDirectoryName, string tempPrefix)
+    {
+        foreach (var segment in path.Split('/'))
+        {
+            if (IsInternalListingSegment(path[segment], metadataDirectoryName, tempPrefix))
+                return true;
+            if (OperatingSystem.IsWindows())
+                foreach (var part in path[segment].Split('\\'))
+                    if (IsInternalListingSegment(path[segment][part], metadataDirectoryName, tempPrefix))
+                        return true;
+        }
+        return false;
+    }
+
     public static bool IsMetadataPath(string path, MetadataStorageMode mode, string inlineMetadataDirectoryName)
     {
         if (mode != MetadataStorageMode.Inline)

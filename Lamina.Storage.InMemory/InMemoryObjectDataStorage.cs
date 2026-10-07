@@ -5,6 +5,7 @@ using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
+using Lamina.Storage.Core.Listing;
 using Microsoft.Extensions.Logging;
 
 namespace Lamina.Storage.InMemory;
@@ -243,100 +244,33 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         return Task.FromResult<(long size, DateTime lastModified)?>(null);
     }
 
-    public Task<ListDataResult> ListDataKeysAsync(
-        string bucketName,
-        BucketType bucketType,
-        string? prefix = null,
-        string? delimiter = null,
-        string? startAfter = null,
-        int maxKeys = 1000,
-        CancellationToken cancellationToken = default
-    )
+    public async Task<ListDataResult> ListDataKeysAsync(
+        string bucketName, BucketType bucketType, string? prefix = null, string? delimiter = null,
+        string? startAfter = null, int maxKeys = 1000, CancellationToken cancellationToken = default)
     {
-        var result = new ListDataResult();
+        var order = bucketType == BucketType.Directory ? ListingOrder.DirectoryHashV1 : ListingOrder.Lexicographical;
+        var query = new ListingQuery(bucketType, prefix, delimiter,
+            string.IsNullOrEmpty(startAfter) ? null : new ListingPosition(order, startAfter), maxKeys);
+        var candidates = await ListDataCandidatesAsync(bucketName, query, cancellationToken);
+        return candidates.ToDataPage(query.MaxKeys);
+    }
 
-        if (!_data.TryGetValue(bucketName, out var bucketData))
+    public Task<ListingCandidates> ListDataCandidatesAsync(string bucketName, ListingQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var selector = new ListingPageSelector(query);
+        if (query.MaxKeys != 0 && _data.TryGetValue(bucketName, out var bucketData))
         {
-            return Task.FromResult(result);
-        }
-
-        IEnumerable<string> keys = bucketType == BucketType.GeneralPurpose
-            ? bucketData.Keys.OrderBy(k => k, StringComparer.Ordinal)
-            : bucketData.Keys.OrderBy(DirectoryBucketHashOrder);
-
-        _logger.LogDebug("ListDataKeysAsync: bucket={Bucket} prefix={Prefix} startAfter={StartAfter} delimiter={Delimiter}",
-            bucketName, prefix, startAfter, delimiter);
-
-        if (!string.IsNullOrEmpty(prefix))
-        {
-            keys = keys.Where(k => k.StartsWith(prefix));
-        }
-
-        if (!string.IsNullOrEmpty(startAfter))
-        {
-            keys = keys.Where(k => string.Compare(k, startAfter, StringComparison.Ordinal) > 0);
-        }
-
-        if (string.IsNullOrEmpty(delimiter))
-        {
-            var keyList = keys.ToList();
-            var returnedKeys = keyList.Take(maxKeys).ToList();
-            result.Keys.AddRange(returnedKeys);
-
-            if (keyList.Count > maxKeys)
+            // ConcurrentDictionary.Keys would allocate a snapshot of every key.
+            foreach (var entry in bucketData)
             {
-                result.IsTruncated = true;
-                result.StartAfter = returnedKeys.Last();
-            }
-            return Task.FromResult(result);
-        }
-
-        var prefixLength = prefix?.Length ?? 0;
-        var commonPrefixSet = new HashSet<string>();
-        var resultKeys = new List<string>();
-        var totalItems = 0;
-        string? lastKey = null;
-        var hasMoreKeys = false;
-
-        foreach (var key in keys)
-        {
-            if (totalItems >= maxKeys)
-            {
-                hasMoreKeys = true;
-                break;
-            }
-
-            var remainingKey = key.Substring(prefixLength);
-            var delimiterIndex = remainingKey.IndexOf(delimiter, StringComparison.Ordinal);
-
-            if (delimiterIndex >= 0)
-            {
-                var commonPrefix = key.Substring(0, prefixLength + delimiterIndex + delimiter.Length);
-                if (commonPrefixSet.Add(commonPrefix))
-                {
-                    totalItems++;
-                    lastKey = key;
-                }
-            }
-            else
-            {
-                resultKeys.Add(key);
-                totalItems++;
-                lastKey = key;
+                cancellationToken.ThrowIfCancellationRequested();
+                selector.Statistics.ScannedEntries++;
+                selector.ConsiderKey(entry.Key);
             }
         }
-
-        result.Keys.AddRange(resultKeys);
-        result.CommonPrefixes.AddRange(commonPrefixSet.OrderBy(p => p, StringComparer.Ordinal));
-        result.Keys.Sort();
-
-        if (hasMoreKeys && lastKey != null)
-        {
-            result.IsTruncated = true;
-            result.StartAfter = lastKey;
-        }
-
-        return Task.FromResult(result);
+        return Task.FromResult(selector.Finish());
     }
 
     public Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default)
@@ -387,17 +321,4 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
 
     private static string GetPendingKey(string bucketName, string key) => $"{bucketName}/{key}";
 
-    // FNV-1a hash for stable, non-lexicographic directory bucket ordering
-    private static uint DirectoryBucketHashOrder(string key)
-    {
-        var hash = 2166136261u;
-        foreach (var c in key)
-        {
-            hash ^= (byte)(c & 0xFF);
-            hash *= 16777619u;
-            hash ^= (byte)(c >> 8);
-            hash *= 16777619u;
-        }
-        return hash;
-    }
 }

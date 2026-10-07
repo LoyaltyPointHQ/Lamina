@@ -1,3 +1,4 @@
+using Lamina.Storage.Core.Listing;
 using Lamina.Core.Models;
 using Lamina.Storage.Core;
 using Lamina.Storage.Core.Abstract;
@@ -30,10 +31,8 @@ public class ObjectStorageFacadeBatchMetadataTests
             .ReturnsAsync(new Bucket { Name = "test", Type = BucketType.GeneralPurpose });
 
         _mockDataStorage
-            .Setup(x => x.ListDataKeysAsync(It.IsAny<string>(), It.IsAny<BucketType>(),
-                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ListDataResult { Keys = new List<string> { "a.txt", "b.txt", "c.txt" } });
+            .Setup(x => x.ListDataCandidatesAsync(It.IsAny<string>(), It.IsAny<ListingQuery>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ListingTestData.Candidates(new ListDataResult { Keys = new List<string> { "a.txt", "b.txt", "c.txt" } }));
     }
 
     private ObjectStorageFacade BuildFacade() => new(
