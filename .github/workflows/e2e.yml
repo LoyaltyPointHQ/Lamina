@@ -1,0 +1,74 @@
+name: S3 client E2E
+
+# Compatibility tests intentionally expose existing product failures. Keep this
+# opt-in until those failures are fixed; no continue-on-error or xfail masking.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        storage:
+          - fs-inline
+          - fs-separate
+          - fs-xattr
+          - fs-memory
+          - fs-sqlite
+          - memory-memory
+          - memory-inline
+          - memory-separate
+          - memory-sqlite
+          - fs-postgres
+          - memory-postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.7'
+          cache: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.23'
+          python-version: '3.12'
+      - name: Install pinned S3 clients
+        run: |
+          tests/e2e/install-clients.sh "$RUNNER_TEMP/lamina-e2e-clients" > clients.txt
+          echo "$RUNNER_TEMP/lamina-e2e-clients/bin" >> "$GITHUB_PATH"
+      - name: Install locked Python dependencies
+        run: uv sync --project tests/e2e --locked
+      - name: Lint and formatting
+        run: |
+          uv run --project tests/e2e --locked ruff check tests/e2e
+          uv run --project tests/e2e --locked ruff format --check tests/e2e
+      - name: Run real-client E2E
+        # Hosted runners provide Docker; locally the harness defaults to rootless Podman.
+        run: >-
+          uv run --project tests/e2e --locked pytest tests/e2e
+          --storage '${{ matrix.storage }}' --container-engine docker
+          --junitxml=e2e-results.xml --durations=10
+      - name: Render standalone HTML report
+        if: always()
+        run: |
+          if test -f e2e-results.xml; then
+            uv run --project tests/e2e --locked python tests/e2e/render_report.py \
+              e2e-results.xml --output e2e-report.html
+          fi
+      - name: Upload reports (including failures)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ matrix.storage }}
+          path: |
+            e2e-results.xml
+            e2e-report.html
+            clients.txt

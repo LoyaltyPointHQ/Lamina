@@ -84,3 +84,12 @@ riderModule.iml
 /_ReSharper.Caches/
 *.DotSettings.user
 .nvmrc
+
+# Python E2E tooling (test data itself is allocated and removed under /tmp)
+tests/e2e/.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# Generated local E2E report
+/e2e-report.html

@@ -447,6 +447,14 @@ volumes:
 - .NET 10.0 SDK
 - Optional: Docker for containerized development
 
+### Real-client E2E tests
+
+The [S3 E2E suite](tests/e2e/README.md) runs a real Lamina process using boto3,
+AWS CLI, rclone and MinIO Client. It defaults to Filesystem + Inline metadata and
+can cover 11 data/metadata combinations, including Xattr, SQLite and PostgreSQL.
+Runtime storage is isolated under `/tmp` and cleaned after each run. Existing
+compatibility failures remain visible; no production behavior is changed by the suite.
+
 ## 📚 Use Cases
 
 ### Production Scenarios

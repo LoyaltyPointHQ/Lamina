@@ -1,0 +1,23 @@
+[project]
+name = "lamina-e2e"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["boto3==1.42.68", "pytest==9.0.2"]
+
+[dependency-groups]
+dev = ["ruff==0.15.6"]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+addopts = "-ra --strict-markers --tb=short"
+markers = [
+  "boto3: S3 API contract exercised through boto3",
+  "cli: uses real AWS CLI, rclone and MinIO mc executables",
+  "signed_streaming: MinIO mc SigV4 signed aws-chunked uploads over HTTP",
+  "filesystem: requires filesystem data",
+  "persistence: requires durable data and metadata",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
