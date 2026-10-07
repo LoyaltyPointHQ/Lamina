@@ -7,6 +7,11 @@ namespace Lamina.Storage.Core.Abstract;
 
 public interface IMultipartUploadStorageFacade
 {
+    /// <summary>
+    /// Streams active upload keys without ordering or deduplication; multiple uploads may share a key.
+    /// </summary>
+    IAsyncEnumerable<string> EnumerateUploadKeysAsync(string bucketName, CancellationToken cancellationToken = default);
+
     Task<MultipartUpload> InitiateMultipartUploadAsync(string bucketName, string key, InitiateMultipartUploadRequest request, CancellationToken cancellationToken = default);
     Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default);
     Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default);

@@ -148,6 +148,69 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
         return _lockManager.DeleteFile(uploadMetadataPath);
     }
 
+    public async IAsyncEnumerable<string> EnumerateUploadKeysAsync(string bucketName,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var uploadsDirectory = _metadataMode == MetadataStorageMode.SeparateDirectory
+            ? Path.Combine(_metadataDirectory!, "_multipart_uploads")
+            : Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_multipart_uploads");
+
+        IEnumerator<string> directories;
+        try
+        {
+            directories = Directory.EnumerateDirectories(uploadsDirectory).GetEnumerator();
+        }
+        catch (DirectoryNotFoundException)
+        {
+            yield break;
+        }
+
+        using (directories)
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    if (!directories.MoveNext()) break;
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    break;
+                }
+
+                UploadKeyMetadata? upload;
+                try
+                {
+                    var path = Path.Combine(directories.Current, "upload.metadata.json");
+                    upload = await _lockManager.ReadFileAsync(path,
+                        content => Task.FromResult(JsonSerializer.Deserialize<UploadKeyMetadata>(content)), cancellationToken);
+                }
+                catch (FileNotFoundException)
+                {
+                    continue;
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    continue;
+                }
+
+                if (upload?.BucketName == bucketName && upload.Key is not null)
+                {
+                    yield return upload.Key;
+                }
+            }
+        }
+    }
+
+    // Listing only needs these fields; do not deserialize tags, checksums or part dictionaries.
+    private sealed class UploadKeyMetadata
+    {
+        public string? BucketName { get; set; }
+        public string? Key { get; set; }
+    }
+
     public async Task<List<MultipartUpload>> ListUploadsAsync(string bucketName, CancellationToken cancellationToken = default)
     {
         var uploads = new List<MultipartUpload>();

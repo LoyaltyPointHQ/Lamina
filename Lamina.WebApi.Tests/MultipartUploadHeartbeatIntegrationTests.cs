@@ -195,5 +195,8 @@ public class MultipartUploadHeartbeatIntegrationTests
 
         public Task<List<MultipartUpload>> ListMultipartUploadsAsync(string bucketName, CancellationToken cancellationToken = default)
             => _inner.ListMultipartUploadsAsync(bucketName, cancellationToken);
+
+        public IAsyncEnumerable<string> EnumerateUploadKeysAsync(string bucketName, CancellationToken cancellationToken = default)
+            => _inner.EnumerateUploadKeysAsync(bucketName, cancellationToken);
     }
 }

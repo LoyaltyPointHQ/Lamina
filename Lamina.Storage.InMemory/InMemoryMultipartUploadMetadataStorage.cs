@@ -44,6 +44,22 @@ public class InMemoryMultipartUploadMetadataStorage : IMultipartUploadMetadataSt
         return Task.FromResult(_uploads.TryRemove(uploadKey, out _));
     }
 
+    public async IAsyncEnumerable<string> EnumerateUploadKeysAsync(string bucketName,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await Task.CompletedTask;
+        cancellationToken.ThrowIfCancellationRequested();
+        foreach (var entry in _uploads)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entry.Value.BucketName == bucketName)
+            {
+                yield return entry.Value.Key;
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
     public Task<List<MultipartUpload>> ListUploadsAsync(string bucketName, CancellationToken cancellationToken = default)
     {
         var bucketUploads = _uploads.Values

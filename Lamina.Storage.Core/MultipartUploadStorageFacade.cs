@@ -394,6 +394,8 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         return parts;
     }
 
+    public IAsyncEnumerable<string> EnumerateUploadKeysAsync(string bucketName, CancellationToken cancellationToken = default) => _metadataStorage.EnumerateUploadKeysAsync(bucketName, cancellationToken);
+
     public async Task<List<MultipartUpload>> ListMultipartUploadsAsync(string bucketName, CancellationToken cancellationToken = default)
     {
         return await _metadataStorage.ListUploadsAsync(bucketName, cancellationToken);

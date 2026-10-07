@@ -71,6 +71,21 @@ public class SqlMultipartUploadMetadataStorage : IMultipartUploadMetadataStorage
         return true;
     }
 
+    public async IAsyncEnumerable<string> EnumerateUploadKeysAsync(string bucketName,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(bucketName);
+        cancellationToken.ThrowIfCancellationRequested();
+        await foreach (var key in _context.MultipartUploads.AsNoTracking()
+            .Where(upload => upload.BucketName == bucketName)
+            .Select(upload => upload.Key)
+            .AsAsyncEnumerable().WithCancellation(cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return key;
+        }
+    }
+
     public async Task<List<MultipartUpload>> ListUploadsAsync(string bucketName, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(bucketName);
