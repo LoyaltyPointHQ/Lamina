@@ -5,8 +5,10 @@ an AWS feature. Persistence cases exclude volatile data/metadata combinations.
 """
 
 from contextlib import closing
+import base64
 import hashlib
 import os
+import time
 import uuid
 
 from botocore.exceptions import ClientError
@@ -175,17 +177,19 @@ def test_restart_preserves_objects_metadata_tags_and_lifecycle(server, s3, bucke
         Metadata=metadata,
         ContentType="application/x-lamina-e2e",
         Tagging="purpose=restart",
+        ChecksumSHA256=base64.b64encode(hashlib.sha256(body).digest()).decode(),
     )
     s3.put_bucket_lifecycle_configuration(Bucket=bucket, LifecycleConfiguration=lifecycle)
     server.restart()
     with closing(server.client()) as client:
         assert bucket in {item["Name"] for item in client.list_buckets()["Buckets"]}
         assert read_object(client, bucket, key) == body
-        head = client.head_object(Bucket=bucket, Key=key)
+        head = client.head_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
         assert head["Metadata"] == metadata
         assert head["ContentType"] == "application/x-lamina-e2e"
         assert head["ContentLength"] == len(body)
         assert head["ETag"] == uploaded["ETag"]
+        assert head["ChecksumSHA256"] == base64.b64encode(hashlib.sha256(body).digest()).decode()
         assert client.get_object_tagging(Bucket=bucket, Key=key)["TagSet"] == tags
         assert (
             client.get_bucket_lifecycle_configuration(Bucket=bucket)["Rules"] == lifecycle["Rules"]
@@ -223,10 +227,48 @@ def test_restart_preserves_incomplete_multipart_upload(server, s3, bucket):
             MultipartUpload={"Parts": [{"PartNumber": 1, "ETag": part["ETag"]}]},
         )
         assert read_object(client, bucket, key) == body
-        head = client.head_object(Bucket=bucket, Key=key)
+        head = client.head_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
         assert head["Metadata"] == {"source": "restart"}
         assert head["ContentType"] == "application/x-multipart-e2e"
         assert client.get_object_tagging(Bucket=bucket, Key=key)["TagSet"] == [
             {"Key": "purpose", "Value": "multipart"}
         ]
         assert not client.list_multipart_uploads(Bucket=bucket).get("Uploads")
+
+
+@pytest.mark.filesystem
+def test_external_change_refreshes_checksums_and_preserves_metadata(server, s3, bucket):
+    require_filesystem(server)
+    key = "integrity/external.bin"
+    original = b"original bytes"
+    changed = b"externally modified bytes\x00\xff"
+    s3.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=original,
+        ChecksumSHA256=base64.b64encode(hashlib.sha256(original).digest()).decode(),
+        ContentType="application/custom",
+        Metadata={"keep": "value"},
+        Tagging="keep=value",
+    )
+    path = server.data_dir / bucket / key
+    path.write_bytes(changed)
+    # A .NET tick beyond PostgreSQL's microsecond precision exercises watermark rounding.
+    modified_ns = (time.time_ns() // 1000 + 2_000_000) * 1000 + 100
+    os.utime(path, ns=(modified_ns, modified_ns))
+    checksum = base64.b64encode(hashlib.sha256(changed).digest()).decode()
+    for _ in range(2):
+        result = s3.get_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
+        with result["Body"] as stream:
+            assert stream.read() == changed
+        assert result["ChecksumSHA256"] == checksum
+        assert result["ETag"].strip('"') == hashlib.md5(changed).hexdigest()
+        assert result["Metadata"] == {"keep": "value"}
+        assert result["ContentType"] == "application/custom"
+        assert (
+            s3.head_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")["ChecksumSHA256"]
+            == checksum
+        )
+    assert s3.get_object_tagging(Bucket=bucket, Key=key)["TagSet"] == [
+        {"Key": "keep", "Value": "value"}
+    ]

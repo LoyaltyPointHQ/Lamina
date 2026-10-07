@@ -46,8 +46,7 @@ public class XattrObjectMetadataStorageTests : IDisposable
             Options.Create(settings),
             networkHelper,
             new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance),
-            NullLogger<FilesystemObjectDataStorage>.Instance,
-            Mock.Of<IChunkedDataParser>());
+            NullLogger<FilesystemObjectDataStorage>.Instance);
 
         _storage = new XattrObjectMetadataStorage(
             Options.Create(settings),
@@ -81,8 +80,7 @@ public class XattrObjectMetadataStorageTests : IDisposable
                 Options.Create(settings),
                 networkHelper,
                 new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance),
-                NullLogger<FilesystemObjectDataStorage>.Instance,
-                Mock.Of<IChunkedDataParser>());
+                NullLogger<FilesystemObjectDataStorage>.Instance);
 
             Assert.Throws<NotSupportedException>(() => new XattrObjectMetadataStorage(
                 Options.Create(settings),
@@ -173,7 +171,7 @@ public class XattrObjectMetadataStorageTests : IDisposable
         await _storage.StoreMetadataAsync(bucketName, key, etag, size, request, null);
 
         // Act
-        var result = await _storage.GetMetadataAsync(bucketName, key);
+        var result = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
 
         // Assert
         Assert.NotNull(result);
@@ -205,7 +203,7 @@ public class XattrObjectMetadataStorageTests : IDisposable
         await File.WriteAllTextAsync(dataPath, "test data");
 
         // Act
-        var result = await _storage.GetMetadataAsync(bucketName, key);
+        var result = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
 
         // Assert
         Assert.Null(result);
@@ -334,11 +332,10 @@ public class XattrObjectMetadataStorageTests : IDisposable
     }
 
     [Fact]
-    public async Task GetMetadataAsync_DataModifiedAfterStore_RecomputesETag()
+    public async Task GetMetadataAsync_DataModifiedAfterStore_ReturnsStoredETag()
     {
         // Data-first scenario: an external writer touches the file after metadata was stored.
-        // The recorded xattr timestamp lags behind the file mtime - xattr layer must detect it
-        // and recompute the ETag rather than return the stale one.
+        // The metadata layer must return the original snapshot; the facade decides whether to refresh.
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
 
         var bucketName = "test-bucket";
@@ -359,10 +356,10 @@ public class XattrObjectMetadataStorageTests : IDisposable
         await File.WriteAllBytesAsync(dataPath, modifiedContent);
         File.SetLastWriteTimeUtc(dataPath, DateTime.UtcNow.AddSeconds(10));
 
-        var result = await _storage.GetMetadataAsync(bucketName, key);
+        var result = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
 
         Assert.NotNull(result);
-        Assert.NotEqual(storedEtag, result.ETag); // ETag was recomputed from the modified content
+        Assert.Equal(storedEtag, result.ETag);
     }
 
     [Fact]
@@ -387,10 +384,85 @@ public class XattrObjectMetadataStorageTests : IDisposable
         await Task.Delay(50);
         File.SetLastWriteTimeUtc(dataPath, DateTime.UtcNow.AddSeconds(10));
 
-        var result = await _storage.GetMetadataAsync(bucketName, key);
+        var result = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
 
         Assert.NotNull(result);
         Assert.Equal(multipartEtag, result.ETag);
+    }
+
+    [Fact]
+    public async Task GetMetadataAsync_PersistsAllChecksums()
+    {
+        await _bucketStorage.CreateBucketAsync("checksums");
+        Directory.CreateDirectory(Path.Combine(_testDirectory, "checksums"));
+        await File.WriteAllTextAsync(Path.Combine(_testDirectory, "checksums", "object"), "data");
+        var checksums = new Dictionary<string, string>
+        {
+            ["CRC32"] = "crc32",
+            ["CRC32C"] = "crc32c",
+            ["CRC64NVME"] = "crc64",
+            ["SHA1"] = "sha1",
+            ["SHA256"] = "sha256"
+        };
+        await _storage.StoreMetadataAsync("checksums", "object", "etag", 4, calculatedChecksums: checksums);
+        var reopened = new XattrObjectMetadataStorage(
+            Options.Create(new FilesystemStorageSettings { DataDirectory = _testDirectory, XattrPrefix = "user.lamina-test" }),
+            _bucketStorage, Mock.Of<IObjectDataStorage>(), NullLogger<XattrObjectMetadataStorage>.Instance,
+            NullLoggerFactory.Instance);
+        var result = (await reopened.GetMetadataAsync("checksums", "object"))?.Metadata;
+        Assert.NotNull(result);
+        Assert.Equal("crc32", result.ChecksumCRC32);
+        Assert.Equal("crc32c", result.ChecksumCRC32C);
+        Assert.Equal("crc64", result.ChecksumCRC64NVME);
+        Assert.Equal("sha1", result.ChecksumSHA1);
+        Assert.Equal("sha256", result.ChecksumSHA256);
+    }
+
+    [Fact]
+    public async Task UpdateIntegrity_ReplacesChecksumsAndPreservesOtherMetadata()
+    {
+        await _bucketStorage.CreateBucketAsync("checksums");
+        Directory.CreateDirectory(Path.Combine(_testDirectory, "checksums"));
+        await File.WriteAllTextAsync(Path.Combine(_testDirectory, "checksums", "object"), "data");
+        await _storage.StoreMetadataAsync("checksums", "object", "old", 4,
+            new PutObjectRequest { Key = "object", ContentType = "text/plain", ChecksumSHA256 = "request-sha", Metadata = new() { ["user"] = "value" } });
+        Assert.Equal("request-sha", (await _storage.GetMetadataAsync("checksums", "object"))!.Metadata.ChecksumSHA256);
+        await _storage.SetObjectTagsAsync("checksums", "object", new() { ["tag"] = "latest" });
+        var time = DateTime.UtcNow;
+        Assert.True(await _storage.UpdateIntegrityAsync("checksums", "object", "new", 7, time, new() { ["CRC32"] = "crc" }));
+        var snapshot = (await _storage.GetMetadataAsync("checksums", "object"))!;
+        Assert.Null(snapshot.Metadata.ChecksumSHA256);
+        Assert.Equal("crc", snapshot.Metadata.ChecksumCRC32);
+        Assert.Equal("latest", snapshot.Metadata.Tags["tag"]);
+        Assert.Equal("value", snapshot.Metadata.Metadata["user"]);
+        Assert.Equal("text/plain", snapshot.Metadata.ContentType);
+        Assert.Equal(time, snapshot.DataLastModified);
+        Assert.Equal(7, snapshot.Metadata.Size);
+        Assert.False(await _storage.UpdateIntegrityAsync("checksums", "missing", "etag", 1, time, new()));
+        await _storage.StoreMetadataAsync("checksums", "object", "newer", 4,
+            new PutObjectRequest { Key = "object", ChecksumSHA256 = "ignored" }, new());
+        var replaced = (await _storage.GetMetadataAsync("checksums", "object"))!;
+        Assert.Null(replaced.Metadata.ChecksumCRC32);
+        Assert.Null(replaced.Metadata.ChecksumSHA256);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("invalid")]
+    public async Task GetMetadata_UnknownTimestampRemainsUnknown(string? timestamp)
+    {
+        await _bucketStorage.CreateBucketAsync("bucket");
+        Directory.CreateDirectory(Path.Combine(_testDirectory, "bucket"));
+        var path = Path.Combine(_testDirectory, "bucket", "key");
+        await File.WriteAllTextAsync(path, "data");
+        await _storage.StoreMetadataAsync("bucket", "key", "etag", 4);
+        var helper = new XattrHelper("user.lamina-test", NullLogger<XattrHelper>.Instance);
+        if (timestamp == null) Assert.True(helper.RemoveAttribute(path, "metadata-ts"));
+        else Assert.True(helper.SetAttribute(path, "metadata-ts", timestamp));
+        var snapshot = (await _storage.GetMetadataAsync("bucket", "key"))!;
+        Assert.Null(snapshot.DataLastModified);
+        Assert.Equal("etag", snapshot.Metadata.ETag);
+        Assert.Equal(timestamp, helper.GetAttribute(path, "metadata-ts"));
     }
 
     public void Dispose()

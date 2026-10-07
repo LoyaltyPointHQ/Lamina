@@ -39,14 +39,15 @@ SCOPE = {
     "test_s3_api": "Bucket CRUD i błędy, obiekty CRUD/overwrite, ETag MD5, zakresy bajtów, "
     "warunkowy GET/HEAD, listowanie V1/V2, delimiter, UTF-8, start-after, batch delete; "
     "copy między bucketami, metadane i tagi, konfiguracja lifecycle i walidacja; "
-    "CRC32/SHA1/SHA256 i błędny Content-MD5; multipart, list-parts, abort, "
+    "CRC32/SHA1/SHA256 na GET/HEAD oraz po CopyObject i błędny Content-MD5; multipart, list-parts, abort, "
     "UploadPartCopy całego obiektu i zakresu bajtów, "
     "błędny ETag części; presigned PUT/GET; surowe bajty PutObject i UploadPart dla "
     "urlencoded (także charset), multipart/form-data i octet-stream; "
     "równoległe niezależne obiekty.",
-    "test_storage": "Zmiany plików poza API i odświeżanie metadanych, ukrywanie plików "
+    "test_storage": "Zmiany plików poza API i odświeżanie metadanych oraz SHA256/ETag "
+    "na powtórnych GET/HEAD z zachowaniem tagów i metadanych użytkownika, ukrywanie plików "
     "wewnętrznych, kasowanie bucketa z pustymi katalogami; restart procesu i trwałość "
-    "danych, metadanych, tagów, lifecycle oraz niedokończonego multipart. "
+    "danych, checksum, metadanych, tagów, lifecycle oraz niedokończonego multipart. "
     "Przypadki wymagające dysku/trwałości są jawnie pomijane w profilach ulotnych.",
     "test_signed_streaming": "Signed aws-chunked przez przypięty MinIO mc: HTTP + SigV4, "
     "bez --checksum. Single PUT z --disable-multipart: pusty obiekt, 1 bajt, granice "

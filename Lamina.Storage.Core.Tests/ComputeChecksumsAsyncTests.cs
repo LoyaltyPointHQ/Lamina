@@ -11,8 +11,7 @@ using Moq;
 namespace Lamina.Storage.Core.Tests;
 
 /// <summary>
-/// Verifies ComputeChecksumsAsync on IObjectDataStorage. The method is what lets metadata
-/// storages heal stale metadata without reaching into the data backend's physical layout.
+/// Verifies Core checksum calculation against raw streams supplied by storage.
 /// </summary>
 public class ComputeChecksumsAsyncTests
 {
@@ -28,14 +27,12 @@ public class ComputeChecksumsAsyncTests
 
     private static async Task<IObjectDataStorage> CreateInMemoryStorageWithDataAsync()
     {
-        var storage = new InMemoryObjectDataStorage(Mock.Of<IChunkedDataParser>(), NullLogger<InMemoryObjectDataStorage>.Instance);
+        var storage = new InMemoryObjectDataStorage(NullLogger<InMemoryObjectDataStorage>.Instance);
         var pipe = new Pipe();
         await pipe.Writer.WriteAsync(Payload);
         await pipe.Writer.CompleteAsync();
 
-        var prepared = await storage.PrepareDataAsync(BucketName, Key, pipe.Reader,
-            chunkValidator: null, checksumRequest: null);
-        await storage.CommitPreparedDataAsync(prepared.Value!);
+        await storage.StoreDataAsync(BucketName, Key, pipe.Reader);
         return storage;
     }
 
@@ -44,7 +41,7 @@ public class ComputeChecksumsAsyncTests
     {
         var storage = await CreateInMemoryStorageWithDataAsync();
 
-        var result = await storage.ComputeChecksumsAsync(BucketName, Key, Array.Empty<string>());
+        var result = await ComputeChecksumsAsync(storage, BucketName, Key, Array.Empty<string>());
 
         Assert.Empty(result);
     }
@@ -52,9 +49,9 @@ public class ComputeChecksumsAsyncTests
     [Fact]
     public async Task ComputeChecksumsAsync_NonExistentObject_ReturnsEmptyDictionary()
     {
-        var storage = new InMemoryObjectDataStorage(Mock.Of<IChunkedDataParser>(), NullLogger<InMemoryObjectDataStorage>.Instance);
+        var storage = new InMemoryObjectDataStorage(NullLogger<InMemoryObjectDataStorage>.Instance);
 
-        var result = await storage.ComputeChecksumsAsync(BucketName, Key, new[] { "CRC32", "SHA256" });
+        var result = await ComputeChecksumsAsync(storage, BucketName, Key, new[] { "CRC32", "SHA256" });
 
         Assert.Empty(result);
     }
@@ -64,7 +61,7 @@ public class ComputeChecksumsAsyncTests
     {
         var storage = await CreateInMemoryStorageWithDataAsync();
 
-        var result = await storage.ComputeChecksumsAsync(BucketName, Key, new[] { "CRC32", "SHA256" });
+        var result = await ComputeChecksumsAsync(storage, BucketName, Key, new[] { "CRC32", "SHA256" });
 
         Assert.Equal(2, result.Count);
         Assert.True(result.ContainsKey("CRC32"));
@@ -78,8 +75,8 @@ public class ComputeChecksumsAsyncTests
     {
         var storage = await CreateInMemoryStorageWithDataAsync();
 
-        var first = await storage.ComputeChecksumsAsync(BucketName, Key, new[] { "CRC32", "SHA256" });
-        var second = await storage.ComputeChecksumsAsync(BucketName, Key, new[] { "CRC32", "SHA256" });
+        var first = await ComputeChecksumsAsync(storage, BucketName, Key, new[] { "CRC32", "SHA256" });
+        var second = await ComputeChecksumsAsync(storage, BucketName, Key, new[] { "CRC32", "SHA256" });
 
         Assert.Equal(first["CRC32"], second["CRC32"]);
         Assert.Equal(first["SHA256"], second["SHA256"]);
@@ -96,7 +93,7 @@ public class ComputeChecksumsAsyncTests
         calculator.Append(Payload);
         var reference = calculator.Finish().CalculatedChecksums;
 
-        var result = await storage.ComputeChecksumsAsync(BucketName, Key, new[] { "CRC32", "SHA256" });
+        var result = await ComputeChecksumsAsync(storage, BucketName, Key, new[] { "CRC32", "SHA256" });
 
         Assert.Equal(reference["CRC32"], result["CRC32"]);
         Assert.Equal(reference["SHA256"], result["SHA256"]);
@@ -107,8 +104,8 @@ public class ComputeChecksumsAsyncTests
     {
         var storage = await CreateInMemoryStorageWithDataAsync();
 
-        var (etag, _) = await storage.ComputeETagAndChecksumsAsync(BucketName, Key, Array.Empty<string>());
-        var expectedETag = await storage.ComputeETagAsync(BucketName, Key);
+        var (etag, _) = await ComputeETagAndChecksumsAsync(storage, BucketName, Key, Array.Empty<string>());
+        var expectedETag = ETagHelper.ComputeETag(Payload);
 
         Assert.Equal(expectedETag, etag);
     }
@@ -118,8 +115,8 @@ public class ComputeChecksumsAsyncTests
     {
         var storage = await CreateInMemoryStorageWithDataAsync();
 
-        var (_, checksums) = await storage.ComputeETagAndChecksumsAsync(BucketName, Key, new[] { "CRC32", "SHA256" });
-        var expectedChecksums = await storage.ComputeChecksumsAsync(BucketName, Key, new[] { "CRC32", "SHA256" });
+        var (_, checksums) = await ComputeETagAndChecksumsAsync(storage, BucketName, Key, new[] { "CRC32", "SHA256" });
+        var expectedChecksums = await ComputeChecksumsAsync(storage, BucketName, Key, new[] { "CRC32", "SHA256" });
 
         Assert.Equal(expectedChecksums["CRC32"], checksums["CRC32"]);
         Assert.Equal(expectedChecksums["SHA256"], checksums["SHA256"]);
@@ -128,9 +125,9 @@ public class ComputeChecksumsAsyncTests
     [Fact]
     public async Task ComputeETagAndChecksumsAsync_NonExistentObject_ReturnsNullETagAndEmptyChecksums()
     {
-        var storage = new InMemoryObjectDataStorage(Mock.Of<IChunkedDataParser>(), NullLogger<InMemoryObjectDataStorage>.Instance);
+        var storage = new InMemoryObjectDataStorage(NullLogger<InMemoryObjectDataStorage>.Instance);
 
-        var (etag, checksums) = await storage.ComputeETagAndChecksumsAsync(BucketName, Key, new[] { "CRC32" });
+        var (etag, checksums) = await ComputeETagAndChecksumsAsync(storage, BucketName, Key, new[] { "CRC32" });
 
         Assert.Null(etag);
         Assert.Empty(checksums);
@@ -141,9 +138,20 @@ public class ComputeChecksumsAsyncTests
     {
         var storage = await CreateInMemoryStorageWithDataAsync();
 
-        var (etag, checksums) = await storage.ComputeETagAndChecksumsAsync(BucketName, Key, Array.Empty<string>());
+        var (etag, checksums) = await ComputeETagAndChecksumsAsync(storage, BucketName, Key, Array.Empty<string>());
 
         Assert.NotNull(etag);
         Assert.Empty(checksums);
+    }
+    private static async Task<Dictionary<string, string>> ComputeChecksumsAsync(IObjectDataStorage storage, string bucket, string key, IEnumerable<string> algorithms)
+    {
+        await using var stream = await storage.OpenReadAsync(bucket, key);
+        return stream is null ? new() : await ChecksumHelper.ComputeSelectiveChecksumsFromStreamAsync(stream, algorithms);
+    }
+
+    private static async Task<(string? etag, Dictionary<string, string> checksums)> ComputeETagAndChecksumsAsync(IObjectDataStorage storage, string bucket, string key, IEnumerable<string> algorithms)
+    {
+        await using var stream = await storage.OpenReadAsync(bucket, key);
+        return stream is null ? (null, new()) : await ChecksumHelper.ComputeETagAndChecksumsFromStreamAsync(stream, algorithms);
     }
 }

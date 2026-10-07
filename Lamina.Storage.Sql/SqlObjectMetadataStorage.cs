@@ -1,6 +1,5 @@
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
-using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Sql.Context;
 using Lamina.Storage.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -11,17 +10,13 @@ namespace Lamina.Storage.Sql;
 public class SqlObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMetadataStorage
 {
     private readonly LaminaDbContext _context;
-    private readonly IObjectDataStorage _dataStorage;
-    private readonly ILogger<SqlObjectMetadataStorage> _logger;
 
     public SqlObjectMetadataStorage(
         LaminaDbContext context,
-        IObjectDataStorage dataStorage,
         ILogger<SqlObjectMetadataStorage> logger)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
-        _dataStorage = dataStorage ?? throw new ArgumentNullException(nameof(dataStorage));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentNullException.ThrowIfNull(logger);
     }
 
     public async Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, DateTime? lastModified = null, CancellationToken cancellationToken = default)
@@ -40,7 +35,7 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMeta
             Key = key,
             BucketName = bucketName,
             Size = size,
-            LastModified = lastModified ?? DateTime.UtcNow,
+            LastModified = NormalizeTimestamp(lastModified ?? DateTime.UtcNow),
             ETag = etag,
             ContentType = string.IsNullOrEmpty(request?.ContentType) ? "application/octet-stream" : request.ContentType,
             Metadata = request?.Metadata ?? new Dictionary<string, string>(),
@@ -65,6 +60,14 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMeta
                 s3Object.ChecksumSHA256 = sha256;
         }
 
+        if (calculatedChecksums == null && request != null)
+        {
+            s3Object.ChecksumCRC32 = request.ChecksumCRC32;
+            s3Object.ChecksumCRC32C = request.ChecksumCRC32C;
+            s3Object.ChecksumCRC64NVME = request.ChecksumCRC64NVME;
+            s3Object.ChecksumSHA1 = request.ChecksumSHA1;
+            s3Object.ChecksumSHA256 = request.ChecksumSHA256;
+        }
         var entity = ObjectEntity.FromS3Object(s3Object);
 
         // Check if object already exists and update or insert
@@ -96,44 +99,33 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMeta
         return s3Object;
     }
 
-    public async Task<S3ObjectInfo?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public async Task<ObjectMetadataSnapshot?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(bucketName);
         ArgumentException.ThrowIfNullOrEmpty(key);
-
-        var entity = await _context.Objects
+        var entity = await _context.Objects.AsNoTracking()
             .FirstOrDefaultAsync(o => o.BucketName == bucketName && o.Key == key, cancellationToken);
-
-        if (entity == null)
-        {
-            return null;
-        }
-
-        // Check if the data file has been modified after the metadata was stored
-        var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-        if (dataInfo == null)
-        {
-            // Data doesn't exist, metadata is orphaned
-            return null;
-        }
-
-        // If data is newer than metadata, recompute ETag and checksums
-        if (dataInfo.Value.lastModified > entity.LastModified)
-        {
-            _logger.LogInformation("Detected stale metadata for {Key} in bucket {BucketName} (data mtime: {DataTime}, metadata mtime: {MetadataTime}), recomputing checksums",
-                key, bucketName, dataInfo.Value.lastModified, entity.LastModified);
-
-            var recomputed = await RecomputeStaleMetadataAsync(entity, bucketName, key, cancellationToken);
-            entity.ETag = recomputed.etag;
-            entity.ChecksumCRC32 = recomputed.checksums.GetValueOrDefault("CRC32");
-            entity.ChecksumCRC32C = recomputed.checksums.GetValueOrDefault("CRC32C");
-            entity.ChecksumCRC64NVME = recomputed.checksums.GetValueOrDefault("CRC64NVME");
-            entity.ChecksumSHA1 = recomputed.checksums.GetValueOrDefault("SHA1");
-            entity.ChecksumSHA256 = recomputed.checksums.GetValueOrDefault("SHA256");
-        }
-
-        return entity.ToS3ObjectInfo();
+        return entity == null ? null : new ObjectMetadataSnapshot(entity.ToS3ObjectInfo(), entity.LastModified);
     }
+
+    public async Task<bool> UpdateIntegrityAsync(string bucketName, string key, string etag, long size, DateTime lastModified, Dictionary<string, string> checksums, CancellationToken cancellationToken = default)
+    {
+        var entity = await _context.Objects.FirstOrDefaultAsync(o => o.BucketName == bucketName && o.Key == key, cancellationToken);
+        if (entity == null) return false;
+        entity.ETag = etag;
+        entity.Size = size;
+        entity.LastModified = NormalizeTimestamp(lastModified);
+        entity.ChecksumCRC32 = checksums.GetValueOrDefault("CRC32");
+        entity.ChecksumCRC32C = checksums.GetValueOrDefault("CRC32C");
+        entity.ChecksumCRC64NVME = checksums.GetValueOrDefault("CRC64NVME");
+        entity.ChecksumSHA1 = checksums.GetValueOrDefault("SHA1");
+        entity.ChecksumSHA256 = checksums.GetValueOrDefault("SHA256");
+        await _context.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    private DateTime NormalizeTimestamp(DateTime value) => _context.Database.IsNpgsql() && value.Ticks % 10 != 0
+        ? new DateTime(Math.Min(DateTime.MaxValue.Ticks, value.Ticks + 10 - value.Ticks % 10), value.Kind) : value;
 
     public async Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
@@ -193,51 +185,6 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMeta
         return true;
     }
 
-    /// <summary>
-    /// Recomputes ETag and previously-stored checksums for stale metadata by going through
-    /// <see cref="IObjectDataStorage"/>. Only algorithms that were originally present are
-    /// recomputed - absent checksums stay absent. Multipart ETags are preserved verbatim
-    /// (their value is a function of individual part MD5s, not reconstructible from the
-    /// merged bytes).
-    /// </summary>
-    private async Task<(string etag, Dictionary<string, string> checksums)> RecomputeStaleMetadataAsync(
-        ObjectEntity entity,
-        string bucketName,
-        string key,
-        CancellationToken cancellationToken)
-    {
-        var algorithmsToCompute = new List<string>();
-        if (!string.IsNullOrEmpty(entity.ChecksumCRC32))
-            algorithmsToCompute.Add("CRC32");
-        if (!string.IsNullOrEmpty(entity.ChecksumCRC32C))
-            algorithmsToCompute.Add("CRC32C");
-        if (!string.IsNullOrEmpty(entity.ChecksumCRC64NVME))
-            algorithmsToCompute.Add("CRC64NVME");
-        if (!string.IsNullOrEmpty(entity.ChecksumSHA1))
-            algorithmsToCompute.Add("SHA1");
-        if (!string.IsNullOrEmpty(entity.ChecksumSHA256))
-            algorithmsToCompute.Add("SHA256");
-
-        var (computedETag, checksums) = await _dataStorage.ComputeETagAndChecksumsAsync(bucketName, key, algorithmsToCompute, cancellationToken);
-
-        string etag;
-        if (ETagHelper.IsMultipartETag(entity.ETag))
-        {
-            etag = entity.ETag;
-        }
-        else if (computedETag == null)
-        {
-            _logger.LogWarning("Failed to recompute ETag for {Key} in bucket {BucketName}, using cached value", key, bucketName);
-            return (entity.ETag, new Dictionary<string, string>());
-        }
-        else
-        {
-            etag = computedETag;
-        }
-
-        return (etag, checksums);
-    }
-
     public async Task<Dictionary<string, string>?> GetObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(bucketName);
@@ -272,17 +219,17 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMeta
         return SetObjectTagsAsync(bucketName, key, new Dictionary<string, string>(), cancellationToken);
     }
 
-    public async Task<Dictionary<string, S3ObjectInfo?>> GetMetadataBatchAsync(
+    public async Task<Dictionary<string, ObjectMetadataSnapshot?>> GetMetadataBatchAsync(
         string bucketName,
         IEnumerable<string> keys,
         CancellationToken cancellationToken = default)
     {
         var keyList = keys.ToList();
-        var entities = await _context.Objects
+        var entities = await _context.Objects.AsNoTracking()
             .Where(o => o.BucketName == bucketName && keyList.Contains(o.Key))
             .ToListAsync(cancellationToken);
 
-        var byKey = entities.ToDictionary(e => e.Key, e => (S3ObjectInfo?)e.ToS3ObjectInfo());
+        var byKey = entities.ToDictionary(e => e.Key, e => (ObjectMetadataSnapshot?)new ObjectMetadataSnapshot(e.ToS3ObjectInfo(), e.LastModified));
         return keyList.ToDictionary(k => k, k => byKey.GetValueOrDefault(k));
     }
 }

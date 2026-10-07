@@ -7,7 +7,7 @@ namespace Lamina.Storage.Core.Abstract;
 /// do not implement this interface; the facade falls back to per-key reads.
 public interface IBatchObjectMetadataStorage
 {
-    Task<Dictionary<string, S3ObjectInfo?>> GetMetadataBatchAsync(
+    Task<Dictionary<string, ObjectMetadataSnapshot?>> GetMetadataBatchAsync(
         string bucketName,
         IEnumerable<string> keys,
         CancellationToken cancellationToken = default);

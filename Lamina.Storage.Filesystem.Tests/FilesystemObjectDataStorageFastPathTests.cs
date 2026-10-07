@@ -53,8 +53,7 @@ public class FilesystemObjectDataStorageFastPathTests : IDisposable
             settings,
             networkHelper,
             zeroCopy,
-            NullLogger<FilesystemObjectDataStorage>.Instance,
-            new Mock<IChunkedDataParser>().Object);
+            NullLogger<FilesystemObjectDataStorage>.Instance);
     }
 
     [Fact]

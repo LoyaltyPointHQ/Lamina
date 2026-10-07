@@ -48,8 +48,7 @@ public class FilesystemObjectDataStorageCopyTests : IDisposable
             settings,
             networkHelper,
             zeroCopy,
-            NullLogger<FilesystemObjectDataStorage>.Instance,
-            new Mock<IChunkedDataParser>().Object);
+            NullLogger<FilesystemObjectDataStorage>.Instance);
     }
 
     private async Task<string> CreateObjectAsync(string bucketName, string key, byte[] content)
@@ -82,7 +81,7 @@ public class FilesystemObjectDataStorageCopyTests : IDisposable
     }
 
     [Fact]
-    public async Task PrepareCopyDataAsync_ReturnsCorrectSizeAndETag()
+    public async Task PrepareCopyDataAsync_ReturnsCorrectSizeAndReadablePreparedCopy()
     {
         var storage = CreateStorage();
         var sourceContent = System.Text.Encoding.UTF8.GetBytes("Some content for ETag verification");
@@ -94,7 +93,10 @@ public class FilesystemObjectDataStorageCopyTests : IDisposable
         using (prepared!)
         {
             Assert.Equal(sourceContent.Length, prepared.Size);
-            Assert.NotEmpty(prepared.ETag);
+            await using var stream = await storage.OpenPreparedReadAsync(prepared);
+            using var bytes = new MemoryStream();
+            await stream.CopyToAsync(bytes);
+            Assert.Equal(sourceContent, bytes.ToArray());
         }
     }
 

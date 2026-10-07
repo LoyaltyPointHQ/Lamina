@@ -1,64 +1,35 @@
 using System.IO.Pipelines;
-using Lamina.Core.Models;
-using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Helpers;
 
 namespace Lamina.Storage.Core.Abstract;
 
-/// <summary>
-/// Convenience extension methods that combine prepare + commit into a single call.
-/// Used by tests and code that doesn't need metadata-before-data ordering.
-/// </summary>
+/// <summary>Raw I/O conveniences. Integrity policy belongs to the calling facade.</summary>
 public static class ObjectDataStorageExtensions
 {
-    public static async Task<StorageResult<(long size, string etag, Dictionary<string, string> checksums)>> StoreDataAsync(
-        this IObjectDataStorage storage,
-        string bucketName,
-        string key,
-        PipeReader dataReader,
-        IChunkSignatureValidator? chunkValidator,
-        ChecksumRequest? checksumRequest,
-        CancellationToken cancellationToken = default)
+    public static async Task<long> StoreDataAsync(this IObjectDataStorage storage, string bucketName, string key,
+        PipeReader dataReader, CancellationToken cancellationToken = default)
     {
-        var prepareResult = await storage.PrepareDataAsync(bucketName, key, dataReader, chunkValidator, checksumRequest, null, cancellationToken);
-
-        if (!prepareResult.IsSuccess)
-        {
-            return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Error(prepareResult.ErrorCode!, prepareResult.ErrorMessage!);
-        }
-
-        using var preparedData = prepareResult.Value!;
-        await storage.CommitPreparedDataAsync(preparedData, cancellationToken);
-
-        return StorageResult<(long size, string etag, Dictionary<string, string> checksums)>.Success(
-            (preparedData.Size, preparedData.ETag, preparedData.Checksums));
+        await using var write = await storage.BeginWriteAsync(bucketName, key, cancellationToken);
+        await PipeReaderHelper.CopyToAsync(dataReader, write.Stream, false, cancellationToken);
+        using var prepared = await write.SealAsync(cancellationToken);
+        await storage.CommitPreparedDataAsync(prepared, cancellationToken);
+        return prepared.Size;
     }
 
-    public static async Task<(long size, string etag)> StoreMultipartDataAsync(
-        this IObjectDataStorage storage,
-        string bucketName,
-        string key,
-        IEnumerable<PipeReader> partReaders,
-        CancellationToken cancellationToken = default)
+    public static async Task<long> StoreMultipartDataAsync(this IObjectDataStorage storage, string bucketName, string key,
+        IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
     {
-        using var preparedData = await storage.PrepareMultipartDataAsync(bucketName, key, partReaders, cancellationToken);
-        await storage.CommitPreparedDataAsync(preparedData, cancellationToken);
-        return (preparedData.Size, preparedData.ETag);
+        using var prepared = await storage.PrepareMultipartDataAsync(bucketName, key, partReaders, cancellationToken);
+        await storage.CommitPreparedDataAsync(prepared, cancellationToken);
+        return prepared.Size;
     }
 
-    public static async Task<(long size, string etag)?> CopyDataAsync(
-        this IObjectDataStorage storage,
-        string sourceBucketName,
-        string sourceKey,
-        string destBucketName,
-        string destKey,
-        CancellationToken cancellationToken = default)
+    public static async Task<long?> CopyDataAsync(this IObjectDataStorage storage, string sourceBucketName, string sourceKey,
+        string destBucketName, string destKey, CancellationToken cancellationToken = default)
     {
-        using var preparedData = await storage.PrepareCopyDataAsync(sourceBucketName, sourceKey, destBucketName, destKey, cancellationToken);
-        if (preparedData == null)
-            return null;
-
-        await storage.CommitPreparedDataAsync(preparedData, cancellationToken);
-        return (preparedData.Size, preparedData.ETag);
+        using var prepared = await storage.PrepareCopyDataAsync(sourceBucketName, sourceKey, destBucketName, destKey, cancellationToken);
+        if (prepared is null) return null;
+        await storage.CommitPreparedDataAsync(prepared, cancellationToken);
+        return prepared.Size;
     }
 }

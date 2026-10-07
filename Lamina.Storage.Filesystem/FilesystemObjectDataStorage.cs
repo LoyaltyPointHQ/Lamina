@@ -1,7 +1,6 @@
 using System.Buffers;
 using System.IO.Pipelines;
 using Lamina.Core.Models;
-using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Core.Listing;
@@ -23,14 +22,12 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
     private readonly NetworkFileSystemHelper _networkHelper;
     private readonly LinuxZeroCopyHelper _zeroCopyHelper;
     private readonly ILogger<FilesystemObjectDataStorage> _logger;
-    private readonly IChunkedDataParser _chunkedDataParser;
 
     public FilesystemObjectDataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
         NetworkFileSystemHelper networkHelper,
         LinuxZeroCopyHelper zeroCopyHelper,
-        ILogger<FilesystemObjectDataStorage> logger,
-        IChunkedDataParser chunkedDataParser
+        ILogger<FilesystemObjectDataStorage> logger
     )
     {
         var settings = settingsOptions.Value;
@@ -42,148 +39,47 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
         _networkHelper = networkHelper;
         _zeroCopyHelper = zeroCopyHelper;
         _logger = logger;
-        _chunkedDataParser = chunkedDataParser;
 
         _networkHelper.EnsureDirectoryExists(_dataDirectory);
     }
 
-    public async Task<StorageResult<PreparedData>> PrepareDataAsync(
-        string bucketName,
-        string key,
-        PipeReader dataReader,
-        IChunkSignatureValidator? chunkValidator,
-        ChecksumRequest? checksumRequest,
-        byte[]? expectedMd5 = null,
-        CancellationToken cancellationToken = default
-    )
+    public async Task<StagedDataWrite> BeginWriteAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
+            throw new InvalidOperationException($"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
+        var directory = Path.GetDirectoryName(GetDataPath(bucketName, key))!;
+        await _networkHelper.EnsureDirectoryExistsAsync(directory, $"StoreObject-{bucketName}/{key}");
+        var path = Path.Combine(directory, $"{_tempFilePrefix}{Guid.NewGuid():N}");
+        var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true);
+        void Cleanup() => File.Delete(path);
+        return new StagedDataWrite(stream, size =>
         {
-            throw new InvalidOperationException(
-                $"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
-        }
+            var prepared = new PreparedData { BucketName = bucketName, Key = key, Size = size, Tag = path };
+            prepared.SetDisposeAction(Cleanup);
+            return prepared;
+        }, Cleanup);
+    }
 
-        var dataPath = GetDataPath(bucketName, key);
-        var dataDir = Path.GetDirectoryName(dataPath)!;
-        await _networkHelper.EnsureDirectoryExistsAsync(dataDir, $"StoreObject-{bucketName}/{key}");
+    public Task<Stream?> OpenReadAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
+            return Task.FromResult<Stream?>(null);
+        try { return Task.FromResult<Stream?>(new FileStream(GetDataPath(bucketName, key), FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 81920, true)); }
+        catch (FileNotFoundException) { return Task.FromResult<Stream?>(null); }
+        catch (DirectoryNotFoundException) { return Task.FromResult<Stream?>(null); }
+    }
 
-        var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
-
-        StreamingChecksumCalculator? checksumCalculator = null;
-        if (checksumRequest != null)
-        {
-            checksumCalculator = new StreamingChecksumCalculator(checksumRequest.Algorithm, checksumRequest.ProvidedChecksums);
-        }
-
-        try
-        {
-            long bytesWritten;
-
-            if (chunkValidator != null)
-            {
-                await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
-
-                // AWS CLI v2 default checksum mode ships the integrity value (CRC64NVME etc.) in
-                // a trailer. Pick the trailer-aware parser when the validator signals trailers, so
-                // we actually capture parseResult.Trailers instead of silently ignoring them.
-                var onDataWritten = checksumCalculator?.HasChecksums == true
-                    ? (Action<ReadOnlySpan<byte>>)(data => checksumCalculator.Append(data))
-                    : null;
-                var parseResult = chunkValidator.ExpectsTrailers
-                    ? await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(dataReader, fileStream, chunkValidator, onDataWritten, cancellationToken)
-                    : await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, onDataWritten, cancellationToken);
-
-                if (!parseResult.Success)
-                {
-                    await fileStream.FlushAsync(cancellationToken);
-                    fileStream.Close();
-                    File.Delete(tempPath);
-                    return StorageResult<PreparedData>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
-                }
-
-                // Feed trailer-delivered checksum values into the calculator so Finish() compares
-                // client-provided vs server-computed below.
-                if (checksumCalculator != null && parseResult.Trailers.Count > 0)
-                {
-                    TrailerChecksumMerger.MergeIntoCalculator(parseResult.Trailers, checksumCalculator);
-                }
-
-                bytesWritten = parseResult.TotalBytesWritten;
-                await fileStream.FlushAsync(cancellationToken);
-            }
-            else
-            {
-                await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
-
-                bytesWritten = checksumCalculator?.HasChecksums == true
-                    ? await ChecksumStreamHelper.WriteDataWithChecksumsAsync(dataReader, fileStream, checksumCalculator, cancellationToken)
-                    : await PipeReaderHelper.CopyToAsync(dataReader, fileStream, false, cancellationToken);
-
-                await fileStream.FlushAsync(cancellationToken);
-            }
-
-            var checksums = new Dictionary<string, string>();
-            if (checksumCalculator?.HasChecksums == true)
-            {
-                var result = checksumCalculator.Finish();
-
-                if (!result.IsValid)
-                {
-                    File.Delete(tempPath);
-                    return StorageResult<PreparedData>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
-                }
-
-                checksums = result.CalculatedChecksums;
-            }
-
-            var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
-
-            if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
-            {
-                File.Delete(tempPath);
-                return StorageResult<PreparedData>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
-            }
-
-            var preparedData = new PreparedData
-            {
-                BucketName = bucketName,
-                Key = key,
-                Size = bytesWritten,
-                ETag = etag,
-                Checksums = checksums,
-                Tag = tempPath
-            };
-            preparedData.SetDisposeAction(() =>
-            {
-                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* ignore */ }
-            });
-
-            return StorageResult<PreparedData>.Success(preparedData);
-        }
-        catch
-        {
-            try
-            {
-                if (File.Exists(tempPath))
-                {
-                    File.Delete(tempPath);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to clean up temporary file: {TempPath}", tempPath);
-            }
-
-            throw;
-        }
-        finally
-        {
-            checksumCalculator?.Dispose();
-        }
+    public Task<Stream> OpenPreparedReadAsync(PreparedData preparedData, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<Stream>(new FileStream(preparedData.Tag!, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, true));
     }
 
     public async Task CommitPreparedDataAsync(PreparedData preparedData, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var tempPath = preparedData.Tag
             ?? throw new InvalidOperationException($"PreparedData for {preparedData.BucketName}/{preparedData.Key} has no temp path");
 
@@ -200,69 +96,71 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
 
     public async Task<PreparedData> PrepareMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
     {
-        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
-        {
-            throw new InvalidOperationException(
-                $"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
-        }
-
-        var dataPath = GetDataPath(bucketName, key);
-        var dataDir = Path.GetDirectoryName(dataPath)!;
-        await _networkHelper.EnsureDirectoryExistsAsync(dataDir, $"StoreMultipartObject-{bucketName}/{key}");
-
-        var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
-        long totalBytesWritten = 0;
-
+        var readers = partReaders.ToList();
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
             {
-                await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
-
-                foreach (var reader in partReaders)
-                {
-                    var bytesWritten = await PipeReaderHelper.CopyToAsync(reader, fileStream, true, cancellationToken);
-                    totalBytesWritten += bytesWritten;
-                }
-
-                await fileStream.FlushAsync(cancellationToken);
+                throw new InvalidOperationException(
+                    $"Cannot store data with key '{key}' as it conflicts with temporary file pattern '{_tempFilePrefix}' or metadata directory '{_inlineMetadataDirectoryName}'");
             }
 
-            // Intentionally no ETag compute here: the multipart ETag is the MD5-of-MD5-of-part-ETags
-            // (AWS spec format "hash-N"), not MD5 of the assembled file. The facade computes that
-            // separately via ETagHelper.ComputeMultipartETag from the part ETag list and overrides
-            // this value, so re-reading the just-written tempfile here would be a wasted full-object
-            // read (equal to S bytes per Complete).
-            var preparedData = new PreparedData
-            {
-                BucketName = bucketName,
-                Key = key,
-                Size = totalBytesWritten,
-                ETag = string.Empty,
-                Checksums = new Dictionary<string, string>(),
-                Tag = tempPath
-            };
-            preparedData.SetDisposeAction(() =>
-            {
-                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* ignore */ }
-            });
+            var dataPath = GetDataPath(bucketName, key);
+            var dataDir = Path.GetDirectoryName(dataPath)!;
+            await _networkHelper.EnsureDirectoryExistsAsync(dataDir, $"StoreMultipartObject-{bucketName}/{key}");
 
-            return preparedData;
-        }
-        catch
-        {
+            var tempPath = Path.Combine(dataDir, $"{_tempFilePrefix}{Guid.NewGuid():N}");
+            long totalBytesWritten = 0;
+
             try
             {
-                if (File.Exists(tempPath))
                 {
-                    File.Delete(tempPath);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to clean up temporary file: {TempPath}", tempPath);
-            }
+                    await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
 
-            throw;
+                    foreach (var reader in readers)
+                    {
+                        var bytesWritten = await PipeReaderHelper.CopyToAsync(reader, fileStream, true, cancellationToken);
+                        totalBytesWritten += bytesWritten;
+                    }
+
+                    await fileStream.FlushAsync(cancellationToken);
+                }
+
+                var preparedData = new PreparedData
+                {
+                    BucketName = bucketName,
+                    Key = key,
+                    Size = totalBytesWritten,
+                    Tag = tempPath
+                };
+                preparedData.SetDisposeAction(() =>
+                {
+                    try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* ignore */ }
+                });
+
+                return preparedData;
+            }
+            catch
+            {
+                try
+                {
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to clean up temporary file: {TempPath}", tempPath);
+                }
+
+                throw;
+            }
+        }
+        finally
+        {
+            await Task.WhenAll(readers.Select(reader => reader.CompleteAsync().AsTask()));
         }
     }
 
@@ -303,8 +201,6 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
                 BucketName = bucketName,
                 Key = key,
                 Size = totalBytesWritten,
-                ETag = string.Empty,
-                Checksums = new Dictionary<string, string>(),
                 Tag = tempPath
             };
             preparedData.SetDisposeAction(() =>
@@ -379,6 +275,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
 
     public async Task<PreparedData?> PrepareCopyDataAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (FilesystemStorageHelper.IsKeyForbidden(sourceKey, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName) ||
             FilesystemStorageHelper.IsKeyForbidden(destKey, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
@@ -437,15 +334,12 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
                 "CopyFile");
 
             var fileInfo = new FileInfo(tempPath);
-            var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
 
             var preparedData = new PreparedData
             {
                 BucketName = destBucketName,
                 Key = destKey,
                 Size = fileInfo.Length,
-                ETag = etag,
-                Checksums = new Dictionary<string, string>(),
                 Tag = tempPath
             };
             preparedData.SetDisposeAction(() =>
@@ -465,6 +359,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
                 try { File.Delete(tempPath); } catch { /* ignore */ }
             }
 
+            if (ex is OperationCanceledException) throw;
             return null;
         }
     }
@@ -490,6 +385,11 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
         }
 
         await using var fileStream = File.OpenRead(dataPath);
+        if (fileStream.Length == 0 && byteRangeStart is null && byteRangeEnd is null)
+        {
+            await writer.CompleteAsync();
+            return true;
+        }
 
         long startPosition = byteRangeStart ?? 0;
         long endPosition = byteRangeEnd ?? (fileStream.Length - 1);
@@ -655,78 +555,6 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
             walker.Walk();
         }
         return Task.FromResult(selector.Finish());
-    }
-
-    public Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default)
-    {
-        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
-        {
-            return Task.FromResult<string?>(null);
-        }
-
-        var dataPath = GetDataPath(bucketName, key);
-        if (!File.Exists(dataPath))
-        {
-            return Task.FromResult<string?>(null);
-        }
-
-        var fileName = Path.GetFileName(dataPath);
-        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
-        {
-            return Task.FromResult<string?>(null);
-        }
-
-        return ETagHelper.ComputeETagFromFileAsync(dataPath)!;
-    }
-
-    public async Task<Dictionary<string, string>> ComputeChecksumsAsync(
-        string bucketName,
-        string key,
-        IEnumerable<string> algorithms,
-        CancellationToken cancellationToken = default)
-    {
-        var algorithmList = algorithms as List<string> ?? algorithms.ToList();
-        if (algorithmList.Count == 0)
-        {
-            return new Dictionary<string, string>();
-        }
-
-        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
-        {
-            return new Dictionary<string, string>();
-        }
-
-        var dataPath = GetDataPath(bucketName, key);
-        if (!File.Exists(dataPath))
-        {
-            return new Dictionary<string, string>();
-        }
-
-        var fileName = Path.GetFileName(dataPath);
-        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
-        {
-            return new Dictionary<string, string>();
-        }
-
-        return await ChecksumHelper.ComputeSelectiveChecksumsFromFileAsync(dataPath, algorithmList, cancellationToken);
-    }
-
-    public async Task<(string? etag, Dictionary<string, string> checksums)> ComputeETagAndChecksumsAsync(
-        string bucketName,
-        string key,
-        IEnumerable<string> checksumAlgorithms,
-        CancellationToken cancellationToken = default)
-    {
-        if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
-            return (null, new Dictionary<string, string>());
-
-        var dataPath = GetDataPath(bucketName, key);
-        var fileName = Path.GetFileName(dataPath);
-        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
-            return (null, new Dictionary<string, string>());
-
-        var (etag, checksums) = await ChecksumHelper.ComputeETagAndChecksumsFromFileAsync(dataPath, checksumAlgorithms, cancellationToken);
-        return (etag, checksums);
     }
 
     private string GetDataPath(string bucketName, string key)

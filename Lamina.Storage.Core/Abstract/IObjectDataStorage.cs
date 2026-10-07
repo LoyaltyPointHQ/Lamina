@@ -1,6 +1,5 @@
 using System.IO.Pipelines;
 using Lamina.Core.Models;
-using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Core.Listing;
 
@@ -23,8 +22,6 @@ public class PreparedData : IDisposable
     public required string BucketName { get; init; }
     public required string Key { get; init; }
     public required long Size { get; init; }
-    public required string ETag { get; init; }
-    public required Dictionary<string, string> Checksums { get; init; }
 
     /// <summary>
     /// Implementation-specific state (e.g., temp file path for filesystem, pending key for in-memory).
@@ -46,8 +43,9 @@ public class PreparedData : IDisposable
 
 public interface IObjectDataStorage
 {
-    // Two-phase commit: prepare processes data without making it visible
-    Task<StorageResult<PreparedData>> PrepareDataAsync(string bucketName, string key, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default);
+    Task<StagedDataWrite> BeginWriteAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    Task<Stream?> OpenReadAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    Task<Stream> OpenPreparedReadAsync(PreparedData preparedData, CancellationToken cancellationToken = default);
     Task CommitPreparedDataAsync(PreparedData preparedData, CancellationToken cancellationToken = default);
     Task AbortPreparedDataAsync(PreparedData preparedData, CancellationToken cancellationToken = default);
 
@@ -63,31 +61,4 @@ public interface IObjectDataStorage
     Task<(long size, DateTime lastModified)?> GetDataInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     Task<ListDataResult> ListDataKeysAsync(string bucketName, BucketType bucketType, string? prefix = null, string? delimiter = null, string? startAfter = null, int maxKeys = 1000, CancellationToken cancellationToken = default);
     Task<ListingCandidates> ListDataCandidatesAsync(string bucketName, ListingQuery query, CancellationToken cancellationToken = default);
-    Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Recomputes the requested checksum algorithms over the object's current bytes. Returns an
-    /// empty dictionary when the object does not exist or <paramref name="algorithms"/> is empty.
-    /// Metadata storages use this (together with <see cref="ComputeETagAsync"/>) to heal stale
-    /// metadata without reaching into the data backend's filesystem layout themselves.
-    /// Supported algorithm names: CRC32, CRC32C, CRC64NVME, SHA1, SHA256.
-    /// </summary>
-    Task<Dictionary<string, string>> ComputeChecksumsAsync(
-        string bucketName,
-        string key,
-        IEnumerable<string> algorithms,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Computes the ETag (MD5) and the requested checksum algorithms over the object's current
-    /// bytes in a single pass. Returns <c>null</c> etag and an empty dictionary when the object
-    /// does not exist. Callers that need to preserve a multipart ETag should check
-    /// <see cref="ETagHelper.IsMultipartETag"/> before using the returned etag.
-    /// Supported algorithm names: CRC32, CRC32C, CRC64NVME, SHA1, SHA256.
-    /// </summary>
-    Task<(string? etag, Dictionary<string, string> checksums)> ComputeETagAndChecksumsAsync(
-        string bucketName,
-        string key,
-        IEnumerable<string> checksumAlgorithms,
-        CancellationToken cancellationToken = default);
 }

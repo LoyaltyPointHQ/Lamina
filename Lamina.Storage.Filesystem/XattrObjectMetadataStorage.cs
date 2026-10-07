@@ -2,7 +2,6 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
-using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
 using Microsoft.Extensions.Logging;
@@ -77,10 +76,6 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
                 return null;
             }
 
-            // Snapshot of the data mtime at write time; used later to detect external modifications.
-            _xattrHelper.SetAttribute(dataPath, MetadataTimestampAttributeName,
-                dataInfo.Value.lastModified.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
-
             // Store Content-Type if provided
             var contentType = string.IsNullOrEmpty(request?.ContentType) ? "application/octet-stream" : request.ContentType;
             if (!_xattrHelper.SetAttribute(dataPath, ContentTypeAttributeName, contentType))
@@ -139,6 +134,24 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
                     s3Object.ChecksumSHA256 = sha256;
             }
 
+            else if (request != null)
+            {
+                s3Object.ChecksumCRC32 = request.ChecksumCRC32;
+                s3Object.ChecksumCRC32C = request.ChecksumCRC32C;
+                s3Object.ChecksumCRC64NVME = request.ChecksumCRC64NVME;
+                s3Object.ChecksumSHA1 = request.ChecksumSHA1;
+                s3Object.ChecksumSHA256 = request.ChecksumSHA256;
+            }
+            var checksums = calculatedChecksums ?? new Dictionary<string, string>();
+            if (calculatedChecksums == null)
+            {
+                if (s3Object.ChecksumCRC32 != null) checksums["CRC32"] = s3Object.ChecksumCRC32;
+                if (s3Object.ChecksumCRC32C != null) checksums["CRC32C"] = s3Object.ChecksumCRC32C;
+                if (s3Object.ChecksumCRC64NVME != null) checksums["CRC64NVME"] = s3Object.ChecksumCRC64NVME;
+                if (s3Object.ChecksumSHA1 != null) checksums["SHA1"] = s3Object.ChecksumSHA1;
+                if (s3Object.ChecksumSHA256 != null) checksums["SHA256"] = s3Object.ChecksumSHA256;
+            }
+            if (!WriteIntegrity(dataPath, etag, size, s3Object.LastModified, checksums)) return null;
             return s3Object;
         }
         catch (Exception ex)
@@ -148,72 +161,62 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
         }
     }
 
-    public async Task<S3ObjectInfo?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public Task<ObjectMetadataSnapshot?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-        if (dataInfo == null)
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = GetDataPath(bucketName, key);
+        var etag = _xattrHelper.GetAttribute(path, ETagAttributeName);
+        if (etag == null) return Task.FromResult<ObjectMetadataSnapshot?>(null);
+        var timestamp = _xattrHelper.GetAttribute(path, MetadataTimestampAttributeName);
+        DateTime? recorded = DateTime.TryParse(timestamp, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var parsed) ? parsed : null;
+        long.TryParse(_xattrHelper.GetAttribute(path, "size"), System.Globalization.CultureInfo.InvariantCulture, out var size);
+        var info = new S3ObjectInfo
         {
-            return null;
-        }
+            Key = key,
+            ETag = etag,
+            Size = size,
+            LastModified = recorded ?? default,
+            ContentType = _xattrHelper.GetAttribute(path, ContentTypeAttributeName) ?? "application/octet-stream",
+            Metadata = GetUserMetadata(path),
+            Tags = GetTags(path),
+            OwnerId = _xattrHelper.GetAttribute(path, OwnerIdAttributeName),
+            OwnerDisplayName = _xattrHelper.GetAttribute(path, OwnerDisplayNameAttributeName),
+            ChecksumCRC32 = _xattrHelper.GetAttribute(path, "checksum-crc32"),
+            ChecksumCRC32C = _xattrHelper.GetAttribute(path, "checksum-crc32c"),
+            ChecksumCRC64NVME = _xattrHelper.GetAttribute(path, "checksum-crc64nvme"),
+            ChecksumSHA1 = _xattrHelper.GetAttribute(path, "checksum-sha1"),
+            ChecksumSHA256 = _xattrHelper.GetAttribute(path, "checksum-sha256")
+        };
+        return Task.FromResult<ObjectMetadataSnapshot?>(new(info, recorded));
+    }
 
-        var dataPath = GetDataPath(bucketName, key);
+    public Task<bool> UpdateIntegrityAsync(string bucketName, string key, string etag, long size, DateTime lastModified, Dictionary<string, string> checksums, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = GetDataPath(bucketName, key);
+        return Task.FromResult(_xattrHelper.GetAttribute(path, ETagAttributeName) != null
+            && WriteIntegrity(path, etag, size, lastModified, checksums));
+    }
 
-        try
+    private bool WriteIntegrity(string path, string etag, long size, DateTime lastModified, Dictionary<string, string> checksums)
+    {
+        // Invalidate the watermark before touching multiple independent attributes.
+        if (_xattrHelper.GetAttribute(path, MetadataTimestampAttributeName) != null
+            && !_xattrHelper.RemoveAttribute(path, MetadataTimestampAttributeName)) return false;
+        if (!_xattrHelper.SetAttribute(path, ETagAttributeName, etag)
+            || !_xattrHelper.SetAttribute(path, "size", size.ToString(System.Globalization.CultureInfo.InvariantCulture))) return false;
+        foreach (var algorithm in new[] { "CRC32", "CRC32C", "CRC64NVME", "SHA1", "SHA256" })
         {
-            var etag = _xattrHelper.GetAttribute(dataPath, ETagAttributeName);
-            if (string.IsNullOrEmpty(etag))
+            var name = "checksum-" + algorithm.ToLowerInvariant();
+            if (checksums.TryGetValue(algorithm, out var value))
             {
-                return null;
+                if (!_xattrHelper.SetAttribute(path, name, value)) return false;
             }
-
-            // Staleness detection: compare the mtime snapshotted when metadata was last written
-            // against the current data mtime. If data is newer, the file was modified outside the
-            // API (data-first) and ETag must be recomputed.
-            var recordedTsRaw = _xattrHelper.GetAttribute(dataPath, MetadataTimestampAttributeName);
-            if (!string.IsNullOrEmpty(recordedTsRaw)
-                && DateTime.TryParse(recordedTsRaw, System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.RoundtripKind, out var recordedTs)
-                && dataInfo.Value.lastModified > recordedTs
-                && !ETagHelper.IsMultipartETag(etag))
-            {
-                _logger.LogInformation("Detected stale xattr metadata for {Key} in bucket {BucketName} (data mtime: {DataTime}, recorded: {RecordedTime}), recomputing ETag",
-                    key, bucketName, dataInfo.Value.lastModified, recordedTs);
-
-                var recomputed = await _dataStorage.ComputeETagAsync(bucketName, key, cancellationToken);
-                if (!string.IsNullOrEmpty(recomputed))
-                {
-                    etag = recomputed;
-                    // Refresh the snapshot so subsequent reads don't re-recompute.
-                    _xattrHelper.SetAttribute(dataPath, ETagAttributeName, etag);
-                    _xattrHelper.SetAttribute(dataPath, MetadataTimestampAttributeName,
-                        dataInfo.Value.lastModified.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
-                }
-            }
-
-            var contentType = _xattrHelper.GetAttribute(dataPath, ContentTypeAttributeName) ?? "application/octet-stream";
-            var ownerId = _xattrHelper.GetAttribute(dataPath, OwnerIdAttributeName);
-            var ownerDisplayName = _xattrHelper.GetAttribute(dataPath, OwnerDisplayNameAttributeName);
-            var userMetadata = GetUserMetadata(dataPath);
-            var tags = GetTags(dataPath);
-
-            return new S3ObjectInfo
-            {
-                Key = key,
-                LastModified = dataInfo.Value.lastModified,
-                ETag = etag,
-                Size = dataInfo.Value.size,
-                ContentType = contentType,
-                Metadata = userMetadata,
-                Tags = tags,
-                OwnerId = ownerId,
-                OwnerDisplayName = ownerDisplayName
-            };
+            else if (_xattrHelper.GetAttribute(path, name) != null && !_xattrHelper.RemoveAttribute(path, name)) return false;
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to get metadata for {Key} in bucket {BucketName}", key, bucketName);
-            return null;
-        }
+        return _xattrHelper.SetAttribute(path, MetadataTimestampAttributeName,
+            lastModified.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
     }
 
     public async Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)

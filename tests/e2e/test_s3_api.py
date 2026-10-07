@@ -314,6 +314,14 @@ def test_explicit_checksums(s3, bucket, algorithm):
     with response["Body"] as stream:
         assert stream.read() == body
     assert response[field] == checksum
+    assert s3.head_object(Bucket=bucket, Key="checksum", ChecksumMode="ENABLED")[field] == checksum
+    s3.copy_object(
+        Bucket=bucket, Key="checksum-copy", CopySource={"Bucket": bucket, "Key": "checksum"}
+    )
+    copied = s3.get_object(Bucket=bucket, Key="checksum-copy", ChecksumMode="ENABLED")
+    with copied["Body"] as stream:
+        assert stream.read() == body
+    assert copied[field] == checksum
 
 
 def test_invalid_content_md5_rejected(s3, bucket):

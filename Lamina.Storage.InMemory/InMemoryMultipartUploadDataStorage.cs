@@ -2,7 +2,6 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using Lamina.Core.Models;
-using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
 
@@ -12,149 +11,44 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<int, UploadPart>> _uploadParts = new();
 
-    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
+    private readonly ConcurrentDictionary<string, byte[]> _pending = new();
+
+    public Task<StagedDataWrite> BeginPartWriteAsync(string bucketName, string key, string uploadId, int partNumber, CancellationToken cancellationToken = default)
     {
-        var uploadKey = $"{bucketName}/{key}/{uploadId}";
-        var parts = _uploadParts.GetOrAdd(uploadKey, _ => new ConcurrentDictionary<int, UploadPart>());
-
-        var combinedData = await PipeReaderHelper.ReadAllBytesAsync(dataReader, false, cancellationToken);
-
-        var etag = ETagHelper.ComputeETag(combinedData);
-
-        // AWS: "Amazon S3 checks the part data against the provided MD5 value. If they do not
-        // match, Amazon S3 returns an error." We haven't inserted the part into the dict yet, so
-        // no cleanup is needed on mismatch.
-        if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
+        cancellationToken.ThrowIfCancellationRequested();
+        var stream = new MemoryStream();
+        var identity = Guid.NewGuid().ToString("N");
+        void Cleanup() => _pending.TryRemove(identity, out _);
+        return Task.FromResult(new StagedDataWrite(stream, size =>
         {
-            return StorageResult<UploadPart>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
-        }
-
-        var part = new UploadPart
-        {
-            PartNumber = partNumber,
-            ETag = etag,
-            Size = combinedData.Length,
-            LastModified = DateTime.UtcNow,
-            Data = combinedData
-        };
-
-        // Calculate checksums if requested
-        if (checksumRequest != null)
-        {
-            using var calculator = new StreamingChecksumCalculator(checksumRequest.Algorithm, checksumRequest.ProvidedChecksums);
-            if (calculator.HasChecksums)
-            {
-                calculator.Append(combinedData);
-                var result = calculator.Finish();
-
-                if (!result.IsValid)
-                {
-                    // Validation failed - return error
-                    return StorageResult<UploadPart>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
-                }
-
-                // Populate checksum fields from calculated values
-                if (result.CalculatedChecksums.TryGetValue("CRC32", out var crc32))
-                    part.ChecksumCRC32 = crc32;
-                if (result.CalculatedChecksums.TryGetValue("CRC32C", out var crc32c))
-                    part.ChecksumCRC32C = crc32c;
-                if (result.CalculatedChecksums.TryGetValue("CRC64NVME", out var crc64))
-                    part.ChecksumCRC64NVME = crc64;
-                if (result.CalculatedChecksums.TryGetValue("SHA1", out var sha1))
-                    part.ChecksumSHA1 = sha1;
-                if (result.CalculatedChecksums.TryGetValue("SHA256", out var sha256))
-                    part.ChecksumSHA256 = sha256;
-            }
-        }
-
-        parts[partNumber] = part;
-
-        return StorageResult<UploadPart>.Success(part);
+            _pending[identity] = stream.ToArray();
+            var prepared = new PreparedData { BucketName = bucketName, Key = key, Size = size, Tag = identity };
+            prepared.SetDisposeAction(Cleanup);
+            return prepared;
+        }, Cleanup));
     }
 
-    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkedDataParser chunkedDataParser, IChunkSignatureValidator chunkValidator, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
+    public Task CommitPreparedPartAsync(string bucketName, string key, string uploadId, int partNumber, PreparedData preparedData, CancellationToken cancellationToken = default)
     {
-        var uploadKey = $"{bucketName}/{key}/{uploadId}";
-        var parts = _uploadParts.GetOrAdd(uploadKey, _ => new ConcurrentDictionary<int, UploadPart>());
-
-        // For in-memory storage, using MemoryStream is acceptable
-        using var memoryStream = new MemoryStream();
-
-        // Use the trailer-aware parser when the validator signals trailers are coming, otherwise
-        // client-supplied CRC64NVME (delivered via x-amz-trailer) would be silently dropped.
-        var parseResult = chunkValidator.ExpectsTrailers
-            ? await chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken)
-            : await chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken);
-
-        // Check if validation succeeded
-        if (!parseResult.Success)
-        {
-            // Invalid chunk signature
-            return StorageResult<UploadPart>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
-        }
-
-        var combinedData = memoryStream.ToArray();
-        var etag = ETagHelper.ComputeETag(combinedData);
-
-        if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
-        {
-            return StorageResult<UploadPart>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
-        }
-
-        var part = new UploadPart
-        {
-            PartNumber = partNumber,
-            ETag = etag,
-            Size = combinedData.Length,
-            LastModified = DateTime.UtcNow,
-            Data = combinedData
-        };
-
-        // Calculate checksums if requested
-        if (checksumRequest != null)
-        {
-            using var calculator = new StreamingChecksumCalculator(checksumRequest.Algorithm, checksumRequest.ProvidedChecksums);
-            if (calculator.HasChecksums)
-            {
-                calculator.Append(combinedData);
-                // Merge client-delivered trailer checksums so Finish can validate them.
-                if (parseResult.Trailers.Count > 0)
-                {
-                    TrailerChecksumMerger.MergeIntoCalculator(parseResult.Trailers, calculator);
-                }
-                var result = calculator.Finish();
-
-                if (!result.IsValid)
-                {
-                    // Validation failed - return error
-                    return StorageResult<UploadPart>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
-                }
-
-                // Populate checksum fields from calculated values
-                if (result.CalculatedChecksums.TryGetValue("CRC32", out var crc32))
-                    part.ChecksumCRC32 = crc32;
-                if (result.CalculatedChecksums.TryGetValue("CRC32C", out var crc32c))
-                    part.ChecksumCRC32C = crc32c;
-                if (result.CalculatedChecksums.TryGetValue("CRC64NVME", out var crc64))
-                    part.ChecksumCRC64NVME = crc64;
-                if (result.CalculatedChecksums.TryGetValue("SHA1", out var sha1))
-                    part.ChecksumSHA1 = sha1;
-                if (result.CalculatedChecksums.TryGetValue("SHA256", out var sha256))
-                    part.ChecksumSHA256 = sha256;
-            }
-        }
-
-        parts[partNumber] = part;
-
-        return StorageResult<UploadPart>.Success(part);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_pending.TryRemove(preparedData.Tag!, out var data)) throw new InvalidOperationException("Prepared part is unavailable");
+        var parts = _uploadParts.GetOrAdd($"{bucketName}/{key}/{uploadId}", _ => new());
+        parts[partNumber] = new UploadPart { PartNumber = partNumber, ETag = string.Empty, Size = data.Length, LastModified = DateTime.UtcNow, Data = data };
+        return Task.CompletedTask;
     }
 
-    public Task<IEnumerable<PipeReader>> GetPartReadersAsync(string bucketName, string key, string uploadId, List<CompletedPart> parts, CancellationToken cancellationToken = default)
+    public Task AbortPreparedPartAsync(PreparedData preparedData, CancellationToken cancellationToken = default)
+    {
+        preparedData.Dispose();
+        return Task.CompletedTask;
+    }
+
+    public async Task<IEnumerable<PipeReader>> GetPartReadersAsync(string bucketName, string key, string uploadId, List<CompletedPart> parts, CancellationToken cancellationToken = default)
     {
         var uploadKey = $"{bucketName}/{key}/{uploadId}";
         if (!_uploadParts.TryGetValue(uploadKey, out var storedParts))
         {
-            return Task.FromResult(Enumerable.Empty<PipeReader>());
+            return Enumerable.Empty<PipeReader>();
         }
 
         var orderedParts = parts.OrderBy(p => p.PartNumber).ToList();
@@ -167,9 +61,9 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
                 // Clean up any readers we've already created
                 foreach (var r in readers)
                 {
-                    _ = r.CompleteAsync();
+                    await r.CompleteAsync();
                 }
-                return Task.FromResult(Enumerable.Empty<PipeReader>());
+                return Enumerable.Empty<PipeReader>();
             }
 
             // Create a PipeReader from the in-memory data
@@ -178,7 +72,7 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
             readers.Add(partReader);
         }
 
-        return Task.FromResult<IEnumerable<PipeReader>>(readers);
+        return readers;
     }
 
     public Task<bool> DeleteAllPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
@@ -193,13 +87,12 @@ public class InMemoryMultipartUploadDataStorage : IMultipartUploadDataStorage
         return Task.FromResult(_uploadParts.TryGetValue(uploadKey, out var parts) && !parts.IsEmpty);
     }
 
-    public Task<List<UploadPart>> GetStoredPartsAsync(string bucketName, string key, string uploadId, IReadOnlyDictionary<int, PartMetadata>? knownMetadata = null, CancellationToken cancellationToken = default)
+    public Task<List<UploadPart>> GetStoredPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
     {
-        // knownMetadata is a perf hint for backends that must reopen files; in-memory already holds ETag.
         var uploadKey = $"{bucketName}/{key}/{uploadId}";
         if (_uploadParts.TryGetValue(uploadKey, out var parts))
         {
-            return Task.FromResult(parts.Values.OrderBy(p => p.PartNumber).ToList());
+            return Task.FromResult(parts.Values.OrderBy(p => p.PartNumber).Select(p => new UploadPart { PartNumber = p.PartNumber, ETag = string.Empty, Size = p.Size, LastModified = p.LastModified }).ToList());
         }
         return Task.FromResult(new List<UploadPart>());
     }

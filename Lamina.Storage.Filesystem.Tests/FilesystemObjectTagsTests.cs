@@ -51,8 +51,7 @@ public class FilesystemObjectTagsTests : IDisposable
             Options.Create(settings),
             networkHelper,
             new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance),
-            NullLogger<FilesystemObjectDataStorage>.Instance,
-            Mock.Of<IChunkedDataParser>());
+            NullLogger<FilesystemObjectDataStorage>.Instance);
 
         return new SeparateDirectoryObjectMetadataStorage(
             Options.Create(settings),
@@ -173,7 +172,7 @@ public class FilesystemObjectTagsTests : IDisposable
         await SeedObjectAsync("b", "k");
         await _storage.SetObjectTagsAsync("b", "k", new Dictionary<string, string> { { "env", "prod" } });
 
-        var info = await _storage.GetMetadataAsync("b", "k");
+        var info = (await _storage.GetMetadataAsync("b", "k"))?.Metadata;
 
         Assert.NotNull(info);
         Assert.Equal("prod", info.Tags["env"]);

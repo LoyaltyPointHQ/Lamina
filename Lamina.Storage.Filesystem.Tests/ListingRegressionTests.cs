@@ -33,11 +33,11 @@ public sealed class ListingRegressionTests : IDisposable
         return new FilesystemObjectDataStorage(settings,
             new NetworkFileSystemHelper(settings, NullLogger<NetworkFileSystemHelper>.Instance),
             new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance),
-            NullLogger<FilesystemObjectDataStorage>.Instance, Mock.Of<IChunkedDataParser>());
+            NullLogger<FilesystemObjectDataStorage>.Instance);
     }
 
     private IObjectDataStorage Storage(bool memory) => memory
-        ? new InMemoryObjectDataStorage(Mock.Of<IChunkedDataParser>(), NullLogger<InMemoryObjectDataStorage>.Instance)
+        ? new InMemoryObjectDataStorage(NullLogger<InMemoryObjectDataStorage>.Instance)
         : Filesystem();
 
     private static async Task Store(IObjectDataStorage storage, params string[] keys)
@@ -47,7 +47,7 @@ public sealed class ListingRegressionTests : IDisposable
             var pipe = new Pipe();
             await pipe.Writer.WriteAsync(new byte[] { 1 });
             await pipe.Writer.CompleteAsync();
-            Assert.True((await storage.StoreDataAsync(Bucket, key, pipe.Reader, null, null)).IsSuccess);
+            await storage.StoreDataAsync(Bucket, key, pipe.Reader);
         }
     }
 

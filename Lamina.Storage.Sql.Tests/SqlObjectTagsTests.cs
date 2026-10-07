@@ -26,7 +26,7 @@ public class SqlObjectTagsTests : IDisposable
         dataStorageMock.Setup(x => x.GetDataInfoAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string _, string _, CancellationToken _) => (1024L, DateTime.UtcNow.AddMinutes(-10)));
 
-        _storage = new SqlObjectMetadataStorage(_context, dataStorageMock.Object, Mock.Of<ILogger<SqlObjectMetadataStorage>>());
+        _storage = new SqlObjectMetadataStorage(_context, Mock.Of<ILogger<SqlObjectMetadataStorage>>());
     }
 
     public void Dispose()
@@ -116,7 +116,7 @@ public class SqlObjectTagsTests : IDisposable
         await SeedObjectAsync("b", "k");
         await _storage.SetObjectTagsAsync("b", "k", new Dictionary<string, string> { { "env", "prod" } });
 
-        var info = await _storage.GetMetadataAsync("b", "k");
+        var info = (await _storage.GetMetadataAsync("b", "k"))?.Metadata;
 
         Assert.NotNull(info);
         Assert.Equal("prod", info.Tags["env"]);

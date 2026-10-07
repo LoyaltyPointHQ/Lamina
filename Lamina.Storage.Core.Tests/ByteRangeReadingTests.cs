@@ -26,7 +26,7 @@ public class ByteRangeReadingTests
     public ByteRangeReadingTests()
     {
         var mockChunkedDataParser = new Mock<IChunkedDataParser>();
-        _inMemoryStorage = new InMemoryObjectDataStorage(mockChunkedDataParser.Object, NullLogger<InMemoryObjectDataStorage>.Instance);
+        _inMemoryStorage = new InMemoryObjectDataStorage(NullLogger<InMemoryObjectDataStorage>.Instance);
         _metadataStorageMock = new Mock<IObjectMetadataStorage>();
         _bucketStorageMock = new Mock<IBucketStorageFacade>();
         _multipartUploadStorageMock = new Mock<IMultipartUploadStorageFacade>();
@@ -51,8 +51,8 @@ public class ByteRangeReadingTests
         await pipe.Writer.WriteAsync(data);
         await pipe.Writer.CompleteAsync();
 
-        var storeResult = await _inMemoryStorage.StoreDataAsync(bucketName, key, pipe.Reader, null, null, default);
-        Assert.True(storeResult.IsSuccess);
+        var storeResult = await _inMemoryStorage.StoreDataAsync(bucketName, key, pipe.Reader, default);
+        Assert.True(storeResult >= 0);
         return content;
     }
 
@@ -93,7 +93,7 @@ public class ByteRangeReadingTests
         var pipe = new Pipe();
 
         // Act
-        var writeTask = _inMemoryStorage.WriteDataToPipeAsync(bucketName, key, pipe.Writer, null, null, default);
+        var writeTask = _inMemoryStorage.WriteDataToPipeAsync(bucketName, key, pipe.Writer, default);
         var readTask = ReadFromPipeAsync(pipe.Reader);
 
         await writeTask;
@@ -376,7 +376,7 @@ public class ByteRangeReadingTests
 
         // Mock metadata storage
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, sourceKey, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((S3ObjectInfo?)null);
+            .ReturnsAsync((ObjectMetadataSnapshot?)null);
 
         _metadataStorageMock.Setup(x => x.IsValidObjectKey(It.IsAny<string>()))
             .Returns(true);

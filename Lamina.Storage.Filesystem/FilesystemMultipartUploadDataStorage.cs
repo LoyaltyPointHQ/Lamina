@@ -1,6 +1,5 @@
 using System.IO.Pipelines;
 using Lamina.Core.Models;
-using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Filesystem.Configuration;
@@ -44,363 +43,53 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage,
         }
     }
 
-    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
+    public async Task<StagedDataWrite> BeginPartWriteAsync(string bucketName, string key, string uploadId, int partNumber, CancellationToken cancellationToken = default)
     {
-        var partPath = GetPartPath(uploadId, partNumber);
-        var partDir = Path.GetDirectoryName(partPath)!;
-        await _networkHelper.EnsureDirectoryExistsAsync(partDir, $"StorePartData-{uploadId}/{partNumber}");
-
-        // Write to a private temp file and atomically rename it into place, mirroring the chunked
-        // overload below. This keeps the part write atomic w.r.t. concurrent readers: a parallel
-        // GetStoredPartsAsync (which recomputes ETag by opening the part file with FileShare.Read)
-        // would otherwise collide with the writer's exclusive FileShare.None handle on the final
-        // file and throw "the process cannot access the file ... being used by another process".
-        // Readers now only ever see a fully-written part_N.
-        var tempPath = Path.Combine(partDir, $".lamina-tmp-{Guid.NewGuid():N}");
-
-        long bytesWritten = 0;
-
-        // Initialize checksum calculator if needed
-        StreamingChecksumCalculator? checksumCalculator = null;
-        if (checksumRequest != null)
+        cancellationToken.ThrowIfCancellationRequested();
+        var directory = GetUploadDirectory(uploadId);
+        await _networkHelper.EnsureDirectoryExistsAsync(directory, $"StorePart-{uploadId}/{partNumber}");
+        var path = Path.Combine(directory, $".lamina-tmp-{Guid.NewGuid():N}");
+        var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true);
+        void Cleanup() => File.Delete(path);
+        return new StagedDataWrite(stream, size =>
         {
-            checksumCalculator = new StreamingChecksumCalculator(checksumRequest.Algorithm, checksumRequest.ProvidedChecksums);
-        }
-
-        try
-        {
-            // Write the data to the temp file, ensuring proper disposal before computing ETag
-            {
-                await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
-
-                // Use helper to write and calculate checksums in one pass
-                bytesWritten = await ChecksumStreamHelper.WriteDataWithChecksumsAsync(dataReader, fileStream, checksumCalculator, cancellationToken);
-
-                await fileStream.FlushAsync(cancellationToken);
-            } // FileStream is fully disposed here
-
-            var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
-
-            // AWS: if client sent Content-MD5, server MUST validate against the received bytes and
-            // return BadDigest on mismatch. We compare against the freshly-computed ETag (MD5 of the
-            // file we just wrote) and clean up the orphaned temp file on failure.
-            if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
-            {
-                TryDeletePartFile(tempPath);
-                return StorageResult<UploadPart>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
-            }
-
-            // Validate and finalize checksums if requested
-            if (checksumCalculator?.HasChecksums == true)
-            {
-                var result = checksumCalculator.Finish();
-
-                if (!result.IsValid)
-                {
-                    // Checksum validation failed - clean up and return null
-                    TryDeletePartFile(tempPath);
-                    return StorageResult<UploadPart>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
-                }
-
-                // Atomically promote the validated temp file to the final part location
-                File.Move(tempPath, partPath, overwrite: true);
-
-                // Populate checksum fields
-                var part = new UploadPart
-                {
-                    PartNumber = partNumber,
-                    ETag = etag,
-                    Size = bytesWritten,
-                    LastModified = DateTime.UtcNow
-                };
-
-                if (result.CalculatedChecksums.TryGetValue("CRC32", out var crc32))
-                    part.ChecksumCRC32 = crc32;
-                if (result.CalculatedChecksums.TryGetValue("CRC32C", out var crc32c))
-                    part.ChecksumCRC32C = crc32c;
-                if (result.CalculatedChecksums.TryGetValue("CRC64NVME", out var crc64))
-                    part.ChecksumCRC64NVME = crc64;
-                if (result.CalculatedChecksums.TryGetValue("SHA1", out var sha1))
-                    part.ChecksumSHA1 = sha1;
-                if (result.CalculatedChecksums.TryGetValue("SHA256", out var sha256))
-                    part.ChecksumSHA256 = sha256;
-
-                return StorageResult<UploadPart>.Success(part);
-            }
-            else
-            {
-                // No checksums requested - atomically promote the temp file to the final location
-                File.Move(tempPath, partPath, overwrite: true);
-
-                var part = new UploadPart
-                {
-                    PartNumber = partNumber,
-                    ETag = etag,
-                    Size = bytesWritten,
-                    LastModified = DateTime.UtcNow
-                };
-
-                return StorageResult<UploadPart>.Success(part);
-            }
-        }
-        catch
-        {
-            // Clean up the temp file on any unexpected error so we don't leak staging files.
-            if (File.Exists(tempPath))
-            {
-                TryDeletePartFile(tempPath);
-            }
-            throw;
-        }
-        finally
-        {
-            checksumCalculator?.Dispose();
-        }
+            var prepared = new PreparedData { BucketName = bucketName, Key = key, Size = size, Tag = path };
+            prepared.SetDisposeAction(Cleanup);
+            return prepared;
+        }, Cleanup);
     }
 
-    private void TryDeletePartFile(string partPath)
+    public async Task CommitPreparedPartAsync(string bucketName, string key, string uploadId, int partNumber, PreparedData preparedData, CancellationToken cancellationToken = default)
     {
-        try
-        {
-            if (File.Exists(partPath))
-            {
-                File.Delete(partPath);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to clean up rejected part file: {PartPath}", partPath);
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        await _networkHelper.AtomicMoveAsync(preparedData.Tag!, GetPartPath(uploadId, partNumber), overwrite: true);
     }
 
-    public async Task<StorageResult<UploadPart>> StorePartDataAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkedDataParser chunkedDataParser, IChunkSignatureValidator chunkValidator, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
+    public Task AbortPreparedPartAsync(PreparedData preparedData, CancellationToken cancellationToken = default)
     {
-        var partPath = GetPartPath(uploadId, partNumber);
-        var partDir = Path.GetDirectoryName(partPath)!;
-        await _networkHelper.EnsureDirectoryExistsAsync(partDir, $"StorePartDataChunked-{uploadId}/{partNumber}");
-
-        // Create a temporary file for validated data
-        var tempPath = Path.Combine(partDir, $".lamina-tmp-{Guid.NewGuid():N}");
-
-        // Initialize checksum calculator if needed
-        StreamingChecksumCalculator? checksumCalculator = null;
-        if (checksumRequest != null)
-        {
-            checksumCalculator = new StreamingChecksumCalculator(checksumRequest.Algorithm, checksumRequest.ProvidedChecksums);
-        }
-
-        try
-        {
-            ChunkedDataResult parseResult;
-
-            // Write validated chunks directly to temp file. When the validator expects trailers
-            // (AWS CLI v2 default mode: client delivers CRC64NVME in a trailer signalled by
-            // x-amz-trailer), use the trailer-aware parser variant so parseResult.Trailers is
-            // populated - otherwise the client-supplied checksum value is silently lost and we'd
-            // store only the server auto-computed digest, which later mismatches at GetObject.
-            {
-                await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true);
-                var onDataWritten = checksumCalculator?.HasChecksums == true
-                    ? (Action<ReadOnlySpan<byte>>)(data => checksumCalculator.Append(data))
-                    : null;
-                parseResult = chunkValidator.ExpectsTrailers
-                    ? await chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(dataReader, fileStream, chunkValidator, onDataWritten, cancellationToken)
-                    : await chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, fileStream, chunkValidator, onDataWritten, cancellationToken);
-                await fileStream.FlushAsync(cancellationToken);
-            } // FileStream is fully disposed here
-
-            // Feed client-delivered trailer checksums into the calculator so Finish() below can
-            // compare them against the server-computed hashes.
-            if (checksumCalculator != null && parseResult.Trailers.Count > 0)
-            {
-                TrailerChecksumMerger.MergeIntoCalculator(parseResult.Trailers, checksumCalculator);
-            }
-
-            // Check if validation succeeded
-            if (!parseResult.Success)
-            {
-                // Invalid chunk signature - clean up temp file and return null
-                _logger.LogWarning("Chunk signature validation failed for part {PartNumber} of upload {UploadId}: {Error}", partNumber, uploadId, parseResult.ErrorMessage);
-
-                if (File.Exists(tempPath))
-                {
-                    try
-                    {
-                        File.Delete(tempPath);
-                    }
-                    catch (Exception cleanupEx)
-                    {
-                        _logger.LogWarning(cleanupEx, "Failed to clean up temporary file: {TempPath}", tempPath);
-                    }
-                }
-
-                return StorageResult<UploadPart>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
-            }
-
-            // Finalize and validate checksums if they were calculated
-            if (checksumCalculator?.HasChecksums == true)
-            {
-                var result = checksumCalculator.Finish();
-
-                if (!result.IsValid)
-                {
-                    // Checksum validation failed - clean up temp file and return null
-                    _logger.LogWarning("Checksum validation failed for part {PartNumber} of upload {UploadId}: {Error}", partNumber, uploadId, result.ErrorMessage);
-
-                    if (File.Exists(tempPath))
-                    {
-                        try
-                        {
-                            File.Delete(tempPath);
-                        }
-                        catch (Exception cleanupEx)
-                        {
-                            _logger.LogWarning(cleanupEx, "Failed to clean up temporary file: {TempPath}", tempPath);
-                        }
-                    }
-
-                    return StorageResult<UploadPart>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
-                }
-
-                // Compute ETag from the temp file
-                var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
-
-                if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
-                {
-                    TryDeletePartFile(tempPath);
-                    return StorageResult<UploadPart>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
-                }
-
-                // Atomically move temp file to final location
-                File.Move(tempPath, partPath, overwrite: true);
-
-                var part = new UploadPart
-                {
-                    PartNumber = partNumber,
-                    ETag = etag,
-                    Size = parseResult.TotalBytesWritten,
-                    LastModified = DateTime.UtcNow
-                };
-
-                // Populate checksum fields
-                if (result.CalculatedChecksums.TryGetValue("CRC32", out var crc32))
-                    part.ChecksumCRC32 = crc32;
-                if (result.CalculatedChecksums.TryGetValue("CRC32C", out var crc32c))
-                    part.ChecksumCRC32C = crc32c;
-                if (result.CalculatedChecksums.TryGetValue("CRC64NVME", out var crc64))
-                    part.ChecksumCRC64NVME = crc64;
-                if (result.CalculatedChecksums.TryGetValue("SHA1", out var sha1))
-                    part.ChecksumSHA1 = sha1;
-                if (result.CalculatedChecksums.TryGetValue("SHA256", out var sha256))
-                    part.ChecksumSHA256 = sha256;
-
-                return StorageResult<UploadPart>.Success(part);
-            }
-            else
-            {
-                // No checksums requested
-                var etag = await ETagHelper.ComputeETagFromFileAsync(tempPath);
-
-                if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
-                {
-                    TryDeletePartFile(tempPath);
-                    return StorageResult<UploadPart>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
-                }
-
-                // Atomically move temp file to final location
-                File.Move(tempPath, partPath, overwrite: true);
-
-                var part = new UploadPart
-                {
-                    PartNumber = partNumber,
-                    ETag = etag,
-                    Size = parseResult.TotalBytesWritten,
-                    LastModified = DateTime.UtcNow
-                };
-
-                return StorageResult<UploadPart>.Success(part);
-            }
-        }
-        catch
-        {
-            // Clean up temp file on any other error
-            if (File.Exists(tempPath))
-            {
-                try
-                {
-                    File.Delete(tempPath);
-                }
-                catch (Exception cleanupEx)
-                {
-                    _logger.LogWarning(cleanupEx, "Failed to clean up temporary file: {TempPath}", tempPath);
-                }
-            }
-
-            throw;
-        }
-        finally
-        {
-            checksumCalculator?.Dispose();
-        }
+        preparedData.Dispose();
+        return Task.CompletedTask;
     }
 
     public async Task<IEnumerable<PipeReader>> GetPartReadersAsync(string bucketName, string key, string uploadId, List<CompletedPart> parts, CancellationToken cancellationToken = default)
     {
-        var orderedParts = parts.OrderBy(p => p.PartNumber).ToList();
         var readers = new List<PipeReader>();
-
-        foreach (var part in orderedParts)
+        try
         {
-            var partPath = GetPartPath(uploadId, part.PartNumber);
-            if (!File.Exists(partPath))
+            foreach (var part in parts.OrderBy(p => p.PartNumber))
             {
-                // Clean up any readers we've already created
-                foreach (var reader in readers)
-                {
-                    await reader.CompleteAsync();
-                }
-                _logger.LogWarning("Part file not found for upload {UploadId}, part {PartNumber}", uploadId, part.PartNumber);
-                return Enumerable.Empty<PipeReader>();
+                cancellationToken.ThrowIfCancellationRequested();
+                var stream = new FileStream(GetPartPath(uploadId, part.PartNumber), FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 81920, true);
+                readers.Add(PipeReader.Create(stream));
             }
-
-            // ETag was already validated by the Complete facade against the client's request (using the
-            // persisted server-computed ETag from upload metadata). Recomputing it here would re-read
-            // every part file once more - pure network overhead on CIFS/NFS with no new safety signal
-            // (TOCTOU window between facade check and here is microseconds).
-
-            // Create a pipe for this part
-            var pipe = new Pipe();
-            var writer = pipe.Writer;
-
-            // Start streaming the part file to the pipe in the background
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    // Use FileShare.Read to allow concurrent reads for ETag verification
-                    await using var fileStream = new FileStream(partPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 4096, useAsync: true);
-                    const int bufferSize = 4096;
-
-                    int bytesRead;
-                    while ((bytesRead = await fileStream.ReadAsync(writer.GetMemory(bufferSize), cancellationToken)) > 0)
-                    {
-                        writer.Advance(bytesRead);
-                        await writer.FlushAsync(cancellationToken);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    await writer.CompleteAsync(ex);
-                    return;
-                }
-
-                await writer.CompleteAsync();
-            }, cancellationToken);
-
-            readers.Add(pipe.Reader);
+            return readers;
         }
-
-        return readers;
+        catch (Exception error)
+        {
+            foreach (var reader in readers) await reader.CompleteAsync();
+            if (error is FileNotFoundException or DirectoryNotFoundException) return Array.Empty<PipeReader>();
+            throw;
+        }
     }
 
     public Task<bool> DeleteAllPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
@@ -461,7 +150,7 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage,
         return Task.FromResult(exists);
     }
 
-    public async Task<List<UploadPart>> GetStoredPartsAsync(string bucketName, string key, string uploadId, IReadOnlyDictionary<int, PartMetadata>? knownMetadata = null, CancellationToken cancellationToken = default)
+    public Task<List<UploadPart>> GetStoredPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
     {
         var uploadDir = _metadataMode == MetadataStorageMode.SeparateDirectory
             ? Path.Combine(_metadataDirectory!, "_multipart_uploads", uploadId)
@@ -470,7 +159,7 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage,
 
         if (!Directory.Exists(uploadDir))
         {
-            return parts;
+            return Task.FromResult(parts);
         }
 
         // Get all part data files (without .metadata.json extension)
@@ -488,27 +177,10 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage,
                 {
                     var fileInfo = new FileInfo(partFile);
 
-                    // Prefer the ETag that was computed server-side during UploadPart and persisted in
-                    // upload metadata. Recomputing it here would re-read the entire part file - a full
-                    // network round-trip on CIFS/NFS for every Complete call. Fall back to recompute
-                    // only when metadata is absent (e.g. old upload from before this was persisted, or
-                    // metadata file was deleted out-of-band).
-                    string etag;
-                    if (knownMetadata is not null
-                        && knownMetadata.TryGetValue(partNumber, out var partMeta)
-                        && !string.IsNullOrEmpty(partMeta.ETag))
-                    {
-                        etag = partMeta.ETag;
-                    }
-                    else
-                    {
-                        etag = await ETagHelper.ComputeETagFromFileAsync(partFile);
-                    }
-
                     var part = new UploadPart
                     {
                         PartNumber = partNumber,
-                        ETag = etag,
+                        ETag = string.Empty,
                         Size = fileInfo.Length,
                         LastModified = fileInfo.LastWriteTimeUtc
                     };
@@ -522,7 +194,7 @@ public class FilesystemMultipartUploadDataStorage : IMultipartUploadDataStorage,
             }
         }
 
-        return parts.OrderBy(p => p.PartNumber).ToList();
+        return Task.FromResult(parts.OrderBy(p => p.PartNumber).ToList());
     }
 
     private string GetPartPath(string uploadId, int partNumber)

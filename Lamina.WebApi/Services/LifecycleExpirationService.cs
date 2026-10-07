@@ -93,7 +93,7 @@ public class LifecycleExpirationService : BackgroundService
             if (cancellationToken.IsCancellationRequested) break;
             if (b != bucketName) continue;
 
-            var info = await metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
+            var info = await objectStorage.GetObjectInfoAsync(bucketName, key, cancellationToken);
             if (info == null) continue;
 
             foreach (var rule in rules)

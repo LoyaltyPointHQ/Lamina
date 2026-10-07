@@ -18,6 +18,7 @@ public class ObjectStorageFacadeBatchMetadataTests
     public ObjectStorageFacadeBatchMetadataTests()
     {
         _mockDataStorage = new Mock<IObjectDataStorage>();
+        _mockDataStorage.Setup(x => x.GetDataInfoAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync((10L, DateTime.UnixEpoch));
         _mockMetadataStorage = new Mock<IObjectMetadataStorage>();
         _mockBucketStorage = new Mock<IBucketStorageFacade>();
         _mockMultipartStorage = new Mock<IMultipartUploadStorageFacade>();
@@ -49,7 +50,7 @@ public class ObjectStorageFacadeBatchMetadataTests
         var keys = new[] { "a.txt", "b.txt", "c.txt" };
         var batchResult = keys.ToDictionary(
             k => k,
-            k => (S3ObjectInfo?)new S3ObjectInfo { Key = k, ETag = "etag", Size = 10 });
+            k => (ObjectMetadataSnapshot?)new ObjectMetadataSnapshot(new S3ObjectInfo { Key = k, ETag = "etag", Size = 10 }, DateTime.MaxValue));
 
         _mockMetadataStorage
             .As<IBatchObjectMetadataStorage>()
@@ -78,7 +79,7 @@ public class ObjectStorageFacadeBatchMetadataTests
         _mockMetadataStorage
             .Setup(x => x.GetMetadataAsync("test-bucket", It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string _, string key, CancellationToken _) =>
-                new S3ObjectInfo { Key = key, ETag = "etag", Size = 10 });
+                new ObjectMetadataSnapshot(new S3ObjectInfo { Key = key, ETag = "etag", Size = 10 }, DateTime.MaxValue));
 
         var facade = BuildFacade();
         var result = await facade.ListObjectsAsync("test-bucket");

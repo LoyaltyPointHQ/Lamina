@@ -37,7 +37,7 @@ public class SqlObjectMetadataStorageTests : IDisposable
                 return (1024L, DateTime.UtcNow.AddMinutes(-10));
             });
 
-        _storage = new SqlObjectMetadataStorage(_context, _dataStorageMock.Object, _loggerMock.Object);
+        _storage = new SqlObjectMetadataStorage(_context, _loggerMock.Object);
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class SqlObjectMetadataStorageTests : IDisposable
         Assert.Equal(size2, result.Size);
 
         // Verify only one object exists
-        var metadata = await _storage.GetMetadataAsync(bucketName, key);
+        var metadata = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
         Assert.NotNull(metadata);
         Assert.Equal(etag2, metadata.ETag);
         Assert.Equal(size2, metadata.Size);
@@ -108,7 +108,7 @@ public class SqlObjectMetadataStorageTests : IDisposable
         await _storage.StoreMetadataAsync(bucketName, key, etag, size, null, null);
 
         // Act
-        var result = await _storage.GetMetadataAsync(bucketName, key);
+        var result = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
 
         // Assert
         Assert.NotNull(result);
@@ -121,7 +121,7 @@ public class SqlObjectMetadataStorageTests : IDisposable
     public async Task GetMetadataAsync_NonExistentObject_ReturnsNull()
     {
         // Act
-        var result = await _storage.GetMetadataAsync("bucket", "non-existent");
+        var result = (await _storage.GetMetadataAsync("bucket", "non-existent"))?.Metadata;
 
         // Assert
         Assert.Null(result);
@@ -142,7 +142,7 @@ public class SqlObjectMetadataStorageTests : IDisposable
         Assert.True(result);
 
         // Verify deletion
-        var metadata = await _storage.GetMetadataAsync(bucketName, key);
+        var metadata = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
         Assert.Null(metadata);
     }
 

@@ -12,7 +12,8 @@ public interface IObjectMetadataStorage
     /// filesystem backend falls back to FileInfo.LastWriteTimeUtc of the data file.
     /// </summary>
     Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, DateTime? lastModified = null, CancellationToken cancellationToken = default);
-    Task<S3ObjectInfo?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    Task<ObjectMetadataSnapshot?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default);
+    Task<bool> UpdateIntegrityAsync(string bucketName, string key, string etag, long size, DateTime lastModified, Dictionary<string, string> checksums, CancellationToken cancellationToken = default);
     Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     Task<bool> MetadataExistsAsync(string bucketName, string key, CancellationToken cancellationToken = default);
     IAsyncEnumerable<(string bucketName, string key)> ListAllMetadataKeysAsync(CancellationToken cancellationToken = default);

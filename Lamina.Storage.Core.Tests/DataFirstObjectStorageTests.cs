@@ -25,6 +25,7 @@ public class DataFirstObjectStorageTests
     public DataFirstObjectStorageTests()
     {
         _dataStorageMock = new Mock<IObjectDataStorage>();
+        _dataStorageMock.Setup(x => x.GetDataInfoAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync((100L, DateTime.UnixEpoch));
         _metadataStorageMock = new Mock<IObjectMetadataStorage>();
         _bucketStorageMock = new Mock<IBucketStorageFacade>();
         _multipartUploadStorageMock = new Mock<IMultipartUploadStorageFacade>();
@@ -83,11 +84,11 @@ public class DataFirstObjectStorageTests
 
         // But metadata doesn't exist
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, key, default))
-            .ReturnsAsync((S3ObjectInfo?)null);
+            .ReturnsAsync((ObjectMetadataSnapshot?)null);
 
         // Setup the ComputeETagAsync method
-        _dataStorageMock.Setup(x => x.ComputeETagAsync(bucketName, key, default))
-            .ReturnsAsync(expectedEtag);
+        _dataStorageMock.Setup(x => x.OpenReadAsync(bucketName, key, default))
+            .ReturnsAsync(() => (Stream)new MemoryStream(testData));
 
         // Act
         var objectInfo = await _facade.GetObjectInfoAsync(bucketName, key);
@@ -140,26 +141,26 @@ public class DataFirstObjectStorageTests
 
         // Setup metadata for first file (with metadata)
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "file-with-metadata.txt", default))
-            .ReturnsAsync(new S3ObjectInfo
+            .ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo
             {
                 Key = "file-with-metadata.txt",
                 Size = 100,
                 LastModified = DateTime.UtcNow,
                 ETag = "etag1",
                 ContentType = "text/plain"
-            });
+            }, DateTime.MaxValue));
 
         // Setup metadata for second file (without metadata - returns null)
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "file-without-metadata.txt", default))
-            .ReturnsAsync((S3ObjectInfo?)null);
+            .ReturnsAsync((ObjectMetadataSnapshot?)null);
 
         // Setup info for file without metadata
         _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, "file-without-metadata.txt", default))
             .ReturnsAsync((200L, DateTime.UtcNow));
 
         // Setup the ComputeETagAsync method for file without metadata
-        _dataStorageMock.Setup(x => x.ComputeETagAsync(bucketName, "file-without-metadata.txt", default))
-            .ReturnsAsync(expectedEtag);
+        _dataStorageMock.Setup(x => x.OpenReadAsync(bucketName, "file-without-metadata.txt", default))
+            .ReturnsAsync(() => (Stream)new MemoryStream(testData));
 
         // Act
         var response = await _facade.ListObjectsAsync(bucketName, null);
@@ -241,11 +242,11 @@ public class DataFirstObjectStorageTests
 
             // But metadata doesn't exist
             _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, key, default))
-                .ReturnsAsync((S3ObjectInfo?)null);
+                .ReturnsAsync((ObjectMetadataSnapshot?)null);
 
             // Setup the ComputeETagAsync method
-            _dataStorageMock.Setup(x => x.ComputeETagAsync(bucketName, key, default))
-                .ReturnsAsync(expectedEtag);
+            _dataStorageMock.Setup(x => x.OpenReadAsync(bucketName, key, default))
+                .ReturnsAsync(() => (Stream)new MemoryStream(testData));
 
             // Act
             var objectInfo = await _facade.GetObjectInfoAsync(bucketName, key);
@@ -292,14 +293,14 @@ public class DataFirstObjectStorageTests
 
         // Setup metadata for completed object
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "uploads/completed/file.txt", default))
-            .ReturnsAsync(new S3ObjectInfo
+            .ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo
             {
                 Key = "uploads/completed/file.txt",
                 Size = 100,
                 LastModified = DateTime.UtcNow,
                 ETag = "etag1",
                 ContentType = "text/plain"
-            });
+            }, DateTime.MaxValue));
 
         // Act
         var request = new ListObjectsRequest { Prefix = prefix, Delimiter = delimiter };
@@ -350,14 +351,14 @@ public class DataFirstObjectStorageTests
 
         // Setup metadata for completed object
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "folder/file.txt", default))
-            .ReturnsAsync(new S3ObjectInfo
+            .ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo
             {
                 Key = "folder/file.txt",
                 Size = 100,
                 LastModified = DateTime.UtcNow,
                 ETag = "etag1",
                 ContentType = "text/plain"
-            });
+            }, DateTime.MaxValue));
 
         // Act
         var request = new ListObjectsRequest { Delimiter = delimiter };
@@ -409,14 +410,14 @@ public class DataFirstObjectStorageTests
 
         // Setup metadata for completed object
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "file1.txt", default))
-            .ReturnsAsync(new S3ObjectInfo
+            .ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo
             {
                 Key = "file1.txt",
                 Size = 100,
                 LastModified = DateTime.UtcNow,
                 ETag = "etag1",
                 ContentType = "text/plain"
-            });
+            }, DateTime.MaxValue));
 
         // Act
         var response = await _facade.ListObjectsAsync(bucketName, null);
@@ -514,14 +515,14 @@ public class DataFirstObjectStorageTests
 
         // Setup metadata for completed object
         _metadataStorageMock.Setup(x => x.GetMetadataAsync(bucketName, "folder/completed.txt", default))
-            .ReturnsAsync(new S3ObjectInfo
+            .ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo
             {
                 Key = "folder/completed.txt",
                 Size = 100,
                 LastModified = DateTime.UtcNow,
                 ETag = "etag1",
                 ContentType = "text/plain"
-            });
+            }, DateTime.MaxValue));
 
         // Act
         var request = new ListObjectsRequest { Delimiter = delimiter };

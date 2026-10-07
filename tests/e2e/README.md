@@ -7,8 +7,7 @@ MinIO Client (`mc`, not Midnight Commander)**.
 
 These are compatibility tests, **not an assertion that every supported operation
 currently works**. Product failures remain failures; no `xfail`, disabled checksum
-validation or automatic compatibility fallback. Production code is unchanged.
-See [known failures](KNOWN_FAILURES.md).
+validation or automatic compatibility fallback.
 
 ## Run
 
@@ -101,7 +100,8 @@ profile. Modern Linux tmpfs supports `user.*` xattrs; `/tmp` need not be tmpfs.
 - **S3 contract:** bucket lifecycle and errors, CRUD/overwrite/idempotent deletion,
   MD5 ETags, ranges, conditional GET/HEAD, V1/V2 pagination and delimiters,
   UTF-8 ordering, start-after, batch delete, same/cross-bucket copy, metadata,
-  tagging/directives, lifecycle CRUD and validation, explicit CRC32/SHA1/SHA256,
+  tagging/directives, lifecycle CRUD and validation, explicit CRC32/SHA1/SHA256
+  checked on GET/HEAD and after CopyObject,
   rejected Content-MD5, presigned PUT/GET, concurrent independent objects.
 - **Opaque upload bodies:** boto3/presigned PutObject and presigned UploadPart
   preserve raw bytes for URL-encoded Content-Type (with/without charset),
@@ -115,8 +115,10 @@ profile. Modern Linux tmpfs supports `user.*` xattrs; `/tmp` need not be tmpfs.
   deterministic V2 pagination, combined prefix/object page limits, invalid
   arguments and the V1 `d1:` marker extension. Not AWS S3 Express CreateSession.
 - **Storage:** direct filesystem add/change/delete with metadata refresh,
+  repeated GET/HEAD after external changes verifying refreshed SHA256/ETag and
+  preserved user metadata/tags/content type,
   exclusion of internal files/directories, empty-directory deletion semantics;
-  process restart preserving object bytes, metadata, tags, lifecycle and an
+  process restart preserving object bytes, checksums, metadata, tags, lifecycle and an
   incomplete multipart upload that is completed after restart.
 
 All selected profiles execute the same client/API cases. Only direct filesystem

@@ -2,29 +2,12 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
-using Lamina.Storage.Core.Helpers;
 
 namespace Lamina.Storage.InMemory;
 
 public class InMemoryObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMetadataStorage
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, S3Object>> _metadata = new();
-    private readonly IObjectDataStorage? _dataStorage;
-
-    /// <summary>
-    /// Parameterless constructor kept for tests that exercise metadata in isolation. When no
-    /// data storage is injected, staleness detection against an external data backend is
-    /// disabled - metadata is assumed to be the source of truth.
-    /// </summary>
-    public InMemoryObjectMetadataStorage()
-    {
-    }
-
-    public InMemoryObjectMetadataStorage(IObjectDataStorage dataStorage)
-    {
-        _dataStorage = dataStorage;
-    }
-
     public Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, DateTime? lastModified = null, CancellationToken cancellationToken = default)
     {
         // Bucket existence validation is handled by the facade layer
@@ -38,8 +21,8 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage, IBatchObjec
             LastModified = lastModified ?? DateTime.UtcNow,
             ETag = etag,
             ContentType = string.IsNullOrEmpty(request?.ContentType) ? "application/octet-stream" : request.ContentType,
-            Metadata = request?.Metadata ?? new Dictionary<string, string>(),
-            Tags = request?.Tags ?? new Dictionary<string, string>(),
+            Metadata = request?.Metadata is { } metadata ? new(metadata) : new(),
+            Tags = request?.Tags is { } tags ? new(tags) : new(),
             OwnerId = request?.OwnerId,
             OwnerDisplayName = request?.OwnerDisplayName
         };
@@ -72,76 +55,30 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage, IBatchObjec
         return Task.FromResult<S3Object?>(s3Object);
     }
 
-    public async Task<S3ObjectInfo?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public Task<ObjectMetadataSnapshot?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        if (!_metadata.TryGetValue(bucketName, out var bucketMetadata) ||
-            !bucketMetadata.TryGetValue(key, out var s3Object))
-        {
-            return null;
-        }
-
-        // If a data backend is wired in, honour data-first: verify data exists and check
-        // whether it has moved past the timestamp we stored metadata for. Useful for hybrid
-        // setups (e.g. InMemory metadata + Filesystem data) where the data file can be
-        // modified outside the API.
-        if (_dataStorage != null)
-        {
-            var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-            if (dataInfo == null)
-            {
-                return null; // orphaned metadata
-            }
-
-            if (dataInfo.Value.lastModified > s3Object.LastModified)
-            {
-                var algorithms = CollectStoredChecksumAlgorithms(s3Object);
-
-                var (computedETag, checksums) = await _dataStorage.ComputeETagAndChecksumsAsync(bucketName, key, algorithms, cancellationToken);
-
-                // Preserve multipart ETags: recomputing from the merged bytes would yield MD5-of-full-file.
-                var etag = ETagHelper.IsMultipartETag(s3Object.ETag)
-                    ? s3Object.ETag
-                    : computedETag ?? s3Object.ETag;
-
-                s3Object.ETag = etag;
-                s3Object.Size = dataInfo.Value.size;
-                s3Object.LastModified = dataInfo.Value.lastModified;
-                s3Object.ChecksumCRC32 = checksums.GetValueOrDefault("CRC32");
-                s3Object.ChecksumCRC32C = checksums.GetValueOrDefault("CRC32C");
-                s3Object.ChecksumCRC64NVME = checksums.GetValueOrDefault("CRC64NVME");
-                s3Object.ChecksumSHA1 = checksums.GetValueOrDefault("SHA1");
-                s3Object.ChecksumSHA256 = checksums.GetValueOrDefault("SHA256");
-            }
-        }
-
-        return new S3ObjectInfo
-        {
-            Key = s3Object.Key,
-            LastModified = s3Object.LastModified,
-            ETag = s3Object.ETag,
-            Size = s3Object.Size,
-            ContentType = s3Object.ContentType,
-            Metadata = s3Object.Metadata,
-            Tags = s3Object.Tags,
-            OwnerId = s3Object.OwnerId,
-            OwnerDisplayName = s3Object.OwnerDisplayName,
-            ChecksumCRC32 = s3Object.ChecksumCRC32,
-            ChecksumCRC32C = s3Object.ChecksumCRC32C,
-            ChecksumCRC64NVME = s3Object.ChecksumCRC64NVME,
-            ChecksumSHA1 = s3Object.ChecksumSHA1,
-            ChecksumSHA256 = s3Object.ChecksumSHA256
-        };
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_metadata.TryGetValue(bucketName, out var bucket) && bucket.TryGetValue(key, out var value)
+            ? Snapshot(value) : null);
     }
 
-    private static List<string> CollectStoredChecksumAlgorithms(S3Object s3Object)
+    public Task<bool> UpdateIntegrityAsync(string bucketName, string key, string etag, long size, DateTime lastModified, Dictionary<string, string> checksums, CancellationToken cancellationToken = default)
     {
-        var list = new List<string>();
-        if (!string.IsNullOrEmpty(s3Object.ChecksumCRC32)) list.Add("CRC32");
-        if (!string.IsNullOrEmpty(s3Object.ChecksumCRC32C)) list.Add("CRC32C");
-        if (!string.IsNullOrEmpty(s3Object.ChecksumCRC64NVME)) list.Add("CRC64NVME");
-        if (!string.IsNullOrEmpty(s3Object.ChecksumSHA1)) list.Add("SHA1");
-        if (!string.IsNullOrEmpty(s3Object.ChecksumSHA256)) list.Add("SHA256");
-        return list;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_metadata.TryGetValue(bucketName, out var bucket) || !bucket.TryGetValue(key, out var value))
+            return Task.FromResult(false);
+        lock (value)
+        {
+            value.ETag = etag;
+            value.Size = size;
+            value.LastModified = lastModified;
+            value.ChecksumCRC32 = checksums.GetValueOrDefault("CRC32");
+            value.ChecksumCRC32C = checksums.GetValueOrDefault("CRC32C");
+            value.ChecksumCRC64NVME = checksums.GetValueOrDefault("CRC64NVME");
+            value.ChecksumSHA1 = checksums.GetValueOrDefault("SHA1");
+            value.ChecksumSHA256 = checksums.GetValueOrDefault("SHA256");
+        }
+        return Task.FromResult(true);
     }
 
     public Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
@@ -210,21 +147,27 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage, IBatchObjec
         return Task.FromResult(true);
     }
 
-    public Task<Dictionary<string, S3ObjectInfo?>> GetMetadataBatchAsync(
+    public Task<Dictionary<string, ObjectMetadataSnapshot?>> GetMetadataBatchAsync(
         string bucketName,
         IEnumerable<string> keys,
         CancellationToken cancellationToken = default)
     {
-        var result = new Dictionary<string, S3ObjectInfo?>();
+        var result = new Dictionary<string, ObjectMetadataSnapshot?>();
         _metadata.TryGetValue(bucketName, out var bucketMeta);
         foreach (var key in keys)
         {
-            S3ObjectInfo? info = null;
+            ObjectMetadataSnapshot? info = null;
             if (bucketMeta != null && bucketMeta.TryGetValue(key, out var s3Object))
-                info = MapToInfo(s3Object);
+                info = Snapshot(s3Object);
             result[key] = info;
         }
         return Task.FromResult(result);
+    }
+
+    private static ObjectMetadataSnapshot Snapshot(S3Object value)
+    {
+        lock (value)
+            return new ObjectMetadataSnapshot(MapToInfo(value), value.LastModified);
     }
 
     private static S3ObjectInfo MapToInfo(S3Object s3Object) => new()
@@ -234,8 +177,8 @@ public class InMemoryObjectMetadataStorage : IObjectMetadataStorage, IBatchObjec
         ETag = s3Object.ETag,
         Size = s3Object.Size,
         ContentType = s3Object.ContentType,
-        Metadata = s3Object.Metadata,
-        Tags = s3Object.Tags,
+        Metadata = new(s3Object.Metadata),
+        Tags = new(s3Object.Tags),
         OwnerId = s3Object.OwnerId,
         OwnerDisplayName = s3Object.OwnerDisplayName,
         ChecksumCRC32 = s3Object.ChecksumCRC32,

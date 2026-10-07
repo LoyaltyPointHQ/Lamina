@@ -3,7 +3,6 @@ using System.Text.Json;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Configuration;
-using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.Filesystem.Locking;
 using Microsoft.Extensions.Caching.Memory;
@@ -111,6 +110,7 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
         var metadata = new S3ObjectMetadata
         {
             BucketName = bucketName,
+            Size = size,
             ETag = etag,
             LastModified = resolvedLastModified,
             ContentType = string.IsNullOrEmpty(request?.ContentType) ? "application/octet-stream" : request.ContentType,
@@ -165,129 +165,39 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
             ChecksumSHA256 = metadata.ChecksumSHA256
         };
 
-        var objectInfo = new S3ObjectInfo
-        {
-            Key = key,
-            Size = size,
-            LastModified = resolvedLastModified,
-            ETag = etag,
-            ContentType = metadata.ContentType,
-            Metadata = metadata.Metadata,
-            Tags = metadata.Tags,
-            OwnerId = metadata.OwnerId,
-            OwnerDisplayName = metadata.OwnerDisplayName,
-            ChecksumCRC32 = metadata.ChecksumCRC32,
-            ChecksumCRC32C = metadata.ChecksumCRC32C,
-            ChecksumCRC64NVME = metadata.ChecksumCRC64NVME,
-            ChecksumSHA1 = metadata.ChecksumSHA1,
-            ChecksumSHA256 = metadata.ChecksumSHA256
-        };
-        await CacheObjectInfoAsync(bucketName, key, objectInfo, cancellationToken);
+        // Do not warm the cache from request values after releasing the write lock:
+        // a concurrent metadata update may already have committed a newer version.
+        InvalidateCache(bucketName, key);
 
         return s3Object;
     }
 
-    public async Task<S3ObjectInfo?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public async Task<ObjectMetadataSnapshot?> GetMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        var cacheKey = GetCacheKey(bucketName, key);
-        var metadataPath = GetMetadataPath(bucketName, key);
-
-        // Try to get from cache
-        if (_cache?.TryGetValue<CachedObjectInfo>(cacheKey, out var cachedEntry) == true && cachedEntry != null)
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = GetMetadataPath(bucketName, key);
+        if (!File.Exists(path)) { InvalidateCache(bucketName, key); return null; }
+        if (_cache?.TryGetValue<CachedObjectInfo>(GetCacheKey(bucketName, key), out var cached) == true && cached != null
+            && File.GetLastWriteTimeUtc(path) == cached.MetadataFileLastModified)
+            return new ObjectMetadataSnapshot(ObjectMetadataSnapshot.CloneMetadata(cached.ObjectInfo),
+                cached.ObjectInfo.LastModified == default ? null : cached.ObjectInfo.LastModified);
+        DateTime metadataFileLastModified = default;
+        var metadata = await _lockManager.ReadFileAsync(path, content =>
         {
-            // Validate staleness of the metadata file itself (mtime on our own store is fine)
-            if (File.Exists(metadataPath))
-            {
-                var currentMtime = File.GetLastWriteTimeUtc(metadataPath);
-                if (currentMtime <= cachedEntry.MetadataFileLastModified)
-                {
-                    // Metadata JSON unchanged - still need to confirm the data hasn't drifted
-                    var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-                    if (dataInfo.HasValue)
-                    {
-                        if (dataInfo.Value.lastModified <= cachedEntry.ObjectInfo.LastModified)
-                        {
-                            _logger.LogDebug("Cache hit for object {Key} in bucket {BucketName}", key, bucketName);
-                            return cachedEntry.ObjectInfo;
-                        }
-                        _logger.LogDebug("Data file modified for cached object {Key} in bucket {BucketName}, recomputing", key, bucketName);
-                        _cache.Remove(cacheKey);
-                    }
-                    else
-                    {
-                        _logger.LogDebug("Data no longer exists for cached object {Key} in bucket {BucketName}", key, bucketName);
-                        _cache.Remove(cacheKey);
-                        return null;
-                    }
-                }
-                else
-                {
-                    _logger.LogDebug("Stale cache entry detected for object {Key} in bucket {BucketName} (file mtime: {FileTime}, cache mtime: {CacheTime})",
-                        key, bucketName, currentMtime, cachedEntry.MetadataFileLastModified);
-                    _cache.Remove(cacheKey);
-                }
-            }
-            else
-            {
-                _logger.LogDebug("Metadata file no longer exists for cached object {Key} in bucket {BucketName}, removing from cache", key, bucketName);
-                _cache.Remove(cacheKey);
-            }
-        }
-
-        _logger.LogDebug("Cache miss for object {Key} in bucket {BucketName}", key, bucketName);
-
-        if (!File.Exists(metadataPath))
-        {
-            return null;
-        }
-
-        var dataInfoAfterMiss = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-        if (!dataInfoAfterMiss.HasValue)
-        {
-            _logger.LogWarning("Found orphaned metadata without data for key {Key} in bucket {BucketName}, cleaning up", key, bucketName);
-            await DeleteMetadataAsync(bucketName, key, cancellationToken);
-            return null;
-        }
-
-        var metadata = await _lockManager.ReadFileAsync(metadataPath, content =>
-            Task.FromResult(JsonSerializer.Deserialize<S3ObjectMetadata>(content)), cancellationToken);
-
-        if (metadata == null)
-        {
-            return null;
-        }
-
-        // Size and last-modified are authoritative from the data backend (data-first).
-        var dataLastModified = dataInfoAfterMiss.Value.lastModified;
-        var dataSize = dataInfoAfterMiss.Value.size;
-
-        if (dataLastModified > metadata.LastModified)
-        {
-            _logger.LogInformation("Detected stale metadata for {Key} in bucket {BucketName} (data mtime: {DataTime}, metadata mtime: {MetadataTime}), recomputing checksums",
-                key, bucketName, dataLastModified, metadata.LastModified);
-
-            var recomputed = await RecomputeStaleMetadataAsync(bucketName, key, metadata, cancellationToken);
-            metadata.ETag = recomputed.etag;
-            metadata.ChecksumCRC32 = recomputed.checksums.GetValueOrDefault("CRC32");
-            metadata.ChecksumCRC32C = recomputed.checksums.GetValueOrDefault("CRC32C");
-            metadata.ChecksumCRC64NVME = recomputed.checksums.GetValueOrDefault("CRC64NVME");
-            metadata.ChecksumSHA1 = recomputed.checksums.GetValueOrDefault("SHA1");
-            metadata.ChecksumSHA256 = recomputed.checksums.GetValueOrDefault("SHA256");
-            metadata.LastModified = dataLastModified;
-
-            var updatedJson = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
-            await _lockManager.WriteFileAsync(metadataPath, updatedJson, cancellationToken);
-        }
-
-        var objectInfo = new S3ObjectInfo
+            // The payload and its version must be observed under the same reader lock.
+            metadataFileLastModified = File.GetLastWriteTimeUtc(path);
+            return Task.FromResult(JsonSerializer.Deserialize<S3ObjectMetadata>(content));
+        }, cancellationToken);
+        if (metadata == null) return null;
+        var info = new S3ObjectInfo
         {
             Key = key,
-            LastModified = dataLastModified,
+            Size = metadata.Size,
+            LastModified = metadata.LastModified,
             ETag = metadata.ETag,
-            Size = dataSize,
             ContentType = metadata.ContentType,
-            Metadata = metadata.Metadata,
-            Tags = metadata.Tags,
+            Metadata = new(metadata.Metadata),
+            Tags = new(metadata.Tags),
             OwnerId = metadata.OwnerId,
             OwnerDisplayName = metadata.OwnerDisplayName,
             ChecksumCRC32 = metadata.ChecksumCRC32,
@@ -296,10 +206,28 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
             ChecksumSHA1 = metadata.ChecksumSHA1,
             ChecksumSHA256 = metadata.ChecksumSHA256
         };
+        CacheObjectInfo(bucketName, key, info, metadataFileLastModified);
+        return new ObjectMetadataSnapshot(info, metadata.LastModified == default ? null : metadata.LastModified);
+    }
 
-        await CacheObjectInfoAsync(bucketName, key, objectInfo, cancellationToken);
-
-        return objectInfo;
+    public async Task<bool> UpdateIntegrityAsync(string bucketName, string key, string etag, long size, DateTime lastModified, Dictionary<string, string> checksums, CancellationToken cancellationToken = default)
+    {
+        var updated = await _lockManager.UpdateFileAsync(GetMetadataPath(bucketName, key), current =>
+        {
+            var metadata = string.IsNullOrEmpty(current) ? null : JsonSerializer.Deserialize<S3ObjectMetadata>(current);
+            if (metadata == null) return Task.FromResult<string?>(null);
+            metadata.ETag = etag;
+            metadata.Size = size;
+            metadata.LastModified = lastModified;
+            metadata.ChecksumCRC32 = checksums.GetValueOrDefault("CRC32");
+            metadata.ChecksumCRC32C = checksums.GetValueOrDefault("CRC32C");
+            metadata.ChecksumCRC64NVME = checksums.GetValueOrDefault("CRC64NVME");
+            metadata.ChecksumSHA1 = checksums.GetValueOrDefault("SHA1");
+            metadata.ChecksumSHA256 = checksums.GetValueOrDefault("SHA256");
+            return Task.FromResult<string?>(JsonSerializer.Serialize(metadata));
+        }, cancellationToken);
+        InvalidateCache(bucketName, key);
+        return updated;
     }
 
     public async Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
@@ -400,8 +328,8 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
             if (string.IsNullOrEmpty(current))
             {
                 // No metadata file yet — create a minimal stub so tags can be persisted.
-                // Other fields (ETag, content type) will be regenerated on-the-fly
-                // by GetMetadataAsync when the object is next read.
+                // The facade will resolve missing integrity fields on the next object read;
+                // the metadata backend only stores and returns this stub.
                 metadata = new S3ObjectMetadata { BucketName = bucketName, ETag = string.Empty };
             }
             else
@@ -429,35 +357,7 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
 
     // ----- helpers -----
 
-    private async Task<(string etag, Dictionary<string, string> checksums)> RecomputeStaleMetadataAsync(
-        string bucketName,
-        string key,
-        S3ObjectMetadata metadata,
-        CancellationToken cancellationToken)
-    {
-        var algorithmsToCompute = new List<string>();
-        if (!string.IsNullOrEmpty(metadata.ChecksumCRC32))
-            algorithmsToCompute.Add("CRC32");
-        if (!string.IsNullOrEmpty(metadata.ChecksumCRC32C))
-            algorithmsToCompute.Add("CRC32C");
-        if (!string.IsNullOrEmpty(metadata.ChecksumCRC64NVME))
-            algorithmsToCompute.Add("CRC64NVME");
-        if (!string.IsNullOrEmpty(metadata.ChecksumSHA1))
-            algorithmsToCompute.Add("SHA1");
-        if (!string.IsNullOrEmpty(metadata.ChecksumSHA256))
-            algorithmsToCompute.Add("SHA256");
-
-        var (computedETag, checksums) = await _dataStorage.ComputeETagAndChecksumsAsync(bucketName, key, algorithmsToCompute, cancellationToken);
-
-        // Preserve multipart ETags: recomputing from the merged bytes would yield MD5-of-full-file.
-        var etag = ETagHelper.IsMultipartETag(metadata.ETag)
-            ? metadata.ETag
-            : computedETag ?? metadata.ETag;
-
-        return (etag, checksums);
-    }
-
-    private async Task CacheObjectInfoAsync(string bucketName, string key, S3ObjectInfo objectInfo, CancellationToken cancellationToken)
+    private void CacheObjectInfo(string bucketName, string key, S3ObjectInfo objectInfo, DateTime metadataFileLastModified)
     {
         if (_cache == null)
         {
@@ -467,16 +367,14 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
         try
         {
             var metadataPath = GetMetadataPath(bucketName, key);
-            if (!File.Exists(metadataPath))
+            if (!File.Exists(metadataPath) || File.GetLastWriteTimeUtc(metadataPath) != metadataFileLastModified)
             {
                 return;
             }
 
-            var metadataFileLastModified = File.GetLastWriteTimeUtc(metadataPath);
-
             var cachedEntry = new CachedObjectInfo
             {
-                ObjectInfo = objectInfo,
+                ObjectInfo = ObjectMetadataSnapshot.CloneMetadata(objectInfo),
                 MetadataFileLastModified = metadataFileLastModified
             };
 
@@ -504,7 +402,6 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
             _logger.LogWarning(ex, "Failed to cache object metadata for {Key} in bucket {BucketName}", key, bucketName);
         }
 
-        await Task.CompletedTask;
     }
 
     private void InvalidateCache(string bucketName, string key)
@@ -561,6 +458,7 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
     {
         public required string BucketName { get; set; }
         public required string ETag { get; set; }
+        public long Size { get; set; }
         public DateTime LastModified { get; set; }
         public string ContentType { get; set; } = "application/octet-stream";
         public Dictionary<string, string> Metadata { get; set; } = new();

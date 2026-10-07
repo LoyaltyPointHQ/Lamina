@@ -38,7 +38,7 @@ public class FilesystemObjectDataStorageListObjectsTests : IAsyncLifetime
 
         var networkHelper = new NetworkFileSystemHelper(settings, NullLogger<NetworkFileSystemHelper>.Instance);
         var mockChunkedDataParser = new Mock<IChunkedDataParser>();
-        _storage = new FilesystemObjectDataStorage(settings, networkHelper, new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance), NullLogger<FilesystemObjectDataStorage>.Instance, mockChunkedDataParser.Object);
+        _storage = new FilesystemObjectDataStorage(settings, networkHelper, new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance), NullLogger<FilesystemObjectDataStorage>.Instance);
     }
     public async Task InitializeAsync()
     {
@@ -47,11 +47,7 @@ public class FilesystemObjectDataStorageListObjectsTests : IAsyncLifetime
             var filePipe = new Pipe();
             await filePipe.Writer.WriteAsync(_testContent);
             await filePipe.Writer.CompleteAsync();
-            var result = await _storage.StoreDataAsync(BucketName, key, filePipe.Reader, null, null);
-            if (!result.IsSuccess)
-            {
-                throw new InvalidOperationException($"Failed to store test data for key '{key}': {result.ErrorMessage}");
-            }
+            await _storage.StoreDataAsync(BucketName, key, filePipe.Reader);
         }
 
         await WriteFile("a/b/c/file1.txt");
@@ -60,7 +56,7 @@ public class FilesystemObjectDataStorageListObjectsTests : IAsyncLifetime
         await WriteFile("a/b/c_file.txt");
         await WriteFile("a/b/cow.txt");
         await WriteFile("a/b/just_a_file.txt");
-        
+
     }
 
     [Fact]
@@ -72,7 +68,7 @@ public class FilesystemObjectDataStorageListObjectsTests : IAsyncLifetime
         Assert.Equal("a/b/c/file2.txt", result.Keys[1]);
         Assert.Single(result.CommonPrefixes);
         Assert.Equal("a/b/c/d/", result.CommonPrefixes[0]);
-        
+
         result = await _storage.ListDataKeysAsync(BucketName, BucketType.GeneralPurpose, "a/b/", "/");
         Assert.Equal(3, result.Keys.Count);
         Assert.Equal("a/b/c_file.txt", result.Keys[0]);
@@ -81,7 +77,7 @@ public class FilesystemObjectDataStorageListObjectsTests : IAsyncLifetime
         Assert.Single(result.CommonPrefixes);
         Assert.Equal("a/b/c/", result.CommonPrefixes[0]);
     }
-    
+
     [Fact]
     public async Task CorrectlyListsAllRecursiveWithPrefixEndingWithSlashAndNoDelimiter()
     {
@@ -91,7 +87,7 @@ public class FilesystemObjectDataStorageListObjectsTests : IAsyncLifetime
         Assert.Equal("a/b/c/file1.txt", result.Keys[1]);
         Assert.Equal("a/b/c/file2.txt", result.Keys[2]);
         Assert.Empty(result.CommonPrefixes);
-        
+
         result = await _storage.ListDataKeysAsync(BucketName, BucketType.GeneralPurpose, "a/b/c");
         Assert.Equal(5, result.Keys.Count);
         Assert.Equal("a/b/c/d/file3.txt", result.Keys[0]);
@@ -114,7 +110,7 @@ public class FilesystemObjectDataStorageListObjectsTests : IAsyncLifetime
         Assert.Equal(2, result.CommonPrefixes.Count);
         Assert.Equal("a/b/c_", result.CommonPrefixes[0]);
         Assert.Equal("a/b/just_", result.CommonPrefixes[1]);
-        
+
         result = await _storage.ListDataKeysAsync(BucketName, BucketType.GeneralPurpose, "a/b/c_", "_");
         Assert.Single(result.Keys);
         Assert.Equal("a/b/c_file.txt", result.Keys[0]);

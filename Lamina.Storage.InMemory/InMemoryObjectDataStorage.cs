@@ -2,7 +2,6 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using Lamina.Core.Models;
-using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Core.Listing;
@@ -16,101 +15,40 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
 
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, StoredObject>> _data = new();
     private readonly ConcurrentDictionary<string, byte[]> _pendingData = new();
-    private readonly IChunkedDataParser _chunkedDataParser;
-    private readonly ILogger<InMemoryObjectDataStorage> _logger;
+    public InMemoryObjectDataStorage(ILogger<InMemoryObjectDataStorage> logger) { }
 
-    public InMemoryObjectDataStorage(IChunkedDataParser chunkedDataParser, ILogger<InMemoryObjectDataStorage> logger)
+    public Task<StagedDataWrite> BeginWriteAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        _chunkedDataParser = chunkedDataParser;
-        _logger = logger;
+        cancellationToken.ThrowIfCancellationRequested();
+        var stream = new MemoryStream();
+        var identity = Guid.NewGuid().ToString("N");
+        void Cleanup() => _pendingData.TryRemove(identity, out _);
+        return Task.FromResult(new StagedDataWrite(stream, size =>
+        {
+            _pendingData[identity] = stream.ToArray();
+            var prepared = new PreparedData { BucketName = bucketName, Key = key, Size = size, Tag = identity };
+            prepared.SetDisposeAction(Cleanup);
+            return prepared;
+        }, Cleanup));
     }
 
-    public async Task<StorageResult<PreparedData>> PrepareDataAsync(
-        string bucketName,
-        string key,
-        PipeReader dataReader,
-        IChunkSignatureValidator? chunkValidator,
-        ChecksumRequest? checksumRequest,
-        byte[]? expectedMd5 = null,
-        CancellationToken cancellationToken = default)
+    public Task<Stream?> OpenReadAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        byte[] combinedData;
-        long bytesWritten;
-        ChunkedDataResult? parseResult = null;
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<Stream?>(_data.TryGetValue(bucketName, out var bucket) && bucket.TryGetValue(key, out var stored)
+            ? new MemoryStream(stored.Data, writable: false) : null);
+    }
 
-        if (chunkValidator != null)
-        {
-            using var memoryStream = new MemoryStream();
-            // Use trailer-aware parser when the client signalled chunked trailers (AWS CLI v2
-            // default checksum flow) so parseResult.Trailers carries through.
-            parseResult = chunkValidator.ExpectsTrailers
-                ? await _chunkedDataParser.ParseChunkedDataWithTrailersToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken)
-                : await _chunkedDataParser.ParseChunkedDataToStreamAsync(dataReader, memoryStream, chunkValidator, null, cancellationToken);
-
-            if (!parseResult.Success)
-            {
-                return StorageResult<PreparedData>.Error("SignatureDoesNotMatch", "Chunk signature validation failed");
-            }
-
-            combinedData = memoryStream.ToArray();
-            bytesWritten = parseResult.TotalBytesWritten;
-        }
-        else
-        {
-            combinedData = await PipeReaderHelper.ReadAllBytesAsync(dataReader, false, cancellationToken);
-            bytesWritten = combinedData.Length;
-        }
-
-        var etag = ETagHelper.ComputeETag(combinedData);
-
-        if (expectedMd5 is not null && !ETagHelper.EtagMatchesMd5(etag, expectedMd5))
-        {
-            return StorageResult<PreparedData>.Error("BadDigest", "The Content-MD5 you specified did not match what we received.");
-        }
-
-        var checksums = new Dictionary<string, string>();
-        if (checksumRequest != null)
-        {
-            using var calculator = new StreamingChecksumCalculator(checksumRequest.Algorithm, checksumRequest.ProvidedChecksums);
-            if (calculator.HasChecksums)
-            {
-                calculator.Append(combinedData);
-                // Merge client-delivered trailer checksums so Finish can validate them.
-                if (parseResult?.Trailers.Count > 0)
-                {
-                    TrailerChecksumMerger.MergeIntoCalculator(parseResult.Trailers, calculator);
-                }
-                var result = calculator.Finish();
-
-                if (!result.IsValid)
-                {
-                    return StorageResult<PreparedData>.Error("InvalidChecksum", result.ErrorMessage ?? "Checksum validation failed");
-                }
-
-                checksums = result.CalculatedChecksums;
-            }
-        }
-
-        // Store in pending — not yet visible
-        var pendingKey = GetPendingKey(bucketName, key);
-        _pendingData[pendingKey] = combinedData;
-
-        var preparedData = new PreparedData
-        {
-            BucketName = bucketName,
-            Key = key,
-            Size = bytesWritten,
-            ETag = etag,
-            Checksums = checksums
-        };
-        preparedData.SetDisposeAction(() => _pendingData.TryRemove(pendingKey, out _));
-
-        return StorageResult<PreparedData>.Success(preparedData);
+    public Task<Stream> OpenPreparedReadAsync(PreparedData preparedData, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<Stream>(new MemoryStream(_pendingData[preparedData.Tag!], writable: false));
     }
 
     public Task CommitPreparedDataAsync(PreparedData preparedData, CancellationToken cancellationToken = default)
     {
-        var pendingKey = GetPendingKey(preparedData.BucketName, preparedData.Key);
+        cancellationToken.ThrowIfCancellationRequested();
+        var pendingKey = preparedData.Tag!;
         if (!_pendingData.TryRemove(pendingKey, out var data))
         {
             throw new InvalidOperationException($"No pending data found for {preparedData.BucketName}/{preparedData.Key}");
@@ -124,48 +62,57 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
 
     public Task AbortPreparedDataAsync(PreparedData preparedData, CancellationToken cancellationToken = default)
     {
-        var pendingKey = GetPendingKey(preparedData.BucketName, preparedData.Key);
-        _pendingData.TryRemove(pendingKey, out _);
+        preparedData.Dispose();
         return Task.CompletedTask;
     }
 
     public async Task<PreparedData> PrepareMultipartDataAsync(string bucketName, string key, IEnumerable<PipeReader> partReaders, CancellationToken cancellationToken = default)
     {
-        var allSegments = new List<byte[]>();
-
-        foreach (var reader in partReaders)
+        var readers = partReaders.ToList();
+        try
         {
-            var partData = await PipeReaderHelper.ReadAllBytesAsync(reader, true, cancellationToken);
-            allSegments.Add(partData);
+            cancellationToken.ThrowIfCancellationRequested();
+            var allSegments = new List<byte[]>();
+
+            foreach (var reader in readers)
+            {
+                var partData = await PipeReaderHelper.ReadAllBytesAsync(reader, true, cancellationToken);
+                allSegments.Add(partData);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var totalSize = allSegments.Sum(s => s.Length);
+            var combinedData = new byte[totalSize];
+            var offset = 0;
+            foreach (var segment in allSegments)
+            {
+                Buffer.BlockCopy(segment, 0, combinedData, offset, segment.Length);
+                offset += segment.Length;
+            }
+
+            var pendingKey = Guid.NewGuid().ToString("N");
+            _pendingData[pendingKey] = combinedData;
+
+            var preparedData = new PreparedData
+            {
+                BucketName = bucketName,
+                Key = key,
+                Size = totalSize,
+                Tag = pendingKey
+            };
+            preparedData.SetDisposeAction(() => _pendingData.TryRemove(pendingKey, out _));
+
+            return preparedData;
         }
-
-        var totalSize = allSegments.Sum(s => s.Length);
-        var combinedData = new byte[totalSize];
-        var offset = 0;
-        foreach (var segment in allSegments)
+        finally
         {
-            Buffer.BlockCopy(segment, 0, combinedData, offset, segment.Length);
-            offset += segment.Length;
+            await Task.WhenAll(readers.Select(reader => reader.CompleteAsync().AsTask()));
         }
-
-        var pendingKey = GetPendingKey(bucketName, key);
-        _pendingData[pendingKey] = combinedData;
-
-        var preparedData = new PreparedData
-        {
-            BucketName = bucketName,
-            Key = key,
-            Size = totalSize,
-            ETag = string.Empty,
-            Checksums = new Dictionary<string, string>()
-        };
-        preparedData.SetDisposeAction(() => _pendingData.TryRemove(pendingKey, out _));
-
-        return preparedData;
     }
 
     public Task<PreparedData?> PrepareCopyDataAsync(string sourceBucketName, string sourceKey, string destBucketName, string destKey, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!_data.TryGetValue(sourceBucketName, out var sourceBucketData) ||
             !sourceBucketData.TryGetValue(sourceKey, out var sourceStored))
         {
@@ -175,9 +122,8 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         var copiedData = new byte[sourceStored.Data.Length];
         Buffer.BlockCopy(sourceStored.Data, 0, copiedData, 0, sourceStored.Data.Length);
 
-        var etag = ETagHelper.ComputeETag(copiedData);
 
-        var pendingKey = GetPendingKey(destBucketName, destKey);
+        var pendingKey = Guid.NewGuid().ToString("N");
         _pendingData[pendingKey] = copiedData;
 
         var preparedData = new PreparedData
@@ -185,8 +131,7 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
             BucketName = destBucketName,
             Key = destKey,
             Size = copiedData.Length,
-            ETag = etag,
-            Checksums = new Dictionary<string, string>()
+            Tag = pendingKey
         };
         preparedData.SetDisposeAction(() => _pendingData.TryRemove(pendingKey, out _));
 
@@ -202,6 +147,11 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         }
 
         var data = stored.Data;
+        if (data.Length == 0 && byteRangeStart == null && byteRangeEnd == null)
+        {
+            await writer.CompleteAsync();
+            return true;
+        }
         long startPosition = byteRangeStart ?? 0;
         long endPosition = byteRangeEnd ?? (data.Length - 1);
 
@@ -213,7 +163,13 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         int length = (int)(endPosition - startPosition + 1);
         int offset = (int)startPosition;
 
-        await writer.WriteAsync(new ReadOnlyMemory<byte>(data, offset, length), cancellationToken);
+        while (length > 0)
+        {
+            var count = Math.Min(length, 81920);
+            await writer.WriteAsync(new ReadOnlyMemory<byte>(data, offset, count), cancellationToken);
+            offset += count;
+            length -= count;
+        }
         await writer.CompleteAsync();
         return true;
     }
@@ -272,53 +228,5 @@ public class InMemoryObjectDataStorage : IObjectDataStorage
         }
         return Task.FromResult(selector.Finish());
     }
-
-    public Task<string?> ComputeETagAsync(string bucketName, string key, CancellationToken cancellationToken = default)
-    {
-        if (_data.TryGetValue(bucketName, out var bucketData) &&
-            bucketData.TryGetValue(key, out var stored))
-        {
-            var etag = ETagHelper.ComputeETag(stored.Data);
-            return Task.FromResult<string?>(etag);
-        }
-
-        return Task.FromResult<string?>(null);
-    }
-
-    public async Task<Dictionary<string, string>> ComputeChecksumsAsync(
-        string bucketName,
-        string key,
-        IEnumerable<string> algorithms,
-        CancellationToken cancellationToken = default)
-    {
-        var algorithmList = algorithms as List<string> ?? algorithms.ToList();
-        if (algorithmList.Count == 0)
-        {
-            return new Dictionary<string, string>();
-        }
-
-        if (!_data.TryGetValue(bucketName, out var bucketData) || !bucketData.TryGetValue(key, out var stored))
-        {
-            return new Dictionary<string, string>();
-        }
-
-        using var memoryStream = new MemoryStream(stored.Data, writable: false);
-        return await ChecksumHelper.ComputeSelectiveChecksumsFromStreamAsync(memoryStream, algorithmList, cancellationToken);
-    }
-
-    public Task<(string? etag, Dictionary<string, string> checksums)> ComputeETagAndChecksumsAsync(
-        string bucketName,
-        string key,
-        IEnumerable<string> checksumAlgorithms,
-        CancellationToken cancellationToken = default)
-    {
-        if (!_data.TryGetValue(bucketName, out var bucketData) || !bucketData.TryGetValue(key, out var stored))
-            return Task.FromResult<(string? etag, Dictionary<string, string> checksums)>((null, new Dictionary<string, string>()));
-
-        var (etag, checksums) = ChecksumHelper.ComputeETagAndChecksums(stored.Data.AsSpan(), checksumAlgorithms);
-        return Task.FromResult<(string? etag, Dictionary<string, string> checksums)>((etag, checksums));
-    }
-
-    private static string GetPendingKey(string bucketName, string key) => $"{bucketName}/{key}";
 
 }

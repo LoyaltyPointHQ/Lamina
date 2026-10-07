@@ -32,6 +32,8 @@ public class XattrOrderingTests
         _multipartStorageMock = new Mock<IMultipartUploadStorageFacade>();
 
         _xattrMetadataMock.Setup(x => x.IsValidObjectKey(It.IsAny<string>())).Returns(true);
+        _dataStorageMock.Setup(x => x.OpenPreparedReadAsync(It.IsAny<PreparedData>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new MemoryStream("hello"u8.ToArray()));
 
         _facade = new ObjectStorageFacade(
             _dataStorageMock.Object,
@@ -46,9 +48,7 @@ public class XattrOrderingTests
     {
         BucketName = bucket,
         Key = key,
-        Size = 5,
-        ETag = "abc123",
-        Checksums = new Dictionary<string, string>()
+        Size = 5
     };
 
     [Fact]
@@ -61,8 +61,8 @@ public class XattrOrderingTests
 
         var preparedData = MakePreparedData(bucket, key);
         _dataStorageMock
-            .Setup(x => x.PrepareDataAsync(bucket, key, It.IsAny<PipeReader>(), null, It.IsAny<ChecksumRequest>(), It.IsAny<byte[]?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(StorageResult<PreparedData>.Success(preparedData));
+            .Setup(x => x.BeginWriteAsync(bucket, key, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new StagedDataWrite(new MemoryStream(), _ => preparedData, () => { }));
 
         _dataStorageMock
             .Setup(x => x.CommitPreparedDataAsync(preparedData, It.IsAny<CancellationToken>()))
@@ -96,8 +96,8 @@ public class XattrOrderingTests
 
         var preparedData = MakePreparedData(bucket, key);
         _dataStorageMock
-            .Setup(x => x.PrepareDataAsync(bucket, key, It.IsAny<PipeReader>(), null, It.IsAny<ChecksumRequest>(), It.IsAny<byte[]?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(StorageResult<PreparedData>.Success(preparedData));
+            .Setup(x => x.BeginWriteAsync(bucket, key, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new StagedDataWrite(new MemoryStream(), _ => preparedData, () => { }));
 
         _dataStorageMock
             .Setup(x => x.CommitPreparedDataAsync(preparedData, It.IsAny<CancellationToken>()))
@@ -136,7 +136,7 @@ public class XattrOrderingTests
         // Use custom content type so ShouldStoreMetadata returns true
         _xattrMetadataMock
             .Setup(x => x.GetMetadataAsync(srcBucket, srcKey, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new S3ObjectInfo { Key = srcKey, ETag = "e", Size = 5, LastModified = DateTime.UtcNow, ContentType = "application/custom" });
+            .ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo { Key = srcKey, ETag = "e", Size = 5, LastModified = DateTime.UtcNow, ContentType = "application/custom" }, DateTime.MaxValue));
 
         var preparedData = MakePreparedData(dstBucket, dstKey);
         _dataStorageMock
@@ -179,7 +179,7 @@ public class XattrOrderingTests
         // Use custom content type so ShouldStoreMetadata returns true
         _xattrMetadataMock
             .Setup(x => x.GetMetadataAsync(srcBucket, srcKey, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new S3ObjectInfo { Key = srcKey, ETag = "e", Size = 5, LastModified = DateTime.UtcNow, ContentType = "application/custom" });
+            .ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo { Key = srcKey, ETag = "e", Size = 5, LastModified = DateTime.UtcNow, ContentType = "application/custom" }, DateTime.MaxValue));
 
         _dataStorageMock
             .Setup(x => x.GetDataInfoAsync(srcBucket, srcKey, It.IsAny<CancellationToken>()))

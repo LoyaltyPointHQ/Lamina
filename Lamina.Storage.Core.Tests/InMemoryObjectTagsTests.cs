@@ -123,7 +123,7 @@ public class InMemoryObjectTagsTests
         await SeedObjectAsync(storage, "b", "k");
         await storage.SetObjectTagsAsync("b", "k", new Dictionary<string, string> { { "env", "prod" } });
 
-        var info = await storage.GetMetadataAsync("b", "k");
+        var info = (await storage.GetMetadataAsync("b", "k"))?.Metadata;
 
         Assert.NotNull(info);
         Assert.Equal("prod", info.Tags["env"]);

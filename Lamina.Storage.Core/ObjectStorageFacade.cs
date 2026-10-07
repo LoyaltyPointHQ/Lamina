@@ -17,6 +17,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
     private readonly IMultipartUploadStorageFacade _multipartUploadStorage;
     private readonly ILogger<ObjectStorageFacade> _logger;
     private readonly IContentTypeDetector _contentTypeDetector;
+    private readonly UploadContentProcessor _processor;
 
     public ObjectStorageFacade(
         IObjectDataStorage dataStorage,
@@ -24,7 +25,8 @@ public class ObjectStorageFacade : IObjectStorageFacade
         IBucketStorageFacade bucketStorage,
         IMultipartUploadStorageFacade multipartUploadStorage,
         ILogger<ObjectStorageFacade> logger,
-        IContentTypeDetector contentTypeDetector)
+        IContentTypeDetector contentTypeDetector,
+        IChunkedDataParser? chunkedDataParser = null)
     {
         _dataStorage = dataStorage;
         _metadataStorage = metadataStorage;
@@ -32,6 +34,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
         _multipartUploadStorage = multipartUploadStorage;
         _logger = logger;
         _contentTypeDetector = contentTypeDetector;
+        _processor = new UploadContentProcessor(chunkedDataParser);
     }
 
     public async Task<StorageResult<S3Object>> PutObjectAsync(string bucketName, string key, PipeReader dataReader, PutObjectRequest? request = null, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
@@ -66,27 +69,24 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
                 // Pre-register any algorithms the client will deliver via chunked trailer so the
                 // streaming calculator activates their hash state from byte 0. The actual trailer
-                // value is merged into the calculator inside the storage chunked path.
+                // value is merged into the calculator by the shared upload processor.
                 if (request.ExpectedChecksumTrailers.Count > 0)
                 {
                     checksumRequest = TrailerChecksumMerger.RegisterExpectedTrailers(request.ExpectedChecksumTrailers, checksumRequest);
                 }
             }
 
-            // Phase 1: Prepare data (process to temp storage, not yet visible)
-            var prepareResult = await _dataStorage.PrepareDataAsync(bucketName, key, dataReader, chunkValidator, checksumRequest, expectedMd5, cancellationToken);
+            await using var staging = await _dataStorage.BeginWriteAsync(bucketName, key, cancellationToken);
+            var processed = await _processor.ProcessAsync(dataReader, staging.Stream, chunkValidator, checksumRequest, expectedMd5, cancellationToken);
+            if (!processed.IsSuccess)
+                return StorageResult<S3Object>.Error(processed.ErrorCode!, processed.ErrorMessage!);
 
-            if (!prepareResult.IsSuccess)
-            {
-                _logger.LogWarning("Failed to prepare object {Key} in bucket {BucketName}: {ErrorCode} - {ErrorMessage}",
-                    key, bucketName, prepareResult.ErrorCode, prepareResult.ErrorMessage);
-                return StorageResult<S3Object>.Error(prepareResult.ErrorCode!, prepareResult.ErrorMessage!);
-            }
-
-            using var preparedData = prepareResult.Value!;
+            using var preparedData = await staging.SealAsync(cancellationToken);
             var size = preparedData.Size;
-            var etag = preparedData.ETag;
-            var checksums = preparedData.Checksums;
+            var etag = processed.Value!.ETag;
+            var checksums = processed.Value.Checksums;
+            if (size != processed.Value.Size)
+                throw new IOException("Prepared data size does not match the validated payload.");
 
             if (ShouldStoreMetadata(key, request))
             {
@@ -194,23 +194,48 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
     public async Task<S3ObjectInfo?> GetObjectInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        // First check if data exists
-        var dataInfo = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-        if (dataInfo == null)
-        {
-            return null;
-        }
+        var data = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+        if (data == null) return null;
+        var snapshot = await _metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
+        return await ResolveMetadataAsync(bucketName, key, snapshot, data.Value, cancellationToken);
+    }
 
-        // Try to get metadata
-        var metadata = await _metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
-        if (metadata != null)
+    private async Task<S3ObjectInfo?> ResolveMetadataAsync(string bucketName, string key, ObjectMetadataSnapshot? snapshot,
+        (long size, DateTime lastModified) data, CancellationToken cancellationToken)
+    {
+        var metadata = snapshot == null ? null : ObjectMetadataSnapshot.CloneMetadata(snapshot.Metadata);
+        if (metadata == null)
+            return await GenerateMetadataOnTheFlyAsync(bucketName, key, data.size, data.lastModified, cancellationToken);
+        if (string.IsNullOrEmpty(metadata.ETag) || snapshot!.DataLastModified == null || data.lastModified > snapshot.DataLastModified)
         {
-            return metadata;
+            var storedChecksums = new Dictionary<string, string?>
+            {
+                ["CRC32"] = metadata.ChecksumCRC32,
+                ["CRC32C"] = metadata.ChecksumCRC32C,
+                ["CRC64NVME"] = metadata.ChecksumCRC64NVME,
+                ["SHA1"] = metadata.ChecksumSHA1,
+                ["SHA256"] = metadata.ChecksumSHA256
+            };
+            await using var stream = await _dataStorage.OpenReadAsync(bucketName, key, cancellationToken);
+            if (stream == null) return null;
+            var (etag, checksums) = await ChecksumHelper.ComputeETagAndChecksumsFromStreamAsync(stream,
+                storedChecksums.Where(x => !string.IsNullOrEmpty(x.Value)).Select(x => x.Key), cancellationToken);
+            var current = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+            if (current == null) return null;
+            if (current.Value != data) throw new IOException("Object changed while refreshing integrity metadata.");
+            if (ETagHelper.IsMultipartETag(metadata.ETag)) etag = metadata.ETag;
+            if (!await _metadataStorage.UpdateIntegrityAsync(bucketName, key, etag, data.size, data.lastModified, checksums, cancellationToken))
+                throw new IOException("Unable to persist refreshed integrity metadata.");
+            metadata.ETag = etag;
+            metadata.ChecksumCRC32 = checksums.GetValueOrDefault("CRC32");
+            metadata.ChecksumCRC32C = checksums.GetValueOrDefault("CRC32C");
+            metadata.ChecksumCRC64NVME = checksums.GetValueOrDefault("CRC64NVME");
+            metadata.ChecksumSHA1 = checksums.GetValueOrDefault("SHA1");
+            metadata.ChecksumSHA256 = checksums.GetValueOrDefault("SHA256");
         }
-
-        // If data exists but metadata doesn't, generate metadata on the fly
-        _logger.LogInformation("Generating metadata on-the-fly for object {Key} in bucket {BucketName}", key, bucketName);
-        return await GenerateMetadataOnTheFlyAsync(bucketName, key, dataInfo.Value.size, dataInfo.Value.lastModified, cancellationToken);
+        metadata.Size = data.size;
+        metadata.LastModified = data.lastModified;
+        return metadata;
     }
 
     public async Task<StorageResult<ListObjectsResponse>> ListObjectsAsync(string bucketName, ListObjectsRequest? request = null, CancellationToken cancellationToken = default)
@@ -303,7 +328,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
             scanElapsed = Stopwatch.GetElapsedTime(started);
             var metadataStarted = Stopwatch.GetTimestamp();
 
-            Dictionary<string, S3ObjectInfo?>? batch = null;
+            Dictionary<string, ObjectMetadataSnapshot?>? batch = null;
             if (keys.Length > 0 && _metadataStorage is IBatchObjectMetadataStorage batchStorage)
                 batch = await batchStorage.GetMetadataBatchAsync(bucketName, keys, cancellationToken);
             foreach (var key in keys)
@@ -311,14 +336,10 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    var meta = batch != null ? batch.GetValueOrDefault(key)
+                    var snapshot = batch != null ? batch.GetValueOrDefault(key)
                         : await _metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
-                    if (meta == null)
-                    {
-                        var info = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
-                        if (info != null)
-                            meta = await GenerateMetadataOnTheFlyAsync(bucketName, key, info.Value.size, info.Value.lastModified, cancellationToken);
-                    }
+                    var info = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+                    var meta = info == null ? null : await ResolveMetadataAsync(bucketName, key, snapshot, info.Value, cancellationToken);
                     if (meta != null)
                         response.Contents.Add(meta);
                 }
@@ -362,13 +383,13 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
     private async Task<S3ObjectInfo?> GenerateMetadataOnTheFlyAsync(string bucketName, string key, long size, DateTime lastModified, CancellationToken cancellationToken)
     {
-        // Compute ETag from the data efficiently
-        var etag = await _dataStorage.ComputeETagAsync(bucketName, key, cancellationToken);
-        if (etag == null)
-        {
-            _logger.LogWarning("Failed to compute ETag for object {Key} in bucket {BucketName}", key, bucketName);
-            return null;
-        }
+        await using var stream = await _dataStorage.OpenReadAsync(bucketName, key, cancellationToken);
+        if (stream == null) return null;
+        var (etag, _) = await ChecksumHelper.ComputeETagAndChecksumsFromStreamAsync(stream, [], cancellationToken);
+        var after = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+        if (after == null) return null;
+        if (after.Value.size != size || after.Value.lastModified != lastModified)
+            throw new IOException("Object changed while generating its metadata.");
 
         // Determine content type based on file extension
         var contentType = GetContentTypeFromKey(key);
@@ -551,7 +572,16 @@ public class ObjectStorageFacade : IObjectStorageFacade
             }
 
             var size = preparedData.Size;
-            var etag = preparedData.ETag;
+            string etag;
+            await using (var preparedStream = await _dataStorage.OpenPreparedReadAsync(preparedData, cancellationToken))
+                (etag, _) = await ChecksumHelper.ComputeETagAndChecksumsFromStreamAsync(preparedStream, [], cancellationToken);
+
+            // Preserve source checksum semantics (including composite checksums), but never
+            // attach them to a copy prepared from a different observed source version.
+            var currentSource = await _dataStorage.GetDataInfoAsync(sourceBucketName, sourceKey, cancellationToken);
+            if (currentSource == null || currentSource.Value.size != sourceInfo.Size
+                || currentSource.Value.lastModified != sourceInfo.LastModified)
+                throw new IOException("Copy source changed during preparation.");
 
             // Determine metadata handling based on directive
             // Default is "COPY" per S3 spec
@@ -661,6 +691,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 };
             }
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error copying object from {SourceBucket}/{SourceKey} to {DestBucket}/{DestKey}",
@@ -716,11 +747,13 @@ public class ObjectStorageFacade : IObjectStorageFacade
             var pipe = new Pipe();
 
             // Start a background task to write source data (or byte range) to the pipe
+            using var copyCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var writeTask = Task.Run(async () =>
             {
                 try
                 {
-                    await _dataStorage.WriteDataToPipeAsync(sourceBucketName, sourceKey, pipe.Writer, byteRangeStart, byteRangeEnd, cancellationToken);
+                    if (!await _dataStorage.WriteDataToPipeAsync(sourceBucketName, sourceKey, pipe.Writer, byteRangeStart, byteRangeEnd, copyCancellation.Token))
+                        throw new IOException("Copy source disappeared during reading.");
                     await pipe.Writer.CompleteAsync();
                 }
                 catch (Exception ex)
@@ -729,7 +762,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
                         sourceBucketName, sourceKey);
                     await pipe.Writer.CompleteAsync(ex);
                 }
-            }, cancellationToken);
+            });
 
             try
             {
@@ -737,20 +770,22 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 var uploadPartResult = await _multipartUploadStorage.UploadPartAsync(
                     destBucketName, destKey, uploadId, partNumber, pipe.Reader, checksumRequest, expectedMd5: null, cancellationToken);
 
-                // Wait for write task to complete
-                await writeTask;
+                if (!uploadPartResult.IsSuccess)
+                    return null;
 
                 _logger.LogInformation("Copied part {PartNumber} from {SourceBucket}/{SourceKey} (bytes {Start}-{End}) to {DestBucket}/{DestKey} upload {UploadId}",
                     partNumber, sourceBucketName, sourceKey, byteRangeStart ?? 0, byteRangeEnd ?? (sourceInfo.Size - 1), destBucketName, destKey, uploadId);
 
-                return uploadPartResult.IsSuccess ? uploadPartResult.Value : null;
+                return uploadPartResult.Value;
             }
             finally
             {
-                // Ensure reader is completed
-                await pipe.Reader.CompleteAsync();
+                copyCancellation.Cancel();
+                try { await pipe.Reader.CompleteAsync(); }
+                finally { await writeTask; }
             }
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error copying object part from {SourceBucket}/{SourceKey} to {DestBucket}/{DestKey} part {PartNumber}",

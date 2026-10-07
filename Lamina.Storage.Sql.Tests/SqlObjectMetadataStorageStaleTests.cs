@@ -9,12 +9,11 @@ using Moq;
 namespace Lamina.Storage.Sql.Tests;
 
 /// <summary>
-/// Tests for stale metadata detection and recomputation in SqlObjectMetadataStorage.
+/// Tests for raw metadata persistence; freshness resolution belongs to the facade.
 /// </summary>
 public class SqlObjectMetadataStorageStaleTests : IDisposable
 {
     private readonly LaminaDbContext _context;
-    private readonly Mock<IObjectDataStorage> _dataStorageMock;
     private readonly Mock<ILogger<SqlObjectMetadataStorage>> _loggerMock;
     private readonly SqlObjectMetadataStorage _storage;
 
@@ -28,220 +27,99 @@ public class SqlObjectMetadataStorageStaleTests : IDisposable
         _context.Database.OpenConnection();
         _context.Database.EnsureCreated();
 
-        _dataStorageMock = new Mock<IObjectDataStorage>();
         _loggerMock = new Mock<ILogger<SqlObjectMetadataStorage>>();
 
-        _storage = new SqlObjectMetadataStorage(_context, _dataStorageMock.Object, _loggerMock.Object);
+        _storage = new SqlObjectMetadataStorage(_context, _loggerMock.Object);
     }
 
     [Fact]
-    public async Task GetMetadataAsync_FreshMetadata_ReturnsOriginalChecksums()
+    public async Task SingleAndBatch_ReturnStoredValuesWithoutReadingData()
     {
-        // Arrange
-        var bucketName = "test-bucket";
-        var key = "test-key";
-        var etag = "original-etag";
-        var size = 1024L;
-        var checksums = new Dictionary<string, string>
-        {
-            { "CRC32", "crc32-value" },
-            { "SHA256", "sha256-value" }
-        };
-
-        // Store metadata with checksums
-        await _storage.StoreMetadataAsync(bucketName, key, etag, size, null, checksums);
-
-        // Setup mock: data timestamp is OLDER than metadata (metadata is fresh)
-        _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((size, DateTime.UtcNow.AddMinutes(-10)));
-
-        // Act
-        var result = await _storage.GetMetadataAsync(bucketName, key);
-
-        // Assert
-        Assert.NotNull(result);
-        Assert.Equal(etag, result.ETag);
-        Assert.Equal("crc32-value", result.ChecksumCRC32);
-        Assert.Equal("sha256-value", result.ChecksumSHA256);
-        Assert.Null(result.ChecksumCRC32C); // Not stored originally
+        var time = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        await _storage.StoreMetadataAsync("bucket", "key", "old", 7, null, new() { ["SHA256"] = "stored" }, time);
+        var snapshot = await _storage.GetMetadataAsync("bucket", "key");
+        var batch = await _storage.GetMetadataBatchAsync("bucket", ["key", "missing"]);
+        Assert.NotNull(snapshot);
+        Assert.Equal(time, snapshot.DataLastModified);
+        Assert.Equal("old", snapshot.Metadata.ETag);
+        Assert.Equal("stored", batch["key"]!.Metadata.ChecksumSHA256);
+        Assert.Null(batch["missing"]);
     }
 
     [Fact]
-    public async Task GetMetadataAsync_StaleMetadata_RecomputesETagAndSelectiveChecksums()
+    public async Task UpdateIntegrity_PersistsOnlyIntegrityAndDoesNotUpsert()
     {
-        // Arrange
-        var bucketName = "test-bucket";
-        var key = "test-key";
-        var originalEtag = "original-etag";
-        var newEtag = "recomputed-etag";
-        var size = 1024L;
-        var checksums = new Dictionary<string, string>
-        {
-            { "CRC32", "crc32-value" },
-            { "SHA256", "sha256-value" }
-        };
-
-        // Store metadata with checksums
-        await _storage.StoreMetadataAsync(bucketName, key, originalEtag, size, null, checksums);
-
-        // Setup mock: data timestamp is NEWER than metadata (metadata is stale)
-        _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((size, DateTime.UtcNow.AddMinutes(10))); // Future timestamp = stale metadata
-
-        // Setup mock: recomputed ETag + checksums in single call
-        _dataStorageMock.Setup(x => x.ComputeETagAndChecksumsAsync(
-                bucketName, key,
-                It.Is<IEnumerable<string>>(algs => algs.Contains("CRC32") && algs.Contains("SHA256") && !algs.Contains("SHA1")),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync((newEtag, new Dictionary<string, string>
-            {
-                { "CRC32", "new-crc32" },
-                { "SHA256", "new-sha256" }
-            }));
-
-        // Act
-        var result = await _storage.GetMetadataAsync(bucketName, key);
-
-        // Assert
-        Assert.NotNull(result);
-        Assert.Equal(newEtag, result.ETag); // ETag was recomputed
-        Assert.Equal("new-crc32", result.ChecksumCRC32);   // CRC32 was recomputed (was in original)
-        Assert.Equal("new-sha256", result.ChecksumSHA256); // SHA256 was recomputed (was in original)
-        Assert.Null(result.ChecksumCRC32C);                 // Not in original, stays null
-        Assert.Null(result.ChecksumSHA1);                   // Not in original, stays null
-
-        _dataStorageMock.Verify(x => x.ComputeETagAndChecksumsAsync(bucketName, key, It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()), Times.Once);
+        Assert.False(await _storage.UpdateIntegrityAsync("bucket", "missing", "etag", 1, DateTime.UtcNow, new()));
+        await _storage.StoreMetadataAsync("bucket", "key", "old", 7,
+            new PutObjectRequest { Key = "key", ContentType = "text/plain", Metadata = new() { ["user"] = "value" } },
+            new() { ["SHA256"] = "old" });
+        await _storage.SetObjectTagsAsync("bucket", "key", new() { ["tag"] = "latest" });
+        var time = DateTime.UtcNow;
+        Assert.True(await _storage.UpdateIntegrityAsync("bucket", "key", "new", 9, time, new() { ["CRC32"] = "crc" }));
+        _context.ChangeTracker.Clear();
+        var snapshot = (await _storage.GetMetadataAsync("bucket", "key"))!;
+        Assert.Equal(time, snapshot.DataLastModified);
+        Assert.Equal("new", snapshot.Metadata.ETag);
+        Assert.Equal(9, snapshot.Metadata.Size);
+        Assert.Equal("latest", snapshot.Metadata.Tags["tag"]);
+        Assert.Equal("value", snapshot.Metadata.Metadata["user"]);
+        Assert.Equal("text/plain", snapshot.Metadata.ContentType);
+        Assert.Null(snapshot.Metadata.ChecksumSHA256);
+        Assert.Equal("crc", snapshot.Metadata.ChecksumCRC32);
     }
 
     [Fact]
-    public async Task GetMetadataAsync_StaleMetadataWithMultipartETag_PreservesETag()
+    public async Task StoreChecksums_NullFallsBackToRequestButEmptyClearsValues()
     {
-        // Multipart ETag ("{hex32}-{N}") is a function of part MD5s, not derivable from merged
-        // file. Recomputing from file would silently corrupt it. Must be preserved verbatim.
-        var bucketName = "test-bucket";
-        var key = "multipart-key";
-        const string multipartEtag = "deadbeefdeadbeefdeadbeefdeadbeef-5";
-        var size = 1024L;
-
-        await _storage.StoreMetadataAsync(bucketName, key, multipartEtag, size, null, null);
-
-        _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((size, DateTime.UtcNow.AddMinutes(10)));
-        _dataStorageMock.Setup(x => x.ComputeETagAndChecksumsAsync(bucketName, key, It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(("some-computed-etag", new Dictionary<string, string>()));
-
-        var result = await _storage.GetMetadataAsync(bucketName, key);
-
-        Assert.NotNull(result);
-        // Multipart ETag must be preserved, not replaced with the computed MD5
-        Assert.Equal(multipartEtag, result.ETag);
-    }
-
-    [Fact]
-    public async Task GetMetadataAsync_StaleMetadataETagComputationFails_UsesOldETag()
-    {
-        // Arrange
-        var bucketName = "test-bucket";
-        var key = "test-key";
-        var originalEtag = "original-etag";
-        var size = 1024L;
-
-        await _storage.StoreMetadataAsync(bucketName, key, originalEtag, size, null, null);
-
-        // Setup mock: data is newer (stale)
-        _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((size, DateTime.UtcNow.AddMinutes(10)));
-
-        // Setup mock: ETag computation fails (returns null etag)
-        _dataStorageMock.Setup(x => x.ComputeETagAndChecksumsAsync(bucketName, key, It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(((string?)null, new Dictionary<string, string>()));
-
-        // Act
-        var result = await _storage.GetMetadataAsync(bucketName, key);
-
-        // Assert
-        Assert.NotNull(result);
-        Assert.Equal(originalEtag, result.ETag); // Falls back to old ETag
-    }
-
-    [Fact]
-    public async Task GetMetadataAsync_DataDoesNotExist_ReturnsNull()
-    {
-        // Arrange
-        var bucketName = "test-bucket";
-        var key = "test-key";
-        await _storage.StoreMetadataAsync(bucketName, key, "etag", 1024L, null, null);
-
-        // Setup mock: data doesn't exist
-        _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((ValueTuple<long, DateTime>?)null);
-
-        // Act
-        var result = await _storage.GetMetadataAsync(bucketName, key);
-
-        // Assert
-        Assert.Null(result); // Metadata is orphaned, should return null
-    }
-
-    [Fact]
-    public async Task GetMetadataAsync_StaleMetadata_LogsInformation()
-    {
-        // Arrange
-        var bucketName = "test-bucket";
-        var key = "test-key";
-        var originalEtag = "original-etag";
-        var newEtag = "recomputed-etag";
-        var size = 1024L;
-
-        await _storage.StoreMetadataAsync(bucketName, key, originalEtag, size, null, null);
-
-        // Setup mocks
-        _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((size, DateTime.UtcNow.AddMinutes(10)));
-        _dataStorageMock.Setup(x => x.ComputeETagAndChecksumsAsync(bucketName, key, It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((newEtag, new Dictionary<string, string>()));
-
-        // Act
-        await _storage.GetMetadataAsync(bucketName, key);
-
-        // Assert - verify logging
-        _loggerMock.Verify(
-            x => x.Log(
-                LogLevel.Information,
-                It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v != null && (v.ToString() ?? string.Empty).Contains("Detected stale metadata")),
-                It.IsAny<Exception>(),
-                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-            Times.Once);
-    }
-
-    [Fact]
-    public async Task GetMetadataAsync_StaleMetadataWithoutChecksums_DoesNotCallComputeChecksums()
-    {
-        // When original metadata had no checksums, nothing to recompute - avoid the read.
-        var bucketName = "test-bucket";
-        var key = "test-key";
-
-        await _storage.StoreMetadataAsync(bucketName, key, "etag", 1024L, null, null);
-
-        _dataStorageMock.Setup(x => x.GetDataInfoAsync(bucketName, key, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((1024L, DateTime.UtcNow.AddMinutes(10)));
-        _dataStorageMock.Setup(x => x.ComputeETagAndChecksumsAsync(bucketName, key, It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(("new-etag", new Dictionary<string, string>()));
-
-        await _storage.GetMetadataAsync(bucketName, key);
-
-        _dataStorageMock.Verify(
-            x => x.ComputeETagAndChecksumsAsync(
-                It.IsAny<string>(), It.IsAny<string>(),
-                It.Is<IEnumerable<string>>(algs => !algs.Any()),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
+        var request = new PutObjectRequest { Key = "key", ChecksumSHA256 = "request-sha" };
+        await _storage.StoreMetadataAsync("bucket", "key", "etag", 1, request);
+        Assert.Equal("request-sha", (await _storage.GetMetadataAsync("bucket", "key"))!.Metadata.ChecksumSHA256);
+        await _storage.StoreMetadataAsync("bucket", "key", "etag", 1, request, new());
+        Assert.Null((await _storage.GetMetadataAsync("bucket", "key"))!.Metadata.ChecksumSHA256);
     }
 
     public void Dispose()
     {
         _context.Database.CloseConnection();
         _context.Dispose();
+    }
+}
+
+public sealed class PostgreSqlMetadataTimestampTests : IAsyncLifetime
+{
+    private readonly Testcontainers.PostgreSql.PostgreSqlContainer _container =
+        new Testcontainers.PostgreSql.PostgreSqlBuilder("postgres:16-alpine").Build();
+
+    public Task InitializeAsync() => _container.StartAsync();
+    public Task DisposeAsync() => _container.DisposeAsync().AsTask();
+
+    [Fact]
+    public async Task StoreAndRefresh_RoundTripWatermarkDoesNotMoveBeforeDataTimestamp()
+    {
+        var options = new DbContextOptionsBuilder<LaminaDbContext>()
+            .UseNpgsql(_container.GetConnectionString()).Options;
+        var first = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddTicks(1);
+        var updated = first.AddSeconds(1).AddTicks(6);
+        SqlObjectMetadataStorage Storage(LaminaDbContext context) => new(context,
+            Mock.Of<ILogger<SqlObjectMetadataStorage>>());
+        await using (var context = new LaminaDbContext(options))
+        {
+            await context.Database.EnsureCreatedAsync();
+            await Storage(context).StoreMetadataAsync("bucket", "key", "old", 4, lastModified: first);
+        }
+        await using (var context = new LaminaDbContext(options))
+        {
+            var storage = Storage(context);
+            var snapshot = (await storage.GetMetadataAsync("bucket", "key"))!;
+            Assert.Equal(first.AddTicks(9), snapshot.DataLastModified);
+            Assert.True(await storage.UpdateIntegrityAsync("bucket", "key", "new", 5, updated, new() { ["SHA256"] = "sha" }));
+        }
+        await using (var context = new LaminaDbContext(options))
+        {
+            var snapshot = (await Storage(context).GetMetadataAsync("bucket", "key"))!;
+            Assert.Equal(updated.AddTicks(3), snapshot.DataLastModified);
+            Assert.Equal("new", snapshot.Metadata.ETag);
+            Assert.Equal("sha", snapshot.Metadata.ChecksumSHA256);
+        }
     }
 }

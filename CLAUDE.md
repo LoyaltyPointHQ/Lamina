@@ -320,8 +320,11 @@ Lamina supports in-memory caching of object metadata to reduce disk/database rea
 - `SlidingExpirationMinutes`: Cache entries expire if not accessed within this time
 
 **Staleness Detection:**
-The cache automatically validates freshness by comparing the cached data's modification time with the actual data file's modification time. If the data file has been modified after the cache entry was
-created, the cache entry is invalidated and fresh metadata is retrieved. This preserves the data-first architecture while providing performance benefits.
+Filesystem JSON storage caches detached raw metadata snapshots, validated against
+the metadata file version. Data freshness is checked separately by the object
+facade against the snapshot's persisted data timestamp, even on cache hits.
+Missing/stale integrity fields are regenerated from data by the facade; storage
+does not read object content or calculate checksums to serve metadata.
 
 **Cache Entry Size Estimation:**
 Each cache entry's size is estimated based on:
@@ -407,6 +410,35 @@ Lamina supports S3 UploadPartCopy for server-side copying of data:
 - **Content type detection** based on file extensions
 - **Optimized storage** - metadata only stored when differs from defaults
 - **Filesystem-safe** - direct filesystem modifications (files added/modified/deleted outside API) are handled correctly, with metadata regenerated on-demand
+
+### Content Integrity and Storage Boundaries
+
+- Object and multipart **facades own integrity policy**: ETags, checksum selection,
+  validation, refresh, and multipart checksum composition.
+- Shared `UploadContentProcessor` decodes signed uploads through the existing
+  chunk parser and calculates MD5/checksums in one pass over decoded bytes. It
+  writes into a borrowed storage staging stream; it never publishes the data.
+- Data storage provides raw reads, staging streams, seal/commit/abort, copying
+  and multipart assembly. Invalid uploads are discarded before commit, preserving
+  existing objects/parts. Filesystem kernel-copy optimizations remain in storage.
+- Metadata storage returns detached `ObjectMetadataSnapshot` values, including a
+  nullable persisted data timestamp. GET, HEAD and listing share facade refresh
+  logic. Integrity-only updates preserve user metadata, tags, content type and
+  ownership; they do not create missing records.
+- Refresh recomputes only previously stored checksum algorithms. Existing
+  multipart ETags are preserved; objects without metadata get generated defaults.
+  A data-version change observed during hashing fails rather than persisting a
+  checksum for a different observed version. This uses size/mtime observations,
+  not a transactional filesystem snapshot or protection against hostile edits
+  that restore the original timestamps.
+- Xattr persists all five checksum fields. PostgreSQL metadata timestamps round
+  up to microsecond precision to avoid perpetual refresh of finer filesystem times.
+- `ListParts` and completion share facade-level fallback hashing when persisted
+  part integrity metadata is absent; raw part discovery does not hash content.
+
+These are internal storage interface changes: custom providers must implement
+the staging/raw-read and metadata snapshot/integrity-update contracts. No database
+migration or configuration change is required.
 
 ### Performance Optimizations
 

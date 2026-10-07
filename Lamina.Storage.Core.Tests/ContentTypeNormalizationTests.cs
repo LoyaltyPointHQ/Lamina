@@ -16,7 +16,7 @@ public class ContentTypeNormalizationTests
         await storage.StoreMetadataAsync(Bucket, Key, "etag", 10,
             new PutObjectRequest { Key = Key, ContentType = "" });
 
-        var result = await storage.GetMetadataAsync(Bucket, Key);
+        var result = (await storage.GetMetadataAsync(Bucket, Key))?.Metadata;
 
         Assert.NotNull(result);
         Assert.Equal("application/octet-stream", result.ContentType);
@@ -30,7 +30,7 @@ public class ContentTypeNormalizationTests
         await storage.StoreMetadataAsync(Bucket, Key, "etag", 10,
             new PutObjectRequest { Key = Key, ContentType = null });
 
-        var result = await storage.GetMetadataAsync(Bucket, Key);
+        var result = (await storage.GetMetadataAsync(Bucket, Key))?.Metadata;
 
         Assert.NotNull(result);
         Assert.Equal("application/octet-stream", result.ContentType);
@@ -44,7 +44,7 @@ public class ContentTypeNormalizationTests
         await storage.StoreMetadataAsync(Bucket, Key, "etag", 10,
             new PutObjectRequest { Key = Key, ContentType = "text/plain" });
 
-        var result = await storage.GetMetadataAsync(Bucket, Key);
+        var result = (await storage.GetMetadataAsync(Bucket, Key))?.Metadata;
 
         Assert.NotNull(result);
         Assert.Equal("text/plain", result.ContentType);

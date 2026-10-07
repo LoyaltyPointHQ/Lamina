@@ -1,5 +1,7 @@
 using System.IO.Pipelines;
 using Lamina.Core.Models;
+using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Helpers;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -64,107 +66,48 @@ public class FilesystemMultipartUploadDataStorageTests : IDisposable
     }
 
     [Fact]
-    public async Task GetStoredPartsAsync_WithoutKnownMetadata_ComputesEtagFromFile()
+    public async Task GetStoredPartsAsync_ReturnsRawFactsWithoutHashing()
     {
-        // When no metadata hint is provided the filesystem backend must recompute ETag by reading
-        // the part file - preserving backward-compatible behavior for old uploads / fallback.
-        const string bucketName = "bucket";
-        const string key = "object";
-        const string uploadId = "upload-no-hint";
-
-        var storeResult = await StorePartAsync(bucketName, key, uploadId, partNumber: 1, content: "hello");
-        var expectedEtag = storeResult.ETag;
-
-        var parts = await _storage.GetStoredPartsAsync(bucketName, key, uploadId, knownMetadata: null);
-
-        var only = Assert.Single(parts);
-        Assert.Equal(1, only.PartNumber);
-        Assert.Equal(expectedEtag, only.ETag);
-        Assert.Equal("hello".Length, only.Size);
+        await StorePartAsync("bucket", "key", "upload", 1, "hello");
+        var part = Assert.Single(await _storage.GetStoredPartsAsync("bucket", "key", "upload"));
+        Assert.Equal(1, part.PartNumber);
+        Assert.Equal(5, part.Size);
+        Assert.Empty(part.ETag);
+        Assert.Null(part.ChecksumSHA256);
     }
 
     [Fact]
-    public async Task GetStoredPartsAsync_WithKnownMetadataEtag_UsesHintInsteadOfRecomputing()
+    public async Task AbortedOverwrite_PreservesPublishedPart()
     {
-        // This is the core perf optimization: when the caller provides an ETag via metadata hint,
-        // the filesystem backend MUST NOT re-read the part file for MD5. We prove it by supplying a
-        // deliberately bogus ETag in the hint - if the returned ETag matches that bogus value, we
-        // know the file was not rehashed.
-        const string bucketName = "bucket";
-        const string key = "object";
-        const string uploadId = "upload-with-hint";
-        const string hintedEtag = "fakeetagthatisnotanymd5";
-
-        await StorePartAsync(bucketName, key, uploadId, partNumber: 1, content: "hello");
-
-        var hint = new Dictionary<int, PartMetadata>
+        await StorePartAsync("bucket", "key", "upload", 1, "original");
+        await using (var write = await _storage.BeginPartWriteAsync("bucket", "key", "upload", 1))
         {
-            [1] = new PartMetadata { ETag = hintedEtag }
-        };
-
-        var parts = await _storage.GetStoredPartsAsync(bucketName, key, uploadId, hint);
-
-        var only = Assert.Single(parts);
-        Assert.Equal(hintedEtag, only.ETag);
+            await write.Stream.WriteAsync("invalid upload"u8.ToArray());
+            using var prepared = await write.SealAsync();
+            await _storage.AbortPreparedPartAsync(prepared);
+        }
+        var readers = await _storage.GetPartReadersAsync("bucket", "key", "upload", [new CompletedPart { PartNumber = 1, ETag = "unused" }]);
+        var bytes = await PipeReaderHelper.ReadAllBytesAsync(Assert.Single(readers), true);
+        Assert.Equal("original"u8.ToArray(), bytes);
+        Assert.Empty(Directory.GetFiles(_testMetadataDirectory, ".lamina-tmp-*", SearchOption.AllDirectories));
     }
 
     [Fact]
-    public async Task GetStoredPartsAsync_WithEmptyHintedEtag_FallsBackToCompute()
+    public async Task ConcurrentStaging_IsInvisibleAndAbortDoesNotDiscardOtherWrite()
     {
-        // Data-first resilience: if metadata exists but has no ETag recorded (legacy upload from before
-        // this was persisted), fall back to computing from the file rather than returning empty string.
-        const string bucketName = "bucket";
-        const string key = "object";
-        const string uploadId = "upload-empty-hint";
-
-        var storeResult = await StorePartAsync(bucketName, key, uploadId, partNumber: 1, content: "hello");
-        var expectedEtag = storeResult.ETag;
-
-        var hint = new Dictionary<int, PartMetadata>
-        {
-            [1] = new PartMetadata { ETag = string.Empty }
-        };
-
-        var parts = await _storage.GetStoredPartsAsync(bucketName, key, uploadId, hint);
-
-        var only = Assert.Single(parts);
-        Assert.Equal(expectedEtag, only.ETag);
-    }
-
-    [Fact]
-    public async Task StorePartDataAsync_MatchingContentMd5_Succeeds()
-    {
-        const string content = "hello";
-        var expectedMd5 = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(content));
-
-        var pipe = new Pipe();
-        await pipe.Writer.WriteAsync(System.Text.Encoding.UTF8.GetBytes(content));
-        await pipe.Writer.CompleteAsync();
-
-        var result = await _storage.StorePartDataAsync("bucket", "key", "upload-md5-ok", 1, pipe.Reader, checksumRequest: null, expectedMd5: expectedMd5);
-
-        Assert.True(result.IsSuccess);
-        Assert.Equal(Convert.ToHexString(expectedMd5).ToLowerInvariant(), result.Value!.ETag);
-    }
-
-    [Fact]
-    public async Task StorePartDataAsync_MismatchingContentMd5_ReturnsBadDigestAndRemovesFile()
-    {
-        const string content = "hello";
-        var wrongMd5 = new byte[16]; // all zeros - definitely not MD5("hello")
-
-        var pipe = new Pipe();
-        await pipe.Writer.WriteAsync(System.Text.Encoding.UTF8.GetBytes(content));
-        await pipe.Writer.CompleteAsync();
-
-        var result = await _storage.StorePartDataAsync("bucket", "key", "upload-md5-bad", 1, pipe.Reader, checksumRequest: null, expectedMd5: wrongMd5);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal("BadDigest", result.ErrorCode);
-
-        // The orphaned part file must be cleaned up so the upload doesn't leak data on the disk.
-        var hasAny = await _storage.HasAnyPartsAsync("bucket", "key", "upload-md5-bad");
-        Assert.False(hasAny);
+        await using var first = await _storage.BeginPartWriteAsync("bucket", "key", "upload", 1);
+        await using var second = await _storage.BeginPartWriteAsync("bucket", "key", "upload", 1);
+        await first.Stream.WriteAsync("first"u8.ToArray());
+        await second.Stream.WriteAsync("second"u8.ToArray());
+        using var a = await first.SealAsync();
+        using var b = await second.SealAsync();
+        Assert.NotEqual(a.Tag, b.Tag);
+        Assert.False(await _storage.HasAnyPartsAsync("bucket", "key", "upload"));
+        Assert.Empty(await _storage.GetStoredPartsAsync("bucket", "key", "upload"));
+        await _storage.AbortPreparedPartAsync(a);
+        await _storage.CommitPreparedPartAsync("bucket", "key", "upload", 1, b);
+        var readers = await _storage.GetPartReadersAsync("bucket", "key", "upload", [new CompletedPart { PartNumber = 1, ETag = "unused" }]);
+        Assert.Equal("second"u8.ToArray(), await PipeReaderHelper.ReadAllBytesAsync(Assert.Single(readers), true));
     }
 
     [Fact]
@@ -193,14 +136,14 @@ public class FilesystemMultipartUploadDataStorageTests : IDisposable
         var exceptions = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
         using var cts = new CancellationTokenSource();
 
-        // Continuous listers forcing the ETag-recompute fallback (knownMetadata: null).
+        // Continuous raw part listings while published files are atomically replaced.
         var listers = Enumerable.Range(0, 4).Select(_ => Task.Run(async () =>
         {
             while (!cts.IsCancellationRequested)
             {
                 try
                 {
-                    await _storage.GetStoredPartsAsync(bucketName, key, uploadId, knownMetadata: null);
+                    await _storage.GetStoredPartsAsync(bucketName, key, uploadId);
                 }
                 catch (Exception ex)
                 {
@@ -241,33 +184,15 @@ public class FilesystemMultipartUploadDataStorageTests : IDisposable
             $"Concurrent store/list collided: {string.Join("; ", exceptions.Select(e => $"{e.GetType().Name}: {e.Message}"))}");
     }
 
-    private async Task<UploadPart> StorePartAsync(string bucketName, string key, string uploadId, int partNumber, string content)
-    {
-        var pipe = new Pipe();
-        await pipe.Writer.WriteAsync(System.Text.Encoding.UTF8.GetBytes(content));
-        await pipe.Writer.CompleteAsync();
-
-        var result = await _storage.StorePartDataAsync(bucketName, key, uploadId, partNumber, pipe.Reader, checksumRequest: null);
-        Assert.True(result.IsSuccess, result.ErrorMessage);
-        Assert.NotNull(result.Value);
-        return result.Value!;
-    }
+    private Task<UploadPart> StorePartAsync(string bucketName, string key, string uploadId, int partNumber, string content)
+        => StorePartBytesAsync(bucketName, key, uploadId, partNumber, System.Text.Encoding.UTF8.GetBytes(content));
 
     private async Task<UploadPart> StorePartBytesAsync(string bucketName, string key, string uploadId, int partNumber, byte[] content)
     {
-        var pipe = new Pipe();
-        // Stream the payload concurrently with the store so Pipe backpressure can't deadlock on a
-        // payload larger than the pause threshold, and so the file is held open for a realistic window.
-        var writeTask = Task.Run(async () =>
-        {
-            await pipe.Writer.WriteAsync(content);
-            await pipe.Writer.CompleteAsync();
-        });
-
-        var result = await _storage.StorePartDataAsync(bucketName, key, uploadId, partNumber, pipe.Reader, checksumRequest: null);
-        await writeTask;
-        Assert.True(result.IsSuccess, result.ErrorMessage);
-        Assert.NotNull(result.Value);
-        return result.Value!;
+        await using var write = await _storage.BeginPartWriteAsync(bucketName, key, uploadId, partNumber);
+        await write.Stream.WriteAsync(content);
+        using var prepared = await write.SealAsync();
+        await _storage.CommitPreparedPartAsync(bucketName, key, uploadId, partNumber, prepared);
+        return new UploadPart { PartNumber = partNumber, Size = content.Length, ETag = string.Empty };
     }
 }

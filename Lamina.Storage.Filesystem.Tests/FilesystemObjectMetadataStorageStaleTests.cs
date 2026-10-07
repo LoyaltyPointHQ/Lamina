@@ -6,6 +6,7 @@ using Lamina.Storage.Filesystem;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.Filesystem.Locking;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -14,11 +15,11 @@ using Moq;
 namespace Lamina.Storage.Filesystem.Tests;
 
 /// <summary>
-/// Tests for stale metadata detection and selective checksum recomputation in the
-/// SeparateDirectory filesystem metadata storage.
+/// Raw metadata persistence: data freshness and checksum computation belong to the facade.
 /// </summary>
 public class FilesystemObjectMetadataStorageStaleTests : IDisposable
 {
+    private readonly MemoryCache _cache = new(new MemoryCacheOptions());
     private readonly string _testDirectory;
     private readonly string _dataDirectory;
     private readonly string _metadataDirectory;
@@ -49,14 +50,13 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
         var lockManager = new InMemoryLockManager();
         var networkHelper = new NetworkFileSystemHelper(Options.Create(settings), NullLogger<NetworkFileSystemHelper>.Instance);
 
-        var cacheSettings = new MetadataCacheSettings { Enabled = false };
+        var cacheSettings = new MetadataCacheSettings { Enabled = true };
 
         _dataStorage = new FilesystemObjectDataStorage(
             Options.Create(settings),
             networkHelper,
             new LinuxZeroCopyHelper(NullLogger<LinuxZeroCopyHelper>.Instance),
-            NullLogger<FilesystemObjectDataStorage>.Instance,
-            Mock.Of<IChunkedDataParser>());
+            NullLogger<FilesystemObjectDataStorage>.Instance);
 
         _storage = new SeparateDirectoryObjectMetadataStorage(
             Options.Create(settings),
@@ -66,7 +66,7 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
             lockManager,
             networkHelper,
             NullLogger<SeparateDirectoryObjectMetadataStorage>.Instance,
-            null);
+            _cache);
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
         await _storage.StoreMetadataAsync(bucketName, key, "etag-123", testData.Length, null, checksums);
 
         // Act
-        var result = await _storage.GetMetadataAsync(bucketName, key);
+        var result = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
 
         // Assert
         Assert.NotNull(result);
@@ -102,7 +102,7 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
     }
 
     [Fact]
-    public async Task GetMetadataAsync_StaleMetadata_RecomputesETagAndSelectiveChecksums()
+    public async Task GetMetadataAsync_StaleMetadata_ReturnsStoredChecksums()
     {
         // Arrange
         var bucketName = "test-bucket";
@@ -130,19 +130,19 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
         await File.WriteAllBytesAsync(dataPath, testData);
 
         // Act
-        var result = await _storage.GetMetadataAsync(bucketName, key);
+        var result = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
 
         // Assert
         Assert.NotNull(result);
-        Assert.NotEqual("old-etag", result.ETag); // ETag was recomputed
-        Assert.NotNull(result.ChecksumCRC32); // CRC32 was recomputed (was in original)
-        Assert.NotNull(result.ChecksumSHA256); // SHA256 was recomputed (was in original)
+        Assert.Equal("old-etag", result.ETag); // Stored value is returned without refreshing.
+        Assert.Equal("old-crc32", result.ChecksumCRC32);
+        Assert.Equal("old-sha256", result.ChecksumSHA256);
         Assert.Null(result.ChecksumCRC32C); // Was not in original, so not computed
         Assert.Null(result.ChecksumCRC64NVME); // Was not in original, so not computed
     }
 
     [Fact]
-    public async Task GetMetadataAsync_StaleMetadataNoChecksums_RecomputesOnlyETag()
+    public async Task GetMetadataAsync_StaleMetadataNoChecksums_ReturnsStoredETag()
     {
         // Arrange
         var bucketName = "test-bucket";
@@ -163,17 +163,17 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
         await File.WriteAllBytesAsync(dataPath, testData);
 
         // Act
-        var result = await _storage.GetMetadataAsync(bucketName, key);
+        var result = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
 
         // Assert
         Assert.NotNull(result);
-        Assert.NotEqual("old-etag", result.ETag); // ETag recomputed
+        Assert.Equal("old-etag", result.ETag); // Stored value is returned without refreshing.
         Assert.Null(result.ChecksumCRC32); // No checksums to recompute
         Assert.Null(result.ChecksumSHA256);
     }
 
     [Fact]
-    public async Task GetMetadataAsync_OrphanedMetadata_ReturnsNull()
+    public async Task GetMetadataAsync_OrphanedMetadata_ReturnsRawSnapshot()
     {
         // Arrange
         var bucketName = "test-bucket";
@@ -187,11 +187,11 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
         await File.WriteAllTextAsync(metadataPath, "{\"BucketName\":\"test-bucket\",\"ETag\":\"test\",\"LastModified\":\"2025-01-01T00:00:00Z\"}");
 
         // Act
-        var result = await _storage.GetMetadataAsync(bucketName, key);
+        var result = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
 
         // Assert
-        Assert.Null(result); // Orphaned metadata should be cleaned up and return null
-        Assert.False(File.Exists(metadataPath)); // Metadata should be deleted
+        Assert.NotNull(result);
+        Assert.True(File.Exists(metadataPath));
     }
 
     [Fact]
@@ -212,7 +212,7 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
         await _storage.StoreMetadataAsync(bucketName, key, "etag", testData.Length, null, null);
 
         // Read back metadata to check timestamp
-        var result = await _storage.GetMetadataAsync(bucketName, key);
+        var result = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
 
         // Assert
         Assert.NotNull(result);
@@ -221,7 +221,7 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
     }
 
     [Fact]
-    public async Task GetMetadataAsync_StaleMetadata_PersistsRecomputedMetadataToFile()
+    public async Task GetMetadataAsync_StaleMetadata_DoesNotRewriteMetadataFile()
     {
         // Arrange
         var bucketName = "test-bucket";
@@ -240,11 +240,11 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
         var newData = "modified content"u8.ToArray();
         await File.WriteAllBytesAsync(dataPath, newData);
 
-        // Act — first read triggers recomputation
-        var result = await _storage.GetMetadataAsync(bucketName, key);
+        // Act — a raw read must not rewrite metadata.
+        var result = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
         Assert.NotNull(result);
-        var recomputedETag = result.ETag;
-        var recomputedSha256 = result.ChecksumSHA256;
+        var storedETag = result.ETag;
+        var storedSha256 = result.ChecksumSHA256;
 
         // Read the metadata JSON directly from disk
         var metadataPath = Path.Combine(_metadataDirectory, bucketName, $"{key}.json");
@@ -254,12 +254,12 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
         using var doc = System.Text.Json.JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        // Assert — persisted file must contain recomputed values
-        Assert.Equal(recomputedETag, root.GetProperty("ETag").GetString());
-        Assert.NotNull(recomputedSha256);
-        Assert.Equal(recomputedSha256, root.GetProperty("ChecksumSHA256").GetString());
-        Assert.DoesNotContain("old-etag", json);
-        Assert.DoesNotContain("old-sha256", json);
+        // Assert — persisted fields remain unchanged.
+        Assert.Equal(storedETag, root.GetProperty("ETag").GetString());
+        Assert.NotNull(storedSha256);
+        Assert.Equal(storedSha256, root.GetProperty("ChecksumSHA256").GetString());
+        Assert.Contains("old-etag", json);
+        Assert.Contains("old-sha256", json);
     }
 
     [Fact]
@@ -267,8 +267,7 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
     {
         // Multipart ETags ("<32 hex>-<N>") are a function of individual part MD5s and the part
         // count - they cannot be reconstructed from the merged file. If staleness triggers (e.g.
-        // external touch, clock skew, or the Phase 2/3 ordering bug), RecomputeStaleMetadataAsync
-        // must keep the persisted multipart ETag instead of overwriting it with MD5-of-full-file.
+        // external touch or clock skew), raw reads must preserve the stored value.
         var bucketName = "test-bucket";
         var key = "multipart.bin";
         var testData = new byte[] { 0x01, 0x02, 0x03, 0x04 };
@@ -284,14 +283,54 @@ public class FilesystemObjectMetadataStorageStaleTests : IDisposable
         await Task.Delay(100);
         File.SetLastWriteTimeUtc(dataPath, DateTime.UtcNow);
 
-        var result = await _storage.GetMetadataAsync(bucketName, key);
+        var result = (await _storage.GetMetadataAsync(bucketName, key))?.Metadata;
 
         Assert.NotNull(result);
         Assert.Equal(persistedMultipartETag, result.ETag);
     }
 
+    [Fact]
+    public async Task UpdateIntegrity_ChangesOnlyIntegrityWithoutUpsert()
+    {
+        const string bucket = "bucket";
+        const string key = "key";
+        Assert.False(await _storage.UpdateIntegrityAsync(bucket, key, "etag", 1, DateTime.UtcNow, new()));
+        Directory.CreateDirectory(Path.Combine(_dataDirectory, bucket));
+        await File.WriteAllTextAsync(Path.Combine(_dataDirectory, bucket, key), "data");
+        await _storage.StoreMetadataAsync(bucket, key, "old", 4,
+            new PutObjectRequest { Key = key, ContentType = "text/plain", Metadata = new() { ["user"] = "saved" } },
+            new() { ["SHA1"] = "old" });
+        await _storage.SetObjectTagsAsync(bucket, key, new() { ["tag"] = "latest" });
+        var time = DateTime.UtcNow;
+        Assert.True(await _storage.UpdateIntegrityAsync(bucket, key, "new", 9, time, new() { ["CRC32"] = "crc" }));
+        var snapshot = (await _storage.GetMetadataAsync(bucket, key))!;
+        Assert.Equal(time, snapshot.DataLastModified);
+        Assert.Equal("new", snapshot.Metadata.ETag);
+        Assert.Equal(9, snapshot.Metadata.Size);
+        Assert.Equal("latest", snapshot.Metadata.Tags["tag"]);
+        Assert.Equal("saved", snapshot.Metadata.Metadata["user"]);
+        Assert.Equal("text/plain", snapshot.Metadata.ContentType);
+        Assert.Null(snapshot.Metadata.ChecksumSHA1);
+        Assert.Equal("crc", snapshot.Metadata.ChecksumCRC32);
+    }
+
+    [Fact]
+    public async Task CachedSnapshot_IsDetachedAndDoesNotInspectOrphanedData()
+    {
+        var time = DateTime.UtcNow;
+        await _storage.StoreMetadataAsync("bucket", "key", "etag", 4,
+            new PutObjectRequest { Key = "key", Tags = new() { ["tag"] = "original" } }, lastModified: time);
+        var first = (await _storage.GetMetadataAsync("bucket", "key"))!;
+        first.Metadata.Tags["tag"] = "mutated";
+        var second = (await _storage.GetMetadataAsync("bucket", "key"))!;
+        Assert.Equal("original", second.Metadata.Tags["tag"]);
+        Assert.Equal(time, second.DataLastModified);
+        Assert.Equal("etag", second.Metadata.ETag);
+    }
+
     public void Dispose()
     {
+        _cache.Dispose();
         if (Directory.Exists(_testDirectory))
         {
             try
