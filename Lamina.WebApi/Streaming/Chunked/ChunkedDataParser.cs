@@ -30,54 +30,90 @@ namespace Lamina.WebApi.Streaming.Chunked
         {
             var result = new ChunkedDataResult();
             byte[] remainingBuffer = Array.Empty<byte>();
+            var requireCompleteStream = chunkValidator is { ExpectsTrailers: false };
+            var finalChunkReached = false;
 
-            while (!cancellationToken.IsCancellationRequested)
+            if (requireCompleteStream && chunkValidator!.ExpectedDecodedLength < 0)
             {
+                result.Success = false;
+                result.ErrorMessage = "Invalid expected decoded length";
+                return result;
+            }
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 var readResult = await dataReader.ReadAsync(cancellationToken);
                 var buffer = readResult.Buffer;
 
-                if (buffer.IsEmpty && readResult.IsCompleted)
-                {
-                    break;
-                }
-
-                var (dataBuffer, isRented) = ChunkBuffer.CombineBuffers(remainingBuffer, buffer, _bufferPool);
-                var dataLength = remainingBuffer.Length + (int)buffer.Length;
-
                 try
                 {
-                    var processingResult = await ProcessChunksToStreamAsync(
-                        dataBuffer, dataLength, destinationStream, chunkValidator, onDataWritten, cancellationToken);
+                    if (readResult.IsCanceled)
+                        throw new OperationCanceledException(cancellationToken);
 
-                    // Check for validation failure
-                    if (processingResult.validationError != null)
+                    if (finalChunkReached)
                     {
-                        result.Success = false;
-                        result.ErrorMessage = processingResult.validationError;
-                        return result;
+                        if (!buffer.IsEmpty)
+                        {
+                            result.Success = false;
+                            result.ErrorMessage = "Unexpected data after final chunk";
+                            return result;
+                        }
+                    }
+                    else if (!buffer.IsEmpty || remainingBuffer.Length > 0)
+                    {
+                        var (dataBuffer, isRented) = ChunkBuffer.CombineBuffers(remainingBuffer, buffer, _bufferPool);
+                        var dataLength = remainingBuffer.Length + (int)buffer.Length;
+                        try
+                        {
+                            var processingResult = await ProcessChunksToStreamAsync(
+                                dataBuffer, dataLength, destinationStream, chunkValidator, onDataWritten, cancellationToken,
+                                requireCompleteStream ? chunkValidator!.ExpectedDecodedLength - result.TotalBytesWritten : null);
+
+                            result.TotalBytesWritten += processingResult.bytesWritten;
+                            if (processingResult.validationError != null)
+                            {
+                                result.Success = false;
+                                result.ErrorMessage = processingResult.validationError;
+                                return result;
+                            }
+
+                            finalChunkReached = processingResult.finalChunkReached;
+                            remainingBuffer = ChunkBuffer.ExtractRemainingData(dataBuffer, processingResult.newPosition, dataLength);
+                            if (finalChunkReached)
+                            {
+                                if (!requireCompleteStream)
+                                    break;
+                                if (remainingBuffer.Length > 0)
+                                {
+                                    result.Success = false;
+                                    result.ErrorMessage = "Unexpected data after final chunk";
+                                    return result;
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            ChunkBuffer.SafeReturnBuffer(dataBuffer, _bufferPool, isRented);
+                        }
                     }
 
-                    result.TotalBytesWritten += processingResult.bytesWritten;
-
-                    if (processingResult.finalChunkReached)
-                    {
-                        dataReader.AdvanceTo(buffer.End);
+                    if (readResult.IsCompleted)
                         break;
-                    }
-
-                    remainingBuffer = ChunkBuffer.ExtractRemainingData(dataBuffer, processingResult.newPosition, dataLength);
                 }
                 finally
                 {
-                    ChunkBuffer.SafeReturnBuffer(dataBuffer, _bufferPool, isRented);
+                    dataReader.AdvanceTo(buffer.End);
                 }
+            }
 
-                dataReader.AdvanceTo(buffer.End);
-
-                if (readResult.IsCompleted)
-                {
-                    break;
-                }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (requireCompleteStream && (!finalChunkReached || result.TotalBytesWritten != chunkValidator!.ExpectedDecodedLength))
+            {
+                result.Success = false;
+                result.ErrorMessage = !finalChunkReached
+                    ? "Incomplete chunked stream: missing complete final chunk"
+                    : "Decoded length does not match expected decoded length";
             }
 
             return result;
@@ -153,7 +189,8 @@ namespace Lamina.WebApi.Streaming.Chunked
             Stream destinationStream,
             IChunkSignatureValidator? chunkValidator,
             [InstantHandle] Action<ReadOnlySpan<byte>>? onDataWritten,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            long? expectedRemainingLength = null)
         {
             long totalBytesWritten = 0;
             var position = 0;
@@ -166,8 +203,22 @@ namespace Lamina.WebApi.Streaming.Chunked
                     break; // Incomplete header
                 }
 
+                var headerStartPosition = position;
                 var header = headerResult.Header;
                 position = headerResult.NewPosition;
+
+                if (expectedRemainingLength.HasValue)
+                {
+                    if (header.Size < 0 || header.Size > expectedRemainingLength.Value - totalBytesWritten)
+                        return (totalBytesWritten, false, position, "Chunk exceeds expected decoded length");
+
+                    // Wait for the entire frame before validating, so fragmented CRLF cannot
+                    // advance the signature chain twice for the same chunk.
+                    if ((long)dataLength - position < (long)header.Size + ChunkConstants.CrlfPattern.Length)
+                        return (totalBytesWritten, false, headerStartPosition, null);
+                    if (dataBuffer[position + header.Size] != '\r' || dataBuffer[position + header.Size + 1] != '\n')
+                        return (totalBytesWritten, false, position, "Invalid chunk terminating CRLF");
+                }
 
                 if (header.IsFinalChunk)
                 {

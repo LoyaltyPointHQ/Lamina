@@ -9,24 +9,20 @@ fixes and their focused verification are recorded separately below.
 
 | Scenario | Observed behavior | Required behavior / scope |
 | --- | --- | --- |
-| `test_all_client_interoperability[empty-mc]` | MinIO mc cannot upload a zero-byte file: server returns a missing Content-Length error | Zero-byte upload must work; all profiles. Other clients' empty uploads and mc's nonempty transfers are tested independently |
-| `test_mc_signed_streaming_single_put[empty]` | The explicit HTTP/SigV4 single-PUT path also rejects a zero-byte file with MissingContentLength | Empty-file compatibility edge case; all profiles. This alone does not attribute the defect to Lamina's chunk decoder |
 | `test_delete_bucket_after_external_nested_file_removed` | Empty bucket cannot be deleted when only empty filesystem directories remain | Delete the bucket when it contains no S3 objects; Filesystem data profiles |
 | `test_explicit_checksums` | Xattr GET response lacks CRC32/SHA1/SHA256 that were supplied on PUT | Return stored requested checksums; `fs-xattr` |
 | `test_aws_cli_api_pagination_checksum_metadata` | Xattr HEAD response lacks the uploaded SHA256 | Return stored requested checksum; `fs-xattr` |
 
-Tests for ordinary synchronization use nonempty files so the separate mc empty-PUT
-failure does not prevent checking the rest of sync/delete behavior. Tests that
+Tests for ordinary synchronization use nonempty files; empty transfers have
+dedicated interoperability and signed-streaming cases. Tests that
 create directories outside S3 clean up their own directories; the deletion bug
 has a dedicated assertion instead of being hidden in fixture teardown.
 
 The signed-streaming tests add no proxy or packet inspection: HTTP, SigV4, no
 `--checksum` and the pinned mc/minio-go code determine the upload path. The
-empty-input case is deliberately separate from nonempty signed chunk boundaries;
-minio-go's signer calculates encoded stream length zero for empty input. Its
-MissingContentLength result is recorded as a compatibility failure, not proof
-of a particular server-side decoder defect. Signed trailers and deliberately
-corrupted chunk signatures remain outside this E2E group.
+empty-input case is deliberately separate from nonempty signed chunk boundaries.
+Signed trailers and deliberately corrupted chunk signatures remain outside this
+E2E group; separate .NET regressions cover invalid no-trailer signed streams.
 
 ## Diagnosis boundaries
 
@@ -71,8 +67,8 @@ After the fix:
 
 Thus `test_multipart_abort_and_listing` and
 `test_multipart_complete_and_part_pagination` are no longer known failures.
-The full 935-case suite was **not rerun** for this fix; the totals and generated
-HTML below describe the historical baseline, not a new whole-suite result.
+The full suite was not rerun at that stage. The baseline below remains historical;
+the later full run after the empty-mc fix is recorded separately.
 Concurrent upload/abort races and filesystem bucket/key identity checks were
 not changed by this fix. E2E runtime directories and owned containers were cleaned;
 no new container volumes remained.
@@ -111,16 +107,90 @@ Verification after the fix:
 - Ruff lint/format, locked dependencies and `git diff --check` passed. E2E storage
   and owned processes/containers were cleaned; no extra container volumes remained.
 
-The full suite was not rerun. The historical totals and local HTML report below
-are not updated whole-suite results. Other endpoints' form binding is unchanged.
+The full suite was not rerun at that stage. Other endpoints' form binding is
+unchanged; the later full run after the empty-mc fix is recorded separately.
 
-## Historical full run, before the ListParts and form Content-Type fixes — 2026-10-07 UTC
+## Resolved: empty mc upload without HTTP Content-Length — 2026-10-07 UTC
+
+Pinned mc/minio-go emits a signed terminal AWS chunk even for an empty file. Go
+sends that body using HTTP Transfer-Encoding: chunked without Content-Length;
+x-amz-decoded-content-length remains zero. The shared upload header guard had
+rejected this valid transport before the decoder could verify the terminal signature.
+
+The guard now allows missing Content-Length only for the no-trailer signed
+payload marker, HTTP chunked transport, an existing no-trailer validator and one
+nonnegative decoded length matching that validator. Ordinary missing-length
+requests and trailer variants retain their previous behavior. No empty-object
+shortcut or artificial Content-Length is used.
+
+The validated no-trailer parser also now requires the full final chunk/CRLF and
+EOF, rejects extra bytes and decoded-length mismatch, stops oversized chunks
+before writing them, and propagates cancellation. Both data backends publish
+only successful results. Legacy unvalidated parsing and trailer parsing are not
+expanded by this fix.
+
+TDD and focused verification:
+
+- Original empty-mc and signed-streaming-empty E2E: **2 failed** on fs-inline
+  before the fix, both MissingContentLength; **22 passed** across all 11 profiles
+  after the fix (34.28 seconds).
+- Header guard RED: **2 failed, 16 passed**. Parser RED: **14 failed, 3 passed**.
+  Initial HTTP RED: **24 failed, 2 passed**; another 4 invalid-empty-signature
+  cases were subsequently added.
+- Final focused .NET: **78 passed**; full WebApi **640 passed**, Storage.Core
+  **195 passed**, Filesystem **216 passed**.
+- HTTP regressions exercise real signatures and verify absent Content-Length
+  and chunked transport on the server. Invalid uploads do not publish or replace
+  objects/parts in InMemory; filesystem temp-file publication was also reviewed,
+  and its existing storage tests pass.
+
+See the latest full-run results below for all-client E2E coverage. The negative
+signature cases above are .NET tests, not deliberate mutations by CLI clients.
+
+## Latest full run, after all three fixes — 2026-10-07 UTC
+
+**1056 cases: 1019 passed, 10 failed, 27 skipped, 0 errors; 533.01 seconds.**
+One complete `pytest tests/e2e --storage-matrix all` run, using the pinned boto3,
+AWS CLI, rclone and mc clients on all 11 profiles. The 96 variants per profile
+include the added whole-object part-copy and expanded form-content-type cases.
+
+All **231 interoperability + signed-streaming cases passed**, including both
+empty-mc cases on each profile. The form-content-type and ListParts fixes remain
+passing in this full run. Remaining failures are only:
+
+- **6** DeleteBucket failures when empty filesystem directories remain;
+- **4** Xattr checksum-response failures (CRC32/SHA1/SHA256 GET and SHA256 HEAD).
+
+The 27 skips are expected profile limitations: 25 direct-filesystem cases with
+InMemory data, and 2 restart cases with volatile InMemory metadata.
+
+| Profile | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: |
+| `fs-inline` | 95 | 1 | 0 |
+| `fs-separate` | 95 | 1 | 0 |
+| `fs-xattr` | 91 | 5 | 0 |
+| `fs-memory` | 93 | 1 | 2 |
+| `fs-sqlite` | 95 | 1 | 0 |
+| `memory-memory` | 91 | 0 | 5 |
+| `memory-inline` | 91 | 0 | 5 |
+| `memory-separate` | 91 | 0 | 5 |
+| `memory-sqlite` | 91 | 0 | 5 |
+| `fs-postgres` | 95 | 1 | 0 |
+| `memory-postgres` | 91 | 0 | 5 |
+
+The ignored root `e2e-report.html` was regenerated from this full run and contains
+all case statuses, timings and failure details, grouped by category with tests
+as rows and profiles as columns. This replaces the old local HTML, not the
+historical baseline recorded below. Runtime directories and owned processes/
+containers were cleaned; the pre-existing Podman volume was left untouched.
+
+## Historical full run, before the ListParts, form Content-Type and empty-mc fixes — 2026-10-07 UTC
 
 **935 cases: 832 passed, 76 failed, 27 skipped, 0 errors.**
 Executed as three independent parallel batches: 514.38 seconds summed suite time,
 185.59 seconds from the first suite start to the last suite end.
 All four clients ran across all 11 profiles. The 76 failed cases repeated the
-findings above, including the now-resolved ListParts and form Content-Type failures, across profiles;
+findings above, including the now-resolved ListParts, form Content-Type and empty-mc failures, across profiles;
 they were not 76 independent root causes.
 The new signed-streaming group contributes **99 cases: 88 passed, 11 failed**;
 only the empty-input case fails, once per profile.

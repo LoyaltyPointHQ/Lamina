@@ -1,5 +1,8 @@
+using System.Globalization;
 using Lamina.Core.Models;
+using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Helpers;
+using Lamina.WebApi.Authentication;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
@@ -62,18 +65,29 @@ public abstract class S3ControllerBase : ControllerBase
     protected static bool IsValidBucketName(string bucketName) => BucketNameValidator.IsValid(bucketName);
 
     /// <summary>
-    /// Validates that the Content-Length header is present in the request.
-    /// Required by S3 API for PUT operations.
+    /// Requires Content-Length, except for validated signed streaming over HTTP chunked
+    /// transport with a known decoded length. The AWS terminal chunk is still required.
     /// </summary>
     /// <param name="resource">The resource path for error reporting</param>
     /// <returns>An error IActionResult if validation fails, null if valid</returns>
     protected IActionResult? ValidateContentLengthHeader(string resource)
     {
-        if (!Request.ContentLength.HasValue)
-        {
-            return S3Error("MissingContentLength", "You must provide the Content-Length HTTP header.", resource, 411);
-        }
-        return null;
+        if (Request.ContentLength.HasValue)
+            return null;
+
+        // mc sends an empty signed object as a terminal AWS chunk inside HTTP chunked
+        // transport. Do not manufacture a Content-Length or bypass its chunk signature.
+        if (Request.Headers["x-amz-content-sha256"] == S3AuthenticationDefaults.StreamingPayload &&
+            HttpContext.Items["ChunkValidator"] is IChunkSignatureValidator { ExpectsTrailers: false } validator &&
+            Request.Headers.TryGetValue("x-amz-decoded-content-length", out var lengths) &&
+            lengths.Count == 1 &&
+            long.TryParse(lengths[0], NumberStyles.None, CultureInfo.InvariantCulture, out var decodedLength) &&
+            decodedLength >= 0 && decodedLength == validator.ExpectedDecodedLength &&
+            Request.Headers.TransferEncoding.ToString().Split(',').Any(encoding =>
+                encoding.Trim().Equals("chunked", StringComparison.OrdinalIgnoreCase)))
+            return null;
+
+        return S3Error("MissingContentLength", "You must provide the Content-Length HTTP header.", resource, 411);
     }
 
     /// <summary>

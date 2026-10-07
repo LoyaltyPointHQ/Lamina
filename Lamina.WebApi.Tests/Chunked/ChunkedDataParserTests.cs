@@ -40,6 +40,7 @@ namespace Lamina.WebApi.Tests.Streaming.Chunked
         {
             // Arrange
             var chunkedData = CreateSimpleChunkedData();
+            _chunkValidatorMock.SetupGet(v => v.ExpectedDecodedLength).Returns(11);
             var pipeReader = CreatePipeReader(chunkedData);
             var destinationStream = new MemoryStream();
 
@@ -88,6 +89,7 @@ namespace Lamina.WebApi.Tests.Streaming.Chunked
 
             // Arrange
             var fullChunkedData = CreateSpecificBugScenario();
+            _chunkValidatorMock.SetupGet(v => v.ExpectedDecodedLength).Returns(34);
             var pipeReader = CreateBugReproducingPipeReader(fullChunkedData);
             var destinationStream = new MemoryStream();
 
@@ -130,6 +132,7 @@ namespace Lamina.WebApi.Tests.Streaming.Chunked
         {
             // Arrange
             var chunkedData = CreateSimpleChunkedData();
+            _chunkValidatorMock.SetupGet(v => v.ExpectedDecodedLength).Returns(11);
             var pipeReader = CreatePipeReader(chunkedData);
             var destinationStream = new MemoryStream();
 
