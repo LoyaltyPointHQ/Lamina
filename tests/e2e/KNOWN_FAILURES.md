@@ -9,14 +9,13 @@ fixes and their focused verification are recorded separately below.
 
 | Scenario | Observed behavior | Required behavior / scope |
 | --- | --- | --- |
-| `test_delete_bucket_after_external_nested_file_removed` | Empty bucket cannot be deleted when only empty filesystem directories remain | Delete the bucket when it contains no S3 objects; Filesystem data profiles |
 | `test_explicit_checksums` | Xattr GET response lacks CRC32/SHA1/SHA256 that were supplied on PUT | Return stored requested checksums; `fs-xattr` |
 | `test_aws_cli_api_pagination_checksum_metadata` | Xattr HEAD response lacks the uploaded SHA256 | Return stored requested checksum; `fs-xattr` |
 
 Tests for ordinary synchronization use nonempty files; empty transfers have
 dedicated interoperability and signed-streaming cases. Tests that
-create directories outside S3 clean up their own directories; the deletion bug
-has a dedicated assertion instead of being hidden in fixture teardown.
+create directories outside S3 clean up their own directories; deletion of buckets
+containing only empty directories has a dedicated regression assertion.
 
 The signed-streaming tests add no proxy or packet inspection: HTTP, SigV4, no
 `--checksum` and the pinned mc/minio-go code determine the upload path. The
@@ -28,8 +27,8 @@ E2E group; separate .NET regressions cover invalid no-trailer signed streams.
 
 Read-only investigation confirmed:
 
-- `FilesystemBucketDataStorage` checks for remaining directory entries, so empty
-  directories left by external filesystem edits trigger `BucketNotEmpty`.
+- Before the fix below, `FilesystemBucketDataStorage` checked top-level directory
+  entries, so empty directories left by external edits triggered `BucketNotEmpty`.
 - The Xattr preflight successfully writes and reads a `user.*` attribute. Its
   checksum response failure is not lack of filesystem xattr support.
 
@@ -147,7 +146,42 @@ TDD and focused verification:
 See the latest full-run results below for all-client E2E coverage. The negative
 signature cases above are .NET tests, not deliberate mutations by CLI clients.
 
-## Latest full run, after all three fixes — 2026-10-07 UTC
+## Resolved: DeleteBucket after external nested file removal — 2026-10-07 UTC
+
+DeleteBucket now scans the complete filesystem tree before removing anything.
+Any file (including zero-byte, hidden, metadata/temp-looking files) or symbolic
+link prevents deletion. A directory-only tree is removed bottom-up using only
+nonrecursive deletes. The existing explicit `force:true` behavior is unchanged.
+
+The shared `NetworkFileSystemHelper` owns the empty-directory deletion primitive:
+both DeleteBucket's tree cleanup and DeleteObject's existing parent cleanup use
+it. Parent cleanup also now preserves symbolic links. The different traversal
+algorithms remain separate; no object-listing filters are reused for deletion.
+
+TDD and verification:
+
+- Original E2E RED: **3 failed** on Inline, SeparateDirectory and Xattr;
+  strengthened E2E RED: **1 failed** on Inline.
+- New .NET regressions RED: **30 passed, 5 failed** (three directory-only bucket
+  modes and two symlink-preservation cases). After the fix, focused bucket/helper
+  tests: **57 passed**; full Filesystem **251 passed**, Core **195 passed**,
+  WebApi **640 passed**.
+- `uv run --project tests/e2e --locked pytest tests/e2e/test_storage.py tests/e2e/test_s3_api.py::test_nonempty_bucket_cannot_be_deleted tests/e2e/test_s3_api.py::test_bucket_lifecycle --storage-matrix all -v`:
+  **50 passed, 27 skipped in 47.51 seconds**, using a fresh Release build.
+  The target regression passed on all **six Filesystem data profiles** and was
+  skipped on the five InMemory data profiles. The strengthened case verifies
+  409 while the file exists, byte preservation, then 204 after external removal,
+  physical bucket-directory removal, absence from ListBuckets and HEAD 404.
+- Ruff check/format and `git diff --check` passed. Owned temporary storage,
+  processes and PostgreSQL containers were cleaned; no new volumes remained.
+
+The full all-client E2E suite was not rerun for this fix; the HTML report still
+represents the preceding full run below. Xattr checksum failures remain outside
+this change. There is no deterministic concurrent-file-creation test; nonrecursive
+deletion protects files appearing before the delete syscall. Path-based checks
+do not provide protection against hostile concurrent ancestor/symlink replacement.
+
+## Latest full run, before the DeleteBucket fix — 2026-10-07 UTC
 
 **1056 cases: 1019 passed, 10 failed, 27 skipped, 0 errors; 533.01 seconds.**
 One complete `pytest tests/e2e --storage-matrix all` run, using the pinned boto3,

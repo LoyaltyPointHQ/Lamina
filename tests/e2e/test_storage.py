@@ -127,11 +127,21 @@ def test_delete_bucket_after_external_nested_file_removed(server, s3):
         path.parent.mkdir(parents=True)
         path.write_bytes(b"external object")
         assert read_object(s3, bucket, "external/nested/object.txt") == b"external object"
+        with pytest.raises(ClientError) as error:
+            s3.delete_bucket(Bucket=bucket)
+        assert error.value.response["Error"]["Code"] == "BucketNotEmpty"
+        assert error.value.response["ResponseMetadata"]["HTTPStatusCode"] == 409
+        assert path.read_bytes() == b"external object"
         path.unlink()
         assert listed_keys(s3, bucket) == set()
         result = s3.delete_bucket(Bucket=bucket)
         deleted = True
         assert result["ResponseMetadata"]["HTTPStatusCode"] == 204
+        assert not (server.data_dir / bucket).exists()
+        assert bucket not in {item["Name"] for item in s3.list_buckets()["Buckets"]}
+        with pytest.raises(ClientError) as error:
+            s3.head_bucket(Bucket=bucket)
+        assert error.value.response["ResponseMetadata"]["HTTPStatusCode"] == 404
     finally:
         if not deleted:
             path.unlink(missing_ok=True)

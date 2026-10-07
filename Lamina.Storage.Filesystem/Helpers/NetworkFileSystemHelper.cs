@@ -245,29 +245,88 @@ public class NetworkFileSystemHelper
             while (!string.IsNullOrEmpty(directory) &&
                    directory != stopAtDirectory)
             {
-                if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
+                try
                 {
-                    try
-                    {
-                        // For CIFS, we'll let the retry mechanism handle "directory not empty" errors
-                        Directory.Delete(directory);
-                        directory = Path.GetDirectoryName(directory);
-                    }
-                    catch (DirectoryNotFoundException)
-                    {
-                        // Directory was already deleted by another thread/process - this is fine
-                        // Break the loop since parent directories may also be deleted
+                    if (!TryDeleteEmptyDirectory(directory))
                         break;
-                    }
+
+                    directory = Path.GetDirectoryName(directory);
                 }
-                else
+                catch (DirectoryNotFoundException)
                 {
+                    // Another process may already have deleted this hierarchy.
                     break;
                 }
             }
 
             return Task.FromResult(true);
         }, "DirectoryCleanup");
+    }
+
+    /// <summary>
+    /// Deletes a tree containing only ordinary directories. Files and links prevent
+    /// cleanup; unlike parent cleanup, the entire tree is checked before any deletion.
+    /// </summary>
+    public Task<bool> DeleteDirectoryTreeIfEmptyAsync(string directoryPath, CancellationToken cancellationToken = default)
+    {
+        return ExecuteWithRetryAsync(() =>
+        {
+            var pending = new Stack<string>();
+            var directories = new List<string>();
+            pending.Push(directoryPath);
+
+            while (pending.TryPop(out var directory))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                    return Task.FromResult(false);
+
+                directories.Add(directory);
+                // Use shallow, unfiltered enumeration: even hidden/internal-looking
+                // files must block deletion, and links must never be traversed.
+                foreach (var entry in new DirectoryInfo(directory).EnumerateFileSystemInfos())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var attributes = entry.Attributes;
+                    if ((attributes & FileAttributes.ReparsePoint) != 0 ||
+                        (attributes & FileAttributes.Directory) == 0)
+                        return Task.FromResult(false);
+
+                    pending.Push(entry.FullName);
+                }
+            }
+
+            for (var i = directories.Count - 1; i >= 0; i--)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var directory = directories[i];
+                try
+                {
+                    if (!TryDeleteEmptyDirectory(directory))
+                        return Task.FromResult(false);
+                }
+                catch (IOException) when (Directory.Exists(directory) && Directory.EnumerateFileSystemEntries(directory).Any())
+                {
+                    // A new entry can appear between the emptiness check and deletion.
+                    return Task.FromResult(false);
+                }
+            }
+
+            return Task.FromResult(true);
+        }, "DirectoryTreeCleanup");
+    }
+
+    private static bool TryDeleteEmptyDirectory(string directory)
+    {
+        if (!Directory.Exists(directory) ||
+            (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0 ||
+            Directory.EnumerateFileSystemEntries(directory).Any())
+            return false;
+
+        // Never recursively delete here: a concurrently created file must survive.
+        // Network filesystem errors are handled by the caller's retry policy.
+        Directory.Delete(directory, recursive: false);
+        return true;
     }
 
     private bool ShouldRetry(IOException ex)

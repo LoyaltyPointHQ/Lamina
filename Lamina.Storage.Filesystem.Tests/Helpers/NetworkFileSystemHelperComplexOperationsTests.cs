@@ -227,6 +227,25 @@ public class NetworkFileSystemHelperComplexOperationsTests : IDisposable
     #region DeleteDirectoryIfEmptyAsync Tests
 
     [Fact]
+    public async Task DeleteDirectoryIfEmpty_SymbolicLinkToEmptyDirectory_PreservesLinkAndTarget()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var helper = CreateHelper(NetworkFileSystemMode.None);
+        var target = Path.Combine(_testDir, "empty-target");
+        var link = Path.Combine(_testDir, "directory-link");
+        Directory.CreateDirectory(target);
+        Directory.CreateSymbolicLink(link, target);
+
+        await helper.DeleteDirectoryIfEmptyAsync(link, _testDir);
+
+        Assert.Equal(target, new DirectoryInfo(link).LinkTarget);
+        Assert.True(Directory.Exists(target));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(target));
+    }
+
+    [Fact]
     public async Task DeleteDirectoryIfEmpty_EmptyDirectory_DeletesIt()
     {
         // Arrange

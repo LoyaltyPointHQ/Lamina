@@ -56,7 +56,7 @@ public class FilesystemBucketDataStorage : IBucketDataStorage
         }
     }
 
-    public Task<DeleteBucketResult> DeleteBucketAsync(string bucketName, bool force = false, CancellationToken cancellationToken = default)
+    public async Task<DeleteBucketResult> DeleteBucketAsync(string bucketName, bool force = false, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -64,28 +64,28 @@ public class FilesystemBucketDataStorage : IBucketDataStorage
 
             if (!Directory.Exists(bucketPath))
             {
-                return Task.FromResult(DeleteBucketResult.NotFound);
+                return DeleteBucketResult.NotFound;
             }
 
-            if (Directory.EnumerateFileSystemEntries(bucketPath).Any())
+            if (force)
             {
-                if (!force)
-                {
-                    return Task.FromResult(DeleteBucketResult.NotEmpty);
-                }
                 Directory.Delete(bucketPath, recursive: true);
             }
-            else
+            else if (!await _networkHelper.DeleteDirectoryTreeIfEmptyAsync(bucketPath, cancellationToken))
             {
-                Directory.Delete(bucketPath);
+                return DeleteBucketResult.NotEmpty;
             }
 
-            return Task.FromResult(DeleteBucketResult.Success);
+            return DeleteBucketResult.Success;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to delete bucket directory: {BucketName}", bucketName);
-            return Task.FromResult(DeleteBucketResult.NotFound);
+            return DeleteBucketResult.NotFound;
         }
     }
 
