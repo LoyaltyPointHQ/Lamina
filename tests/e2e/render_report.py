@@ -39,7 +39,8 @@ SCOPE = {
     "test_s3_api": "Bucket CRUD i błędy, obiekty CRUD/overwrite, ETag MD5, zakresy bajtów, "
     "warunkowy GET/HEAD, listowanie V1/V2, delimiter, UTF-8, start-after, batch delete; "
     "copy między bucketami, metadane i tagi, konfiguracja lifecycle i walidacja; "
-    "CRC32/SHA1/SHA256 i błędny Content-MD5; multipart, list-parts, abort, copy range, "
+    "CRC32/SHA1/SHA256 i błędny Content-MD5; multipart, list-parts, abort, "
+    "UploadPartCopy całego obiektu i zakresu bajtów, "
     "błędny ETag części; presigned PUT/GET, form Content-Type, równoległe niezależne obiekty.",
     "test_storage": "Zmiany plików poza API i odświeżanie metadanych, ukrywanie plików "
     "wewnętrznych, kasowanie bucketa z pustymi katalogami; restart procesu i trwałość "

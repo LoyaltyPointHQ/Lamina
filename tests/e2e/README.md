@@ -88,7 +88,10 @@ profile. Modern Linux tmpfs supports `user.*` xattrs; `/tmp` need not be tmpfs.
   of an unrelated prefix; AWS API-level pagination, metadata and SHA256.
 - **Multipart:** actual multipart transfers from all three CLI clients, verified
   by multipart ETags and content; boto3 initiate/upload/list-parts pagination,
-  completion, abort, listing, invalid part ETag, byte-range part copy. Small
+  completion, abort, listing, invalid part ETag, whole-object and byte-range part
+  copy. Whole-object part copy omits `CopySourceRange` and verifies listed part
+  size/ETag, completed object bytes/size/multipart ETag, unchanged source bytes
+  and upload cleanup. Small
   bounded payloads: ~12 MiB for AWS/rclone and ~70 MiB for mc.
 - **Signed aws-chunked:** explicit mc single PUT (`--disable-multipart`) and
   multipart on HTTP + SigV4 without `--checksum`. Single PUT covers zero/one byte,

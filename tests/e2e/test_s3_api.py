@@ -379,6 +379,40 @@ def test_multipart_abort_and_listing(s3, bucket):
         s3.get_object(Bucket=bucket, Key="abort")
 
 
+def test_multipart_copy_entire_object(s3, bucket):
+    body = bytes(range(256)) * 1024 + b"last bytes\x00\xff"
+    source = s3.put_object(Bucket=bucket, Key="copy-source", Body=body)
+    upload = s3.create_multipart_upload(Bucket=bucket, Key="copy-target")["UploadId"]
+    # Deliberately omit CopySourceRange: copy the entire source into one part.
+    result = s3.upload_part_copy(
+        Bucket=bucket,
+        Key="copy-target",
+        UploadId=upload,
+        PartNumber=1,
+        CopySource={"Bucket": bucket, "Key": "copy-source"},
+    )
+    part_etag = result["CopyPartResult"]["ETag"]
+    assert part_etag == source["ETag"]
+    listed = s3.list_parts(Bucket=bucket, Key="copy-target", UploadId=upload)
+    assert [(part["PartNumber"], part["Size"], part["ETag"]) for part in listed["Parts"]] == [
+        (1, len(body), part_etag)
+    ]
+    completed = s3.complete_multipart_upload(
+        Bucket=bucket,
+        Key="copy-target",
+        UploadId=upload,
+        MultipartUpload={"Parts": [{"PartNumber": 1, "ETag": part_etag}]},
+    )
+    expected_etag = f'"{hashlib.md5(hashlib.md5(body).digest()).hexdigest()}-1"'
+    assert completed["ETag"] == expected_etag
+    head = s3.head_object(Bucket=bucket, Key="copy-target")
+    assert head["ContentLength"] == len(body)
+    assert head["ETag"] == expected_etag
+    assert read_object(s3, bucket, "copy-target") == body
+    assert read_object(s3, bucket, "copy-source") == body
+    assert s3.list_multipart_uploads(Bucket=bucket).get("Uploads", []) == []
+
+
 def test_multipart_copy_range(s3, bucket):
     s3.put_object(Bucket=bucket, Key="copy-source", Body=b"0123456789")
     upload = s3.create_multipart_upload(Bucket=bucket, Key="copy-target")["UploadId"]
