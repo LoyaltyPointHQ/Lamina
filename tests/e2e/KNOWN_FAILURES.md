@@ -2,14 +2,13 @@
 
 These are **ordinary failing assertions**, not xfails or an allowlist. This file is
 an observation of the tested revision, not a promise that the failures will stay
-unchanged. The E2E contribution intentionally changes no production code.
+unchanged. The original E2E contribution changed no production code; subsequent
+fixes and their focused verification are recorded separately below.
 
 ## Findings
 
 | Scenario | Observed behavior | Required behavior / scope |
 | --- | --- | --- |
-| `test_multipart_complete_and_part_pagination` | `ListParts` succeeds after completion | `NoSuchUpload`, HTTP 404; all profiles |
-| `test_multipart_abort_and_listing` | `ListParts` succeeds after abort | `NoSuchUpload`, HTTP 404; all profiles |
 | `test_form_content_type_preserves_object_bytes[boto3]` | `application/x-www-form-urlencoded` PUT fails with a checksum calculated over empty bytes | Store the supplied bytes; all profiles |
 | `test_form_content_type_preserves_object_bytes[presigned]` | Form-content-type presigned PUT returns success, but subsequent GET returns empty bytes | Store the supplied bytes; all profiles. Ordinary octet-stream presigned PUT/GET passes |
 | `test_all_client_interoperability[empty-mc]` | MinIO mc cannot upload a zero-byte file: server returns a missing Content-Length error | Zero-byte upload must work; all profiles. Other clients' empty uploads and mc's nonempty transfers are tested independently |
@@ -35,8 +34,6 @@ corrupted chunk signatures remain outside this E2E group.
 
 Read-only investigation confirmed:
 
-- `S3MultipartController.ListParts` / `MultipartUploadStorageFacade.ListPartsAsync`
-  can return a successful empty list for a missing upload.
 - Form-urlencoded payload consumption is content-type-specific, not a generic
   presigned-signature failure. Explicit octet-stream passes the same transfer.
 - `FilesystemBucketDataStorage` checks for remaining directory entries, so empty
@@ -55,13 +52,43 @@ turn the corresponding assertions green without changing this suite.
 - [GetObject checksums](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)
 - [HeadObject checksums](https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html)
 
-## Verified full run — 2026-10-07 UTC
+## Resolved: ListParts for a missing upload — 2026-10-07 UTC
+
+The shared multipart facade now returns `NoSuchUpload` only when both upload
+metadata and stored parts are absent. The HTTP endpoint maps this to 404.
+An initiated upload with no parts still succeeds, as do stored parts without
+metadata (the existing data-first contract). HEAD retains bodyless errors;
+UploadPartCopy handles the facade's error result before copying.
+
+TDD evidence: before the fix, the new HTTP tests for ListParts after abort,
+after completion, and with an unknown upload ID failed with 200 instead of 404.
+The active empty-upload test and existing listing tests already passed.
+After the fix:
+
+- `Lamina.Storage.Core.Tests`: **195 passed**; includes all four combinations
+  of metadata/parts presence and metadata hints/checksum merging.
+- `Lamina.WebApi.Tests`: **563 passed**; includes the new regressions, pagination,
+  UploadPartCopy, HEAD and completion heartbeat tests.
+- `uv run --project tests/e2e --locked pytest tests/e2e/test_s3_api.py -k multipart --storage-matrix all`:
+  **44 passed, 319 deselected in 34.59 seconds**. Abort, completion/pagination,
+  copy range and invalid part ETag each passed on all 11 profiles.
+
+Thus `test_multipart_abort_and_listing` and
+`test_multipart_complete_and_part_pagination` are no longer known failures.
+The full 935-case suite was **not rerun** for this fix; the totals and generated
+HTML below describe the historical baseline, not a new whole-suite result.
+Concurrent upload/abort races and filesystem bucket/key identity checks were
+not changed by this fix. E2E runtime directories and owned containers were cleaned;
+no new container volumes remained.
+
+## Historical full run, before the ListParts fix — 2026-10-07 UTC
 
 **935 cases: 832 passed, 76 failed, 27 skipped, 0 errors.**
 Executed as three independent parallel batches: 514.38 seconds summed suite time,
 185.59 seconds from the first suite start to the last suite end.
-All four clients ran across all 11 profiles. The 76 failed cases repeat the
-findings above across profiles; they are not 76 independent root causes.
+All four clients ran across all 11 profiles. The 76 failed cases repeated the
+findings above, including the now-resolved ListParts failures, across profiles;
+they were not 76 independent root causes.
 The new signed-streaming group contributes **99 cases: 88 passed, 11 failed**;
 only the empty-input case fails, once per profile.
 

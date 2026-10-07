@@ -425,8 +425,83 @@ public class MultipartUploadStorageFacadeTests
         var result = await _facade.ListPartsAsync(bucketName, key, uploadId);
 
         // Assert
-        Assert.Equal(expectedParts, result);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(expectedParts, result.Value);
         _mockDataStorage.Verify(x => x.GetStoredPartsAsync(bucketName, key, uploadId, It.IsAny<IReadOnlyDictionary<int, PartMetadata>?>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ListPartsAsync_RequiresMetadataOrStoredParts(bool hasMetadata, bool hasParts)
+    {
+        const string bucket = "test-bucket";
+        const string key = "test-key";
+        var uploadId = Guid.NewGuid().ToString("N");
+        var upload = hasMetadata ? new MultipartUpload { BucketName = bucket, Key = key, UploadId = uploadId } : null;
+        var parts = new List<UploadPart>();
+        if (hasParts)
+            parts.Add(new UploadPart { PartNumber = 1, ETag = "stored-etag" });
+        using var cts = new CancellationTokenSource();
+        _mockMetadataStorage
+            .Setup(x => x.GetUploadMetadataAsync(bucket, key, uploadId, cts.Token))
+            .ReturnsAsync(upload);
+        _mockDataStorage
+            .Setup(x => x.GetStoredPartsAsync(bucket, key, uploadId, upload == null ? null : upload.Parts, cts.Token))
+            .ReturnsAsync(parts);
+
+        var result = await _facade.ListPartsAsync(bucket, key, uploadId, cts.Token);
+
+        Assert.Equal(hasMetadata || hasParts, result.IsSuccess);
+        if (result.IsSuccess)
+        {
+            Assert.Same(parts, result.Value);
+            Assert.Null(result.ErrorCode);
+        }
+        else
+        {
+            Assert.Equal("NoSuchUpload", result.ErrorCode);
+            Assert.Null(result.Value);
+        }
+        _mockDataStorage.Verify(x => x.GetStoredPartsAsync(
+            bucket, key, uploadId, upload == null ? null : upload.Parts, cts.Token), Times.Once);
+    }
+
+    [Fact]
+    public async Task ListPartsAsync_PassesMetadataHintsAndMergesChecksums()
+    {
+        const string bucket = "test-bucket";
+        const string key = "test-key";
+        var uploadId = Guid.NewGuid().ToString("N");
+        var metadata = new PartMetadata
+        {
+            ETag = "stored-etag", ChecksumCRC32 = "crc32", ChecksumCRC32C = "crc32c",
+            ChecksumCRC64NVME = "crc64", ChecksumSHA1 = "sha1", ChecksumSHA256 = "sha256"
+        };
+        var upload = new MultipartUpload { BucketName = bucket, Key = key, UploadId = uploadId };
+        upload.Parts[1] = metadata;
+        var part = new UploadPart { PartNumber = 1, ETag = metadata.ETag };
+        _mockMetadataStorage
+            .Setup(x => x.GetUploadMetadataAsync(bucket, key, uploadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(upload);
+        _mockDataStorage
+            .Setup(x => x.GetStoredPartsAsync(bucket, key, uploadId, upload.Parts, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<UploadPart> { part });
+
+        var result = await _facade.ListPartsAsync(bucket, key, uploadId);
+
+        Assert.True(result.IsSuccess);
+        var actual = Assert.Single(result.Value!);
+        Assert.Equal(metadata.ETag, actual.ETag);
+        Assert.Equal(metadata.ChecksumCRC32, actual.ChecksumCRC32);
+        Assert.Equal(metadata.ChecksumCRC32C, actual.ChecksumCRC32C);
+        Assert.Equal(metadata.ChecksumCRC64NVME, actual.ChecksumCRC64NVME);
+        Assert.Equal(metadata.ChecksumSHA1, actual.ChecksumSHA1);
+        Assert.Equal(metadata.ChecksumSHA256, actual.ChecksumSHA256);
+        _mockDataStorage.Verify(x => x.GetStoredPartsAsync(
+            bucket, key, uploadId, upload.Parts, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

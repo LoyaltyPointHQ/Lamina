@@ -423,7 +423,11 @@ public class S3MultipartController : S3ControllerBase
             // Check if this part already exists (idempotent retry handling)
             // This prevents unnecessary re-copying when clients retry due to timeout
             var existingParts = await _multipartStorage.ListPartsAsync(bucketName, key, uploadId, cancellationToken);
-            var existingPart = existingParts.FirstOrDefault(p => p.PartNumber == partNumber);
+            if (!existingParts.IsSuccess)
+            {
+                return StorageError(existingParts, $"/{bucketName}/{key}");
+            }
+            var existingPart = existingParts.Value!.FirstOrDefault(p => p.PartNumber == partNumber);
             
             if (existingPart != null)
             {
@@ -794,12 +798,16 @@ public class S3MultipartController : S3ControllerBase
     )
     {
         var allParts = await _multipartStorage.ListPartsAsync(bucketName, key, uploadId, cancellationToken);
+        if (!allParts.IsSuccess)
+        {
+            return StorageError(allParts, $"/{bucketName}/{key}");
+        }
 
         // Cap max-parts to S3's maximum of 1000
         var effectiveMaxParts = Math.Min(maxParts ?? 1000, 1000);
 
         // Filter parts after the marker and sort by part number
-        var filteredParts = allParts
+        var filteredParts = allParts.Value!
             .Where(p => p.PartNumber > (partNumberMarker ?? 0))
             .OrderBy(p => p.PartNumber)
             .ToList();
@@ -850,12 +858,17 @@ public class S3MultipartController : S3ControllerBase
     {
         try
         {
-            var parts = await _multipartStorage.ListPartsAsync(bucketName, key, uploadId, cancellationToken);
+            var partsResult = await _multipartStorage.ListPartsAsync(bucketName, key, uploadId, cancellationToken);
+            if (!partsResult.IsSuccess)
+            {
+                // Keep HEAD errors bodyless while using the shared S3 status mapping.
+                StorageError(partsResult, $"/{bucketName}/{key}");
+                return new EmptyResult();
+            }
+            var parts = partsResult.Value!;
 
-            // If no parts and upload doesn't exist, return 404
-            // We can check if the upload exists by attempting to list parts
-            // An empty list could mean either no parts uploaded yet or upload doesn't exist
-            // To be safe, we'll check if the upload metadata exists
+            // Preserve HEAD's existing requirement for upload metadata, even when
+            // ListParts can recover stored parts without metadata (data-first).
             var uploads = await _multipartStorage.ListMultipartUploadsAsync(bucketName, cancellationToken);
             var uploadExists = uploads.Any(u => u.UploadId == uploadId && u.Key == key);
 

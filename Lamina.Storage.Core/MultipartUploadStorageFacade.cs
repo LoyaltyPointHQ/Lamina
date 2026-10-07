@@ -363,7 +363,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         return dataDeleted || metadataDeleted;
     }
 
-    public async Task<List<UploadPart>> ListPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
+    public async Task<StorageResult<List<UploadPart>>> ListPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
     {
         // Serialise against concurrent UploadPart writers - we read Upload.Parts and must not see
         // it mid-resize.
@@ -374,6 +374,13 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         var upload = await _metadataStorage.GetUploadMetadataAsync(bucketName, key, uploadId, cancellationToken);
 
         var parts = await _dataStorage.GetStoredPartsAsync(bucketName, key, uploadId, upload?.Parts, cancellationToken);
+
+        // An initiated upload may have no parts yet; stored parts remain readable without
+        // metadata (data-first). Only the absence of both means the upload is gone.
+        if (upload == null && parts.Count == 0)
+        {
+            return StorageResult<List<UploadPart>>.Error("NoSuchUpload", $"Upload '{uploadId}' not found");
+        }
 
         // Merge checksums from metadata into parts
         if (upload != null && upload.Parts.Count > 0)
@@ -391,7 +398,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             }
         }
 
-        return parts;
+        return StorageResult<List<UploadPart>>.Success(parts);
     }
 
     public IAsyncEnumerable<string> EnumerateUploadKeysAsync(string bucketName, CancellationToken cancellationToken = default) => _metadataStorage.EnumerateUploadKeysAsync(bucketName, cancellationToken);

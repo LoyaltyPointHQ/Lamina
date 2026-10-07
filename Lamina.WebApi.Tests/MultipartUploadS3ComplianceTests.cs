@@ -15,7 +15,8 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
     private async Task<string> CreateTestBucketAsync()
     {
         var bucketName = $"test-bucket-{Guid.NewGuid()}";
-        await Client.PutAsync($"/{bucketName}", null);
+        var response = await Client.PutAsync($"/{bucketName}", null);
+        response.EnsureSuccessStatusCode();
         return bucketName;
     }
 
@@ -274,6 +275,7 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var headResponse = await Client.SendAsync(headRequest);
 
         Assert.Equal(HttpStatusCode.NotFound, headResponse.StatusCode);
+        Assert.Empty(await headResponse.Content.ReadAsByteArrayAsync());
     }
 
     [Fact]
@@ -1095,9 +1097,11 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var key = "pagination-test.bin";
 
         var initResponse = await Client.PostAsync($"/{bucketName}/{key}?uploads", null);
+        Assert.Equal(HttpStatusCode.OK, initResponse.StatusCode);
         var initSerializer = new XmlSerializer(typeof(InitiateMultipartUploadResult));
         using var initReader = new StringReader(await initResponse.Content.ReadAsStringAsync());
         var initResult = (InitiateMultipartUploadResult?)initSerializer.Deserialize(initReader);
+        Assert.NotNull(initResult);
 
         var etags = new List<string>();
         for (int i = 1; i <= partCount; i++)
@@ -1105,6 +1109,7 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
             var partResponse = await Client.PutAsync(
                 $"/{bucketName}/{key}?partNumber={i}&uploadId={initResult!.UploadId}",
                 new StringContent($"Part {i} content", Encoding.UTF8));
+            Assert.Equal(HttpStatusCode.OK, partResponse.StatusCode);
             etags.Add(partResponse.Headers.GetValues("ETag").First().Trim('"'));
         }
 
@@ -1116,6 +1121,94 @@ public class MultipartUploadS3ComplianceTests : IntegrationTestBase
         var serializer = new XmlSerializer(typeof(ListPartsResult));
         using var reader = new StringReader(xml);
         return (ListPartsResult)serializer.Deserialize(reader)!;
+    }
+
+    private static async Task AssertNoSuchUploadAsync(HttpResponseMessage response)
+    {
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("application/xml", response.Content.Headers.ContentType?.MediaType);
+        var serializer = new XmlSerializer(typeof(S3Error));
+        using var reader = new StringReader(await response.Content.ReadAsStringAsync());
+        var error = Assert.IsType<S3Error>(serializer.Deserialize(reader));
+        Assert.Equal("NoSuchUpload", error.Code);
+    }
+
+    [Fact]
+    public async Task ListParts_AfterAbort_ReturnsNoSuchUpload()
+    {
+        var (bucket, key, uploadId, _) = await SetupMultipartWithPartsAsync(1);
+        using var abortResponse = await Client.DeleteAsync($"/{bucket}/{key}?uploadId={uploadId}");
+        Assert.Equal(HttpStatusCode.NoContent, abortResponse.StatusCode);
+
+        using var response = await Client.GetAsync($"/{bucket}/{key}?uploadId={uploadId}");
+        await AssertNoSuchUploadAsync(response);
+    }
+
+    [Fact]
+    public async Task ListParts_AfterComplete_ReturnsNoSuchUpload()
+    {
+        var (bucket, key, uploadId, etags) = await SetupMultipartWithPartsAsync(1);
+        var completeXml = $"<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{etags[0]}</ETag></Part></CompleteMultipartUpload>";
+        using var completeResponse = await Client.PostAsync(
+            $"/{bucket}/{key}?uploadId={uploadId}",
+            new StringContent(completeXml, Encoding.UTF8, "application/xml"));
+        Assert.Equal(HttpStatusCode.OK, completeResponse.StatusCode);
+        var serializer = new XmlSerializer(typeof(CompleteMultipartUploadResult));
+        using var reader = new StringReader(await completeResponse.Content.ReadAsStringAsync());
+        var completed = Assert.IsType<CompleteMultipartUploadResult>(serializer.Deserialize(reader));
+        Assert.False(string.IsNullOrEmpty(completed.ETag));
+
+        using var response = await Client.GetAsync($"/{bucket}/{key}?uploadId={uploadId}");
+        await AssertNoSuchUploadAsync(response);
+    }
+
+    [Fact]
+    public async Task ListParts_UnknownUpload_ReturnsNoSuchUpload()
+    {
+        var bucket = await CreateTestBucketAsync();
+        using var response = await Client.GetAsync($"/{bucket}/missing?uploadId={Guid.NewGuid():N}");
+        await AssertNoSuchUploadAsync(response);
+    }
+
+    [Fact]
+    public async Task ListParts_InitiatedWithoutParts_ReturnsEmptySuccess()
+    {
+        var (bucket, key, uploadId, _) = await SetupMultipartWithPartsAsync(0);
+        using var response = await Client.GetAsync($"/{bucket}/{key}?uploadId={uploadId}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = DeserializeListParts(await response.Content.ReadAsStringAsync());
+        Assert.Equal(uploadId, result.UploadId);
+        Assert.Empty(result.Parts);
+        Assert.False(result.IsTruncated);
+    }
+
+    [Fact]
+    public async Task UploadPartCopy_AfterAbort_ReturnsNoSuchUpload()
+    {
+        var (bucket, key, uploadId, _) = await SetupMultipartWithPartsAsync(0);
+        using var sourceResponse = await Client.PutAsync(
+            $"/{bucket}/copy-source", new StringContent("source bytes", Encoding.UTF8));
+        Assert.Equal(HttpStatusCode.OK, sourceResponse.StatusCode);
+        using var abortResponse = await Client.DeleteAsync($"/{bucket}/{key}?uploadId={uploadId}");
+        Assert.Equal(HttpStatusCode.NoContent, abortResponse.StatusCode);
+
+        using var request = new HttpRequestMessage(HttpMethod.Put, $"/{bucket}/{key}?uploadId={uploadId}&partNumber=1");
+        request.Headers.Add("x-amz-copy-source", $"/{bucket}/copy-source");
+        using var response = await Client.SendAsync(request);
+        await AssertNoSuchUploadAsync(response);
+        using var listed = await Client.GetAsync($"/{bucket}/{key}?uploadId={uploadId}");
+        await AssertNoSuchUploadAsync(listed);
+    }
+
+    [Fact]
+    public async Task HeadMultipartUpload_InitiatedWithoutParts_ReturnsEmptySuccess()
+    {
+        var (bucket, key, uploadId, _) = await SetupMultipartWithPartsAsync(0);
+        using var request = new HttpRequestMessage(HttpMethod.Head, $"/{bucket}/{key}?uploadId={uploadId}");
+        using var response = await Client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("0", Assert.Single(response.Headers.GetValues("x-amz-parts-count")));
+        Assert.Empty(await response.Content.ReadAsByteArrayAsync());
     }
 
     [Fact]

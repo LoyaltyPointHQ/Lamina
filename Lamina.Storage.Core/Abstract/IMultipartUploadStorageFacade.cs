@@ -19,6 +19,10 @@ public interface IMultipartUploadStorageFacade
     Task<StorageResult<UploadPart>> UploadPartAsync(string bucketName, string key, string uploadId, int partNumber, PipeReader dataReader, IChunkSignatureValidator? chunkValidator, ChecksumRequest? checksumRequest, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default);
     Task<StorageResult<CompleteMultipartUploadResponse>> CompleteMultipartUploadAsync(string bucketName, string key, CompleteMultipartUploadRequest request, CancellationToken cancellationToken = default);
     Task<bool> AbortMultipartUploadAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default);
-    Task<List<UploadPart>> ListPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Lists stored parts, returning NoSuchUpload only when both upload metadata and parts are absent.
+    /// An initiated upload without parts succeeds; stored parts remain readable without metadata.
+    /// </summary>
+    Task<StorageResult<List<UploadPart>>> ListPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default);
     Task<List<MultipartUpload>> ListMultipartUploadsAsync(string bucketName, CancellationToken cancellationToken = default);
 }
