@@ -39,10 +39,19 @@ public class RedisLockManager : IFileSystemLockManager
 
         _logger.LogDebug("Acquired read lock for path: {FilePath}", filePath);
 
-        if (!File.Exists(filePath))
+        string content;
+        try
+        {
+            content = await File.ReadAllTextAsync(filePath, cancellationToken);
+        }
+        catch (FileNotFoundException)
+        {
             return default;
-
-        var content = await File.ReadAllTextAsync(filePath, cancellationToken);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return default;
+        }
         if (string.IsNullOrWhiteSpace(content))
         {
             return default;

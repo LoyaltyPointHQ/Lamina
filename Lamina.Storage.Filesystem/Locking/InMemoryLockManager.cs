@@ -39,14 +39,21 @@ public class InMemoryLockManager : IFileSystemLockManager
         var lockKey = GetNormalizedPath(filePath);
         using var lockInfo = AcquireLockInfo(lockKey);
 
-        using var readLock = await lockInfo.Lock.ReaderLockAsync();
+        using var readLock = await lockInfo.Lock.ReaderLockAsync(cancellationToken);
 
-        if (!File.Exists(filePath))
+        string content;
+        try
+        {
+            content = await File.ReadAllTextAsync(filePath, cancellationToken);
+        }
+        catch (FileNotFoundException)
         {
             return default;
         }
-
-        var content = await File.ReadAllTextAsync(filePath, cancellationToken);
+        catch (DirectoryNotFoundException)
+        {
+            return default;
+        }
         if (string.IsNullOrWhiteSpace(content))
         {
             return default;
