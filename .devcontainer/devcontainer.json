@@ -1,0 +1,22 @@
+{
+  "name": "Lamina",
+  "image": "quay.io/fedora/fedora:44",
+  "features": {
+    "registry.kolosowscy.pl/tomek/sandboxkit/codex:1": {},
+    "registry.kolosowscy.pl/tomek/sandboxkit/dotnet:1": {},
+    "registry.kolosowscy.pl/tomek/sandboxkit/podman:1": {},
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "username": "agent",
+      "userUid": "1000",
+      "userGid": "1000",
+      "installZsh": true,
+      "installOhMyZsh": true,
+      "upgradePackages": true
+    },
+    "registry.kolosowscy.pl/tomek/sandboxkit/oh-my-codex:1": {}
+  },
+  "init": true,
+  "containerUser": "agent",
+  "remoteUser": "agent"
+}

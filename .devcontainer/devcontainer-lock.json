@@ -1,0 +1,43 @@
+{
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "integrity": "sha256:e8876b1d2c6a0661f64966e4ca0433307c66394006ac379340923549f8d31a09",
+      "resolved": "ghcr.io/devcontainers/features/common-utils@sha256:3f63bbee7418dc940d9e5e7ab93ef3049acfe4dba3085b17ee45fe307fdba4e5",
+      "version": "2.7.0"
+    },
+    "ghcr.io/devcontainers/features/git:1": {
+      "integrity": "sha256:6b7e077c4182c53f733824262a0ef4982be5207b0b2b42ec34eea1efdfd0e668",
+      "resolved": "ghcr.io/devcontainers/features/git@sha256:fd75977de13a9979000e0e78baf949adb0ca71d2398995fa22e0a36d7e7e7fe2",
+      "version": "1.3.8"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "integrity": "sha256:fdb79b02336bfce18522defa1249d6880e0de5a185b4f25fe53d1a6bfb6f07ba",
+      "resolved": "ghcr.io/devcontainers/features/node@sha256:8c0de46939b61958041700ee89e3493f3b2e4131a06dc46b4d9423427d06e5f6",
+      "version": "1.7.1"
+    },
+    "registry.kolosowscy.pl/tomek/sandboxkit/codex:1": {
+      "integrity": "sha256:d3f2953e67d5ed7b9977cf7f5e5b24b6e7f0da9920a1350257719818e87861a9",
+      "resolved": "registry.kolosowscy.pl/tomek/sandboxkit/codex@sha256:f8d1339c340e5d002d46dacbd2c1e5b1e454712bd7d078b21dc871817895dfeb",
+      "version": "1.2.2"
+    },
+    "registry.kolosowscy.pl/tomek/sandboxkit/dotnet:1": {
+      "integrity": "sha256:2469cac01b07b068a6b17fb512d1ca5d0b17bcb6298a2ce07a7a10e0abc4571b",
+      "resolved": "registry.kolosowscy.pl/tomek/sandboxkit/dotnet@sha256:cf822af6d9dde79adc3b89ae738861997d01cf6f76e9856c565baf3240b48398",
+      "version": "1.0.3"
+    },
+    "registry.kolosowscy.pl/tomek/sandboxkit/oh-my-codex:1": {
+      "dependsOn": [
+        "ghcr.io/devcontainers/features/node:1",
+        "registry.kolosowscy.pl/tomek/sandboxkit/codex:1.2"
+      ],
+      "integrity": "sha256:5f072015e52f4e039f856cf328300afc453bafb65e2c31fa5f3f6a256f273364",
+      "resolved": "registry.kolosowscy.pl/tomek/sandboxkit/oh-my-codex@sha256:9a432238c5dbfe6047521d7ee54a68767f51d2acdf118dd478b53ba7aee6a6fa",
+      "version": "1.1.0"
+    },
+    "registry.kolosowscy.pl/tomek/sandboxkit/podman:1": {
+      "integrity": "sha256:54c4d9f174f94cbb273319df87c94bcff453645e35d355a104c6852f9c5af350",
+      "resolved": "registry.kolosowscy.pl/tomek/sandboxkit/podman@sha256:33eefd581d15f0cf5a8f65e839464c88fe8b6878e00b4ed6bfa8487f4df6b5c0",
+      "version": "1.0.3"
+    }
+  }
+}
