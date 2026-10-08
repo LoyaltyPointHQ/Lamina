@@ -58,7 +58,7 @@ public class SeparateDirectoryObjectMetadataStorage : FilesystemJsonObjectMetada
         string bucketDirectory,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        foreach (var file in Directory.EnumerateFiles(bucketDirectory, "*.json", SearchOption.AllDirectories))
+        foreach (var file in DirectoryEnumeration.Files(bucketDirectory, "*.json"))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -69,6 +69,11 @@ public class SeparateDirectoryObjectMetadataStorage : FilesystemJsonObjectMetada
             yield return key;
         }
 
+        foreach (var directory in DirectoryEnumeration.Directories(bucketDirectory))
+        {
+            await foreach (var key in EnumerateKeysForBucketAsync(directory, cancellationToken))
+                yield return $"{Path.GetFileName(directory)}/{key}";
+        }
         await Task.CompletedTask;
     }
 }

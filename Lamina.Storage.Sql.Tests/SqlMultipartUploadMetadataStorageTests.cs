@@ -23,6 +23,15 @@ public class SqlMultipartUploadMetadataStorageTests : IDisposable
     }
 
     [Fact]
+    public async Task ListAllUploadsAsync_IncludesAllBuckets()
+    {
+        await _storage.InitiateUploadAsync("one", "key", new());
+        await _storage.InitiateUploadAsync("two", "key", new());
+        var uploads = await _storage.ListAllUploadsAsync();
+        Assert.Equal(new[] { "one", "two" }, uploads.Select(u => u.BucketName).Order());
+    }
+
+    [Fact]
     public async Task InitiateUploadAsync_NewUpload_ReturnsMultipartUpload()
     {
         // Arrange

@@ -1,3 +1,4 @@
+using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.Filesystem.Configuration;
 using Microsoft.Extensions.Options;
 
@@ -166,29 +167,8 @@ public class TempFileCleanupService : BackgroundService
         if (cancellationToken.IsCancellationRequested)
             yield break;
 
-        IEnumerable<string> files;
-        IEnumerable<string> directories;
-
-        try
-        {
-            files = Directory.EnumerateFiles(directory, searchPattern, SearchOption.TopDirectoryOnly);
-            directories = Directory.EnumerateDirectories(directory);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            _logger.LogWarning(ex, "Access denied to directory: {Directory}", directory);
-            yield break;
-        }
-        catch (DirectoryNotFoundException ex)
-        {
-            _logger.LogWarning(ex, "Directory not found: {Directory}", directory);
-            yield break;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Error accessing directory: {Directory}", directory);
-            yield break;
-        }
+        var files = DirectoryEnumeration.Files(directory, searchPattern);
+        var directories = DirectoryEnumeration.Directories(directory);
 
         // Yield files in current directory
         foreach (var file in files)

@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.AspNetCore.Mvc.Controllers;
 
 namespace Lamina.WebApi.Middleware;
 
@@ -20,10 +21,10 @@ public class S3ResponseHeadersMiddleware
     {
         // Generate unique request ID for S3
         var requestId = GenerateRequestId();
-        
+
         // Use ASP.NET Core's built-in request ID for extended request ID
         var extendedRequestId = context.TraceIdentifier;
-        
+
         // Store in HttpContext for use by controllers/error handlers
         context.Items["S3RequestId"] = requestId;
         context.Items["S3ExtendedRequestId"] = extendedRequestId;
@@ -35,6 +36,13 @@ public class S3ResponseHeadersMiddleware
             return Task.CompletedTask;
         });
 
+        var action = context.GetEndpoint()?.Metadata.GetMetadata<ControllerActionDescriptor>()?.ActionName;
+        if (action == "UploadPart" && context.Request.Headers.ContainsKey("x-amz-copy-source"))
+            action = "UploadPartCopy";
+        using var scope = _logger.BeginScope(
+            "S3RequestId={S3RequestId} S3Operation={S3Operation} UploadId={UploadId} PartNumber={PartNumber}",
+            requestId, action ?? context.Request.Method, context.Request.Query["uploadId"].ToString(),
+            context.Request.Query["partNumber"].ToString());
         await _next(context);
     }
 
@@ -64,7 +72,7 @@ public class S3ResponseHeadersMiddleware
             headers.Append("Date", DateTimeOffset.UtcNow.ToString("R"));
         }
 
-        _logger.LogDebug("Added S3 headers: RequestId={RequestId}, ExtendedId={ExtendedId}", 
+        _logger.LogDebug("Added S3 headers: RequestId={RequestId}, ExtendedId={ExtendedId}",
             requestId, extendedRequestId);
     }
 
@@ -76,12 +84,12 @@ public class S3ResponseHeadersMiddleware
         // Generate a 16-character alphanumeric request ID
         const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         var requestId = new StringBuilder(16);
-        
+
         for (int i = 0; i < 16; i++)
         {
             requestId.Append(chars[Random.Shared.Next(chars.Length)]);
         }
-        
+
         return requestId.ToString();
     }
 

@@ -7,6 +7,9 @@ namespace Lamina.Storage.Core.Abstract;
 
 public interface IMultipartUploadStorageFacade
 {
+    /// <summary>Lists all uploads in one scan for background maintenance.</summary>
+    Task<List<MultipartUpload>> ListAllMultipartUploadsAsync(CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Streams active upload keys without ordering or deduplication; multiple uploads may share a key.
     /// </summary>

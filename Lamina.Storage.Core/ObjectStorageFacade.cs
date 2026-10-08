@@ -790,7 +790,8 @@ public class ObjectStorageFacade : IObjectStorageFacade
         {
             _logger.LogError(ex, "Error copying object part from {SourceBucket}/{SourceKey} to {DestBucket}/{DestKey} part {PartNumber}",
                 sourceBucketName, sourceKey, destBucketName, destKey, partNumber);
-            return null;
+            // Infrastructure failures must not be mistaken for a missing source or invalid range.
+            throw;
         }
     }
 

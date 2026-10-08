@@ -86,6 +86,13 @@ public class SqlMultipartUploadMetadataStorage : IMultipartUploadMetadataStorage
         }
     }
 
+    public async Task<List<MultipartUpload>> ListAllUploadsAsync(CancellationToken cancellationToken = default)
+    {
+        var entities = await _context.MultipartUploads.AsNoTracking()
+            .OrderBy(u => u.Initiated).ToListAsync(cancellationToken);
+        return entities.Select(e => e.ToMultipartUpload()).ToList();
+    }
+
     public async Task<List<MultipartUpload>> ListUploadsAsync(string bucketName, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(bucketName);

@@ -52,6 +52,9 @@ public class InlineObjectMetadataStorage : FilesystemJsonObjectMetadataStorageBa
 
     protected override string GetBucketDirectory(string bucketName) => Path.Combine(_dataDirectory, bucketName);
 
+    protected override bool IsMetadataBucketDirectory(string name) =>
+        base.IsMetadataBucketDirectory(name) && name != _inlineMetadataDirectoryName;
+
     public override bool IsValidObjectKey(string key)
     {
         if (string.IsNullOrWhiteSpace(key))
@@ -92,21 +95,18 @@ public class InlineObjectMetadataStorage : FilesystemJsonObjectMetadataStorageBa
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var metadataDir = Path.Combine(currentDirectory, _inlineMetadataDirectoryName);
-        if (Directory.Exists(metadataDir))
+        foreach (var file in DirectoryEnumeration.Files(metadataDir, "*.json"))
         {
-            foreach (var file in Directory.EnumerateFiles(metadataDir, "*.json"))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
+            cancellationToken.ThrowIfCancellationRequested();
 
-                var fileName = Path.GetFileName(file);
-                var objectName = fileName.EndsWith(".json") ? fileName[..^5] : fileName;
-                var key = string.IsNullOrEmpty(keyPrefix) ? objectName : $"{keyPrefix}/{objectName}";
+            var fileName = Path.GetFileName(file);
+            var objectName = fileName.EndsWith(".json") ? fileName[..^5] : fileName;
+            var key = string.IsNullOrEmpty(keyPrefix) ? objectName : $"{keyPrefix}/{objectName}";
 
-                yield return key;
-            }
+            yield return key;
         }
 
-        foreach (var subdir in Directory.GetDirectories(currentDirectory))
+        foreach (var subdir in DirectoryEnumeration.Directories(currentDirectory))
         {
             cancellationToken.ThrowIfCancellationRequested();
 

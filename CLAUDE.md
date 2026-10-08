@@ -297,6 +297,44 @@ Note: Authentication now uses the standard ASP.NET Core authentication framework
 }
 ```
 
+Redis lock acquisition failures are infrastructure errors, not evidence of a missing
+bucket/upload. Multipart requests return safe `InternalError` XML (HTTP 500), not
+`NoSuchUpload`; completion retains S3's HTTP 200 + Error XML behavior only after a
+heartbeat has started the response. Genuine missing-upload results remain 404.
+
+Additional `Redis` options:
+- `AcquisitionTimeoutMs` (nullable): explicit acquisition wait parameter. If omitted,
+  the legacy `RetryCount * RetryDelayMs` applies (defaults: 3 * 100 = 300 ms).
+  These legacy settings do not specify the number or cadence of actual attempts.
+- `MinBusyWaitSleepTimeMs` / `MaxBusyWaitSleepTimeMs` (nullable): polling range;
+  omitted values retain the library defaults of 10 / 800 ms. No FIFO guarantee.
+- `LockExpirySeconds` now configures the actual lease expiry (default 30 s), with
+  automatic renewal by DistributedLock.Redis. It is not the acquisition timeout.
+- Invalid settings fail validation on startup. The acquisition wait is not a hard
+  wall-clock deadline for Redis commands; cancellation is propagated separately.
+
+Request logging scopes include S3 request ID, operation, upload ID and part number.
+Redis acquisition failures log the lock key, wait duration and configured timeout;
+Debug logs for `Lamina.Storage.Filesystem.Locking.RedisLockManager` additionally
+report hold/release duration. Tune timeouts using observed storage/Redis latency,
+not by assuming every unsuccessful acquisition represents contention.
+
+Generic filesystem read callbacks remain under their read lock: metadata caching
+requires content and mtime to be observed together. Multipart listing alone reads
+a detached text snapshot and deserializes it after releasing the lock.
+
+Redis integration tests explicitly require an isolated instance through
+`LAMINA_TEST_REDIS_CONNECTION_STRING`. If unset, tests are reported as skipped;
+an explicitly configured but unavailable instance fails tests. CI provides Redis.
+
+### Build Identity
+
+Startup logs contain the assembly informational version, embedded Git revision
+and .NET runtime version. Local Git builds obtain the revision from the SDK.
+Container builds must pass `SOURCE_REVISION` (CI passes `github.sha`); it is embedded
+in the published assembly and the `org.opencontainers.image.revision` image label.
+Without provenance, the container explicitly reports `unknown`, not a guessed tag.
+
 ### Metadata Caching
 
 Lamina supports in-memory caching of object metadata to reduce disk/database reads:
@@ -613,6 +651,14 @@ Three background services handle maintenance:
 - **Multipart Upload Cleanup**: Removes stale uploads
 - **Metadata Cleanup**: Removes orphaned metadata
 - **Temp File Cleanup**: Removes interrupted upload temp files
+
+Metadata enumeration excludes internal storage roots (including the configured
+inline metadata directory). Concurrently removed directories/files are skipped;
+other I/O failures remain visible instead of silently producing a partial listing.
+Multipart cleanup scans all upload metadata once per cycle, then filters/groups it
+by existing buckets, rather than scanning the global tree once for each bucket.
+Custom storage providers must implement `IMultipartUploadMetadataStorage.ListAllUploadsAsync`;
+custom multipart facades must implement `ListAllMultipartUploadsAsync`.
 
 ## Release Process
 

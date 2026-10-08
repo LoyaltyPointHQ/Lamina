@@ -69,6 +69,9 @@ public class MultipartUploadCleanupService : BackgroundService
             // Get all buckets
             var bucketsResponse = await bucketServiceFacade.ListBucketsAsync(cancellationToken);
 
+            var uploadsByBucket = (await multipartUploadServiceFacade.ListAllMultipartUploadsAsync(cancellationToken))
+                .ToLookup(upload => upload.BucketName);
+
             foreach (var bucket in bucketsResponse.Buckets)
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -77,7 +80,7 @@ public class MultipartUploadCleanupService : BackgroundService
                 try
                 {
                     // List all multipart uploads for this bucket
-                    var uploads = await multipartUploadServiceFacade.ListMultipartUploadsAsync(bucket.Name, cancellationToken);
+                    var uploads = uploadsByBucket[bucket.Name];
 
                     foreach (var upload in uploads)
                     {
@@ -100,6 +103,7 @@ public class MultipartUploadCleanupService : BackgroundService
 
                                 totalCleaned++;
                             }
+                            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                             catch (Exception ex)
                             {
                                 _logger.LogWarning(ex, "Failed to cleanup multipart upload: Bucket={Bucket}, Key={Key}, UploadId={UploadId}",
@@ -108,6 +112,7 @@ public class MultipartUploadCleanupService : BackgroundService
                         }
                     }
                 }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Failed to process bucket {Bucket} during cleanup", bucket.Name);
@@ -123,6 +128,7 @@ public class MultipartUploadCleanupService : BackgroundService
                 _logger.LogDebug("No stale multipart uploads found");
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to perform multipart upload cleanup");

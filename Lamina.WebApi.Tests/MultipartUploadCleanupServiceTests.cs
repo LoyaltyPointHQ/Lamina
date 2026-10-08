@@ -77,7 +77,7 @@ public class MultipartUploadCleanupServiceTests
         _mockBucketService.Setup(x => x.ListBucketsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(buckets);
 
-        _mockMultipartUploadService.Setup(x => x.ListMultipartUploadsAsync("test-bucket", It.IsAny<CancellationToken>()))
+        _mockMultipartUploadService.Setup(x => x.ListAllMultipartUploadsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(uploads);
 
         _mockMultipartUploadService.Setup(x => x.AbortMultipartUploadAsync(
@@ -111,6 +111,35 @@ public class MultipartUploadCleanupServiceTests
     }
 
     [Fact]
+    public async Task CleanupService_ScansOnceAndIgnoresUploadsOutsideExistingBuckets()
+    {
+        _mockBucketService.Setup(x => x.ListBucketsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ListBucketsResponse
+            {
+                Buckets = new List<Bucket>
+            {
+                new() { Name = "one" }, new() { Name = "two" }
+            }
+            });
+        _mockMultipartUploadService.Setup(x => x.ListAllMultipartUploadsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<MultipartUpload>
+            {
+                new() { BucketName = "one", Key = "key", UploadId = "one", Initiated = DateTime.UtcNow.AddDays(-10) },
+                new() { BucketName = "two", Key = "key", UploadId = "two", Initiated = DateTime.UtcNow.AddDays(-10) },
+                new() { BucketName = "deleted", Key = "key", UploadId = "orphan", Initiated = DateTime.UtcNow.AddDays(-10) }
+            });
+        var service = new MultipartUploadCleanupService(_serviceProvider, _mockLogger.Object, _configuration);
+        var method = typeof(MultipartUploadCleanupService).GetMethod("CleanupStaleUploadsAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        await (Task)method.Invoke(service, new object[] { CancellationToken.None })!;
+        _mockMultipartUploadService.Verify(x => x.ListAllMultipartUploadsAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _mockMultipartUploadService.Verify(x => x.ListMultipartUploadsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockMultipartUploadService.Verify(x => x.AbortMultipartUploadAsync("one", "key", "one", It.IsAny<CancellationToken>()), Times.Once);
+        _mockMultipartUploadService.Verify(x => x.AbortMultipartUploadAsync("two", "key", "two", It.IsAny<CancellationToken>()), Times.Once);
+        _mockMultipartUploadService.Verify(x => x.AbortMultipartUploadAsync("deleted", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task CleanupService_Should_Handle_Errors_Gracefully()
     {
         // Arrange
@@ -125,7 +154,7 @@ public class MultipartUploadCleanupServiceTests
         _mockBucketService.Setup(x => x.ListBucketsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(buckets);
 
-        _mockMultipartUploadService.Setup(x => x.ListMultipartUploadsAsync("test-bucket", It.IsAny<CancellationToken>()))
+        _mockMultipartUploadService.Setup(x => x.ListAllMultipartUploadsAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new Exception("Test exception"));
 
         var cleanupService = new MultipartUploadCleanupService(_serviceProvider, _mockLogger.Object, _configuration);
@@ -139,9 +168,9 @@ public class MultipartUploadCleanupServiceTests
 
         _mockLogger.Verify(
             x => x.Log(
-                LogLevel.Warning,
+                LogLevel.Error,
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v != null && (v.ToString() ?? string.Empty).Contains("Failed to process bucket")),
+                It.Is<It.IsAnyType>((v, t) => v != null && (v.ToString() ?? string.Empty).Contains("Failed to perform multipart upload cleanup")),
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.Once);
@@ -190,7 +219,7 @@ public class MultipartUploadCleanupServiceTests
         _mockBucketService.Setup(x => x.ListBucketsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(buckets);
 
-        _mockMultipartUploadService.Setup(x => x.ListMultipartUploadsAsync("test-bucket", It.IsAny<CancellationToken>()))
+        _mockMultipartUploadService.Setup(x => x.ListAllMultipartUploadsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(uploads);
 
         _mockMultipartUploadService.Setup(x => x.AbortMultipartUploadAsync(

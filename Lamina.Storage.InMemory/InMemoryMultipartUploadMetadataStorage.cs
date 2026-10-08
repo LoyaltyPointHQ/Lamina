@@ -60,6 +60,12 @@ public class InMemoryMultipartUploadMetadataStorage : IMultipartUploadMetadataSt
         cancellationToken.ThrowIfCancellationRequested();
     }
 
+    public Task<List<MultipartUpload>> ListAllUploadsAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_uploads.Values.OrderBy(u => u.Initiated).ToList());
+    }
+
     public Task<List<MultipartUpload>> ListUploadsAsync(string bucketName, CancellationToken cancellationToken = default)
     {
         var bucketUploads = _uploads.Values

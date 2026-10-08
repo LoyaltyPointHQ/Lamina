@@ -31,4 +31,14 @@
       </PackageReference>
     </ItemGroup>
 
+    <Target Name="AddBuildRevisionMetadata" BeforeTargets="GetAssemblyAttributes" DependsOnTargets="InitializeSourceControlInformation">
+        <PropertyGroup>
+            <BuildRevision Condition="'$(SourceRevisionId)' != ''">$(SourceRevisionId)</BuildRevision>
+            <BuildRevision Condition="'$(BuildRevision)' == ''">unknown</BuildRevision>
+        </PropertyGroup>
+        <ItemGroup>
+            <AssemblyMetadata Include="GitCommit" Value="$(BuildRevision)" />
+        </ItemGroup>
+    </Target>
+
 </Project>

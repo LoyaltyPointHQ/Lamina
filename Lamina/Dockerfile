@@ -29,9 +29,12 @@ RUN dotnet build "./Lamina.csproj" -c $BUILD_CONFIGURATION -o /app/build
 
 FROM build AS publish
 ARG BUILD_CONFIGURATION=Release
-RUN dotnet publish "./Lamina.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
+ARG SOURCE_REVISION=unknown
+RUN dotnet publish "./Lamina.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false /p:SourceRevisionId="$SOURCE_REVISION"
 
 FROM base AS final
+ARG SOURCE_REVISION=unknown
+LABEL org.opencontainers.image.revision="$SOURCE_REVISION"
 WORKDIR /app
 COPY --from=publish /app/publish .
 

@@ -1,519 +1,268 @@
-using System.Diagnostics;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using Moq;
-using Xunit;
+using Lamina.Storage.Core;
 using Lamina.Storage.Core.Configuration;
 using Lamina.Storage.Filesystem.Locking;
+using Medallion.Threading.Redis;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using StackExchange.Redis;
+using System.Net;
+using System.Net.Sockets;
 
 namespace Lamina.Storage.Filesystem.Tests;
 
-[Collection("Redis")]
-public class RedisLockManagerTests : IDisposable
+public sealed class RedisFactAttribute : FactAttribute
 {
-    private readonly Mock<ILogger<RedisLockManager>> _loggerMock;
-    private readonly RedisSettings _redisSettings;
-    private readonly ConnectionMultiplexer? _redis;
-    private readonly RedisLockManager? _lockManager;
-    private readonly string _testFilePath;
-    private readonly string _testDirectory;
-
-    public RedisLockManagerTests()
+    public RedisFactAttribute()
     {
-        _loggerMock = new Mock<ILogger<RedisLockManager>>();
-        _redisSettings = new RedisSettings
-        {
-            ConnectionString = "localhost:6379",
-            LockExpirySeconds = 30,
-            RetryCount = 3,
-            RetryDelayMs = 100,
-            Database = 0,
-            LockKeyPrefix = "lamina-test:lock"
-        };
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("LAMINA_TEST_REDIS_CONNECTION_STRING")))
+            Skip = "Set LAMINA_TEST_REDIS_CONNECTION_STRING to an isolated test Redis instance.";
+    }
+}
 
-        // Only initialize Redis components if Redis is available
-        if (IsRedisAvailable())
-        {
-            try
-            {
-                var configuration = ConfigurationOptions.Parse(_redisSettings.ConnectionString);
-                _redis = ConnectionMultiplexer.Connect(configuration);
+[Collection("Redis")]
+public sealed class RedisLockManagerTests : IDisposable
+{
+    private readonly string _directory = Path.Combine(Path.GetTempPath(), $"redis-lock-test-{Guid.NewGuid():N}");
+    private readonly RedisSettings _settings = new()
+    {
+        AcquisitionTimeoutMs = 100,
+        MinBusyWaitSleepTimeMs = 5,
+        MaxBusyWaitSleepTimeMs = 10,
+        LockKeyPrefix = $"lamina-test:{Guid.NewGuid():N}"
+    };
+    private ConnectionMultiplexer? _redis;
+    private string FilePath => Path.Combine(_directory, "metadata.json");
+    private ConnectionMultiplexer Redis => _redis ??= ConnectionMultiplexer.Connect(
+        Environment.GetEnvironmentVariable("LAMINA_TEST_REDIS_CONNECTION_STRING")
+        ?? throw new InvalidOperationException("An isolated test Redis must be explicitly configured."));
+    private RedisLockManager Manager => new(Redis, Options.Create(_settings), NullLogger<RedisLockManager>.Instance);
+    private RedisDistributedReaderWriterLock RawLock => new(
+        $"{_settings.LockKeyPrefix}:{Path.GetFullPath(FilePath).ToLowerInvariant()}", Redis.GetDatabase());
 
-                var options = Options.Create(_redisSettings);
-                _lockManager = new RedisLockManager(_redis, options, _loggerMock.Object);
-            }
-            catch
-            {
-                // Ignore initialization errors - tests will be skipped
-            }
-        }
-
-        _testDirectory = Path.Combine(Path.GetTempPath(), $"redis-lock-test-{Guid.NewGuid()}");
-        Directory.CreateDirectory(_testDirectory);
-        _testFilePath = Path.Combine(_testDirectory, "test-file.txt");
+    [RedisFact]
+    public async Task WriteReadUpdateDelete_RoundTrips()
+    {
+        var manager = Manager;
+        Assert.Null(await manager.ReadFileAsync(FilePath, Task.FromResult));
+        await manager.WriteFileAsync(FilePath, "before");
+        Assert.Equal("before", await manager.ReadFileAsync(FilePath, Task.FromResult));
+        Assert.False(await manager.UpdateFileAsync(FilePath, _ => Task.FromResult<string?>(null)));
+        Assert.True(await manager.UpdateFileAsync(FilePath, c => Task.FromResult<string?>(c + " after")));
+        Assert.Equal("before after", await manager.ReadFileAsync(FilePath, Task.FromResult));
+        Assert.True(await manager.DeleteFile(FilePath));
+        Assert.False(await manager.DeleteFile(FilePath));
     }
 
-    private static bool IsRedisAvailable()
+    [Fact]
+    public async Task UnavailableRedis_FailsAcquisitionWithoutWritingFile()
     {
+        // Reserve a real loopback endpoint without speaking Redis, rather than assuming
+        // an arbitrary port is unused or interfering with the shared integration server.
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var options = new ConfigurationOptions
+        {
+            AbortOnConnectFail = false,
+            ConnectRetry = 0,
+            ConnectTimeout = 100,
+            AsyncTimeout = 100,
+            SyncTimeout = 100,
+            BacklogPolicy = BacklogPolicy.FailFast
+        };
+        options.EndPoints.Add((IPEndPoint)listener.LocalEndpoint);
+        using var redis = await ConnectionMultiplexer.ConnectAsync(options);
+        var manager = new RedisLockManager(redis, Options.Create(_settings), NullLogger<RedisLockManager>.Instance);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+
+        var failure = await Record.ExceptionAsync(() =>
+            manager.WriteFileAsync(FilePath, "must not be published", cancellation.Token));
+
+        Assert.True(failure is LockAcquisitionException or RedisException,
+            $"Expected a lock or Redis failure, got {failure?.GetType().Name ?? "success"}.");
+        Assert.False(File.Exists(FilePath));
+    }
+
+    [RedisFact]
+    public async Task ActiveWriter_BlocksAllOperations_WithDedicatedSafeException()
+    {
+        var manager = Manager;
+        await using var held = await RawLock.AcquireWriteLockAsync();
+        Func<Task>[] operations = [
+            () => manager.WriteFileAsync(FilePath, "competing"),
+            () => manager.ReadFileAsync(FilePath, Task.FromResult),
+            () => manager.UpdateFileAsync(FilePath, _ => Task.FromResult<string?>("competing")),
+            () => manager.DeleteFile(FilePath)
+        ];
+        foreach (var operation in operations)
+        {
+            var error = await Assert.ThrowsAsync<LockAcquisitionException>(operation);
+            Assert.DoesNotContain(_directory, error.Message);
+        }
+        Assert.False(File.Exists(FilePath));
+    }
+
+    [RedisFact]
+    public async Task ActiveReader_AllowsReaders_BlocksWriter()
+    {
+        await Manager.WriteFileAsync(FilePath, "snapshot");
+        await using var held = await RawLock.AcquireReadLockAsync();
+        Assert.Equal("snapshot", await Manager.ReadFileAsync(FilePath, Task.FromResult));
+        await Assert.ThrowsAsync<LockAcquisitionException>(() => Manager.WriteFileAsync(FilePath, "blocked"));
+    }
+
+    [RedisFact]
+    public async Task ReadTransform_ContentAndTimestampRemainProtectedUntilCallbackCompletes()
+    {
+        var manager = Manager;
+        await manager.WriteFileAsync(FilePath, "snapshot");
+        var timestamp = File.GetLastWriteTimeUtc(FilePath);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var read = manager.ReadFileAsync(FilePath, async snapshot =>
+        {
+            entered.SetResult();
+            await release.Task;
+            return (Content: snapshot, Timestamp: File.GetLastWriteTimeUtc(FilePath));
+        });
         try
         {
-            var config = ConfigurationOptions.Parse("localhost:6379");
-            config.ConnectTimeout = 1000; // 1 second timeout
-            using var redis = ConnectionMultiplexer.Connect(config);
-            return redis.IsConnected;
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await Assert.ThrowsAsync<LockAcquisitionException>(() => manager.WriteFileAsync(FilePath, "blocked"));
         }
-        catch
+        finally
         {
-            return false;
+            release.TrySetResult();
+            await read;
+        }
+        var result = await read;
+        Assert.Equal("snapshot", result.Content);
+        Assert.Equal(timestamp, result.Timestamp);
+        await manager.WriteFileAsync(FilePath, "new version");
+        Assert.Equal("new version", await File.ReadAllTextAsync(FilePath));
+    }
+
+    [RedisFact]
+    public async Task CancelledWait_DoesNotLeakLock()
+    {
+        var manager = Manager;
+        using var cancellation = new CancellationTokenSource();
+        await using (var held = await RawLock.AcquireWriteLockAsync())
+        {
+            var waiting = manager.WriteFileAsync(FilePath, "cancelled", cancellation.Token);
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+        }
+        await manager.WriteFileAsync(FilePath, "success");
+        Assert.Equal("success", await File.ReadAllTextAsync(FilePath));
+    }
+
+    [RedisFact]
+    public async Task FailedTransform_DoesNotLeakLockOrModifyFile()
+    {
+        var manager = Manager;
+        await manager.WriteFileAsync(FilePath, "original");
+        await Assert.ThrowsAsync<FormatException>(() => manager.UpdateFileAsync(FilePath, _ => throw new FormatException()));
+        await Assert.ThrowsAsync<FormatException>(() => manager.ReadFileAsync<string>(FilePath, _ => throw new FormatException()));
+        Assert.Equal("original", await File.ReadAllTextAsync(FilePath));
+        await manager.WriteFileAsync(FilePath, "success");
+    }
+
+    [RedisFact]
+    public async Task EmptyAndWhitespaceSnapshots_DoNotInvokeTransform()
+    {
+        foreach (var content in new[] { "", " \n " })
+        {
+            await Manager.WriteFileAsync(FilePath, content);
+            Assert.Null(await Manager.ReadFileAsync<string>(FilePath, _ => throw new InvalidOperationException()));
         }
     }
 
-    private void RequireRedis()
+    [RedisFact]
+    public async Task ConfiguredExpiry_IsAppliedToRedisLease()
     {
-        if (!IsRedisAvailable() || _lockManager == null)
+        _settings.LockExpirySeconds = 2;
+        await Manager.UpdateFileAsync(FilePath, async _ =>
         {
-            throw new InvalidOperationException("Redis is not available for testing");
-        }
-    }
-
-    [Fact]
-    public async Task ReadFileAsync_FileExists_ReturnsContent()
-    {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange
-        var expectedContent = "test content for reading";
-        await File.WriteAllTextAsync(_testFilePath, expectedContent);
-
-        // Act
-        var result = await _lockManager!.ReadFileAsync(_testFilePath, content => Task.FromResult(content));
-
-        // Assert
-        Assert.Equal(expectedContent, result);
-    }
-
-    [Fact]
-    public async Task ReadFileAsync_FileDoesNotExist_ReturnsDefault()
-    {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange
-        var nonExistentPath = Path.Combine(_testDirectory, "nonexistent.txt");
-
-        // Act
-        var result = await _lockManager!.ReadFileAsync(nonExistentPath, content => Task.FromResult(content));
-
-        // Assert
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public async Task WriteFileAsync_CreatesFileWithContent()
-    {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange
-        var expectedContent = "content to write";
-
-        // Act
-        await _lockManager!.WriteFileAsync(_testFilePath, expectedContent);
-
-        // Assert
-        var actualContent = await File.ReadAllTextAsync(_testFilePath);
-        Assert.Equal(expectedContent, actualContent);
-    }
-
-    [Fact]
-    public async Task WriteFileAsync_CreatesDirectoryIfNotExists()
-    {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange
-        var nestedPath = Path.Combine(_testDirectory, "subdir", "nested", "file.txt");
-        var content = "nested content";
-
-        // Act
-        await _lockManager!.WriteFileAsync(nestedPath, content);
-
-        // Assert
-        Assert.True(File.Exists(nestedPath));
-        var actualContent = await File.ReadAllTextAsync(nestedPath);
-        Assert.Equal(content, actualContent);
-    }
-
-    [Fact]
-    public async Task DeleteFile_ExistingFile_ReturnsTrue()
-    {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange
-        await File.WriteAllTextAsync(_testFilePath, "content to delete");
-        Assert.True(File.Exists(_testFilePath));
-
-        // Act
-        var result = await _lockManager!.DeleteFile(_testFilePath);
-
-        // Assert
-        Assert.True(result);
-        Assert.False(File.Exists(_testFilePath));
-    }
-
-    [Fact]
-    public async Task DeleteFile_NonExistentFile_ReturnsFalse()
-    {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange
-        var nonExistentPath = Path.Combine(_testDirectory, "nonexistent.txt");
-
-        // Act
-        var result = await _lockManager!.DeleteFile(nonExistentPath);
-
-        // Assert
-        Assert.False(result);
-    }
-
-    [Fact]
-    public async Task ConcurrentReadWrite_EnsuresThreadSafety()
-    {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange
-        var iterations = 10;
-        var content = "concurrent test content";
-        var tasks = new List<Task>();
-
-        // Act
-        for (int i = 0; i < iterations; i++)
-        {
-            int iteration = i;
-            var writeTask = _lockManager!.WriteFileAsync(_testFilePath, $"{content}-{iteration}");
-            var readTask = _lockManager!.ReadFileAsync(_testFilePath, c => Task.FromResult(c));
-
-            tasks.Add(writeTask);
-            tasks.Add(readTask);
-        }
-
-        // Wait for all operations to complete
-        await Task.WhenAll(tasks);
-
-        // Assert - if we get here without exceptions, the locking worked
-        Assert.True(File.Exists(_testFilePath));
-        var finalContent = await File.ReadAllTextAsync(_testFilePath);
-        Assert.NotNull(finalContent);
-        Assert.Contains(content, finalContent);
-    }
-
-    [Fact]
-    public async Task LockTimeout_ThrowsException()
-    {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange - Create a second lock manager with very short timeout
-        var shortTimeoutSettings = new RedisSettings
-        {
-            ConnectionString = _redisSettings.ConnectionString,
-            LockExpirySeconds = 1, // Very short timeout
-            RetryCount = 1,
-            RetryDelayMs = 50
-        };
-
-        var shortTimeoutOptions = Options.Create(shortTimeoutSettings);
-        var shortTimeoutLockManager = new RedisLockManager(_redis!, shortTimeoutOptions, _loggerMock.Object);
-
-        // Create a long-running operation to hold the lock
-        var longRunningTask = _lockManager!.WriteFileAsync(_testFilePath, "holding lock");
-
-        // Act & Assert
-        // Try to acquire the same lock with short timeout - should eventually fail
-        // Note: This test might be flaky depending on Redis performance and timing
-        var startTime = DateTime.UtcNow;
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-        {
-            while (DateTime.UtcNow - startTime < TimeSpan.FromSeconds(5))
+            var server = Redis.GetServer(Redis.GetEndPoints().Single());
+            var keys = server.Keys(pattern: $"{_settings.LockKeyPrefix}:*").ToArray();
+            Assert.NotEmpty(keys);
+            foreach (var key in keys)
             {
-                try
-                {
-                    await shortTimeoutLockManager.WriteFileAsync(_testFilePath, "competing write");
-                    await Task.Delay(10);
-                }
-                catch (InvalidOperationException)
-                {
-                    // Wait for the original task to complete
-                    await longRunningTask;
-                    throw;
-                }
+                var remaining = await Redis.GetDatabase().KeyTimeToLiveAsync(key);
+                Assert.NotNull(remaining);
+                Assert.InRange(remaining.Value, TimeSpan.Zero, TimeSpan.FromSeconds(2));
             }
-            throw new InvalidOperationException("Expected lock contention");
+            return "updated";
         });
     }
 
-    [Fact]
-    public async Task ReadOperation_WithTransform_WorksCorrectly()
+    [RedisFact]
+    public async Task CancelledUpdate_PreservesFileAndReleasesLock()
     {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange
-        var originalContent = "123";
-        await File.WriteAllTextAsync(_testFilePath, originalContent);
-
-        // Act
-        var result = await _lockManager!.ReadFileAsync(_testFilePath, content =>
-            Task.FromResult(int.Parse(content) * 2));
-
-        // Assert
-        Assert.Equal(246, result);
+        var manager = Manager;
+        await manager.WriteFileAsync(FilePath, "original");
+        using var cancellation = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.UpdateFileAsync(FilePath, _ =>
+        {
+            cancellation.Cancel();
+            return Task.FromResult<string?>("cancelled");
+        }, cancellation.Token));
+        Assert.Equal("original", await File.ReadAllTextAsync(FilePath));
+        Assert.Single(Directory.GetFiles(_directory));
+        await manager.WriteFileAsync(FilePath, "success");
     }
 
-    [Fact]
-    public async Task LockKeyPrefix_IsConfigurable()
+    [RedisFact]
+    public async Task AtomicWrites_NeverExposePartialContent()
     {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange
-        var customPrefix = "custom-app:locks";
-        var customSettings = new RedisSettings
+        var manager = Manager;
+        var versions = new[] { new string('a', 8192), new string('b', 8192) };
+        await manager.WriteFileAsync(FilePath, versions[0]);
+        using var stop = new CancellationTokenSource();
+        var reader = Task.Run(async () =>
         {
-            ConnectionString = _redisSettings.ConnectionString,
-            LockExpirySeconds = _redisSettings.LockExpirySeconds,
-            RetryCount = _redisSettings.RetryCount,
-            RetryDelayMs = _redisSettings.RetryDelayMs,
-            Database = _redisSettings.Database,
-            LockKeyPrefix = customPrefix
-        };
-
-        var customOptions = Options.Create(customSettings);
-        var customLockManager = new RedisLockManager(_redis!, customOptions, _loggerMock.Object);
-
-        var testContent = "configurable prefix test";
-        await File.WriteAllTextAsync(_testFilePath, testContent);
-
-        // Act - This should work with the custom prefix
-        var result = await customLockManager.ReadFileAsync(_testFilePath, content => Task.FromResult(content));
-
-        // Assert
-        Assert.Equal(testContent, result);
-    }
-
-    [Fact]
-    public async Task ConcurrentReads_AllowMultipleReaders()
-    {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange
-        var content = "test content for concurrent reads";
-        await File.WriteAllTextAsync(_testFilePath, content);
-
-        // Act - Start multiple concurrent read operations
-        var readTasks = new List<Task<string?>>();
-        for (int i = 0; i < 5; i++)
+            while (!stop.IsCancellationRequested)
+                Assert.Contains(await File.ReadAllTextAsync(FilePath), versions);
+        });
+        try
         {
-            readTasks.Add(_lockManager!.ReadFileAsync(_testFilePath, c => Task.FromResult<string?>(c)));
+            for (var i = 0; i < 30; i++) await manager.WriteFileAsync(FilePath, versions[i % 2]);
         }
-
-        // All reads should complete successfully
-        var results = await Task.WhenAll(readTasks);
-
-        // Assert
-        Assert.All(results, result => Assert.Equal(content, result));
-    }
-
-    /// <summary>
-    /// Regression test: Verifies multiple readers execute in parallel, not sequentially.
-    /// The old RedLock.net implementation only allowed ONE reader at a time (mutex behavior).
-    /// With proper RW lock, 5 readers each taking 200ms should complete in ~200ms total, not 1000ms.
-    /// </summary>
-    [Fact]
-    public async Task ConcurrentReads_CompleteInParallel_RegressionTest()
-    {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange: Create file and set up slow read operations
-        await File.WriteAllTextAsync(_testFilePath, "content");
-        var readDelay = TimeSpan.FromMilliseconds(200);
-        var readerCount = 5;
-
-        // Act: Start multiple concurrent slow reads
-        var stopwatch = Stopwatch.StartNew();
-        var readTasks = Enumerable.Range(0, readerCount)
-            .Select(_ => _lockManager!.ReadFileAsync(_testFilePath, async content =>
-            {
-                await Task.Delay(readDelay);
-                return content;
-            }))
-            .ToList();
-
-        await Task.WhenAll(readTasks);
-        stopwatch.Stop();
-
-        // Assert: If readers run in parallel, total time should be ~readDelay
-        // If sequential (old bug), total time would be ~readDelay * readerCount = 1000ms
-        var maxExpectedTime = readDelay.TotalMilliseconds * 2; // Allow some margin for overhead
-        Assert.True(stopwatch.ElapsedMilliseconds < maxExpectedTime,
-            $"Expected parallel execution in ~{readDelay.TotalMilliseconds}ms, but took {stopwatch.ElapsedMilliseconds}ms. " +
-            "This indicates readers are running sequentially (old bug behavior).");
-    }
-
-    /// <summary>
-    /// Regression test: Verifies reads and writes use the same lock (proper mutual exclusion).
-    /// The old RedLock.net implementation used DIFFERENT keys for read vs write operations,
-    /// meaning they didn't actually block each other.
-    /// </summary>
-    [Fact]
-    public async Task ActiveReadsBlockWrite_RegressionTest()
-    {
-        if (!IsRedisAvailable())
-            return; // Skip test if Redis is not available
-
-        // Arrange: Short timeout for write to fail fast if readers don't block it
-        var shortTimeoutSettings = new RedisSettings
+        finally
         {
-            ConnectionString = _redisSettings.ConnectionString,
-            RetryCount = 1,
-            RetryDelayMs = 50, // Total wait: 50ms
-            LockKeyPrefix = _redisSettings.LockKeyPrefix
-        };
-
-        await File.WriteAllTextAsync(_testFilePath, "content");
-        var readDelay = TimeSpan.FromMilliseconds(500);
-
-        // Act: Start a slow read that holds the lock for 500ms
-        var readTask = _lockManager!.ReadFileAsync(_testFilePath, async content =>
-        {
-            await Task.Delay(readDelay);
-            return content;
-        });
-
-        // Give read time to acquire lock
-        await Task.Delay(50);
-
-        // Try to write with short timeout - should fail because read holds the lock
-        var writeOptions = Options.Create(shortTimeoutSettings);
-        var shortTimeoutManager = new RedisLockManager(_redis!, writeOptions, _loggerMock.Object);
-
-        // This should throw because the read lock blocks the write lock
-        // With the old bug (different keys), this would succeed immediately
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            shortTimeoutManager.WriteFileAsync(_testFilePath, "blocked write"));
-
-        // Original read should complete successfully
-        var result = await readTask;
-        Assert.Equal("content", result);
-    }
-
-    [Fact]
-    public async Task ReadFileAsync_EmptyFile_ReturnsDefault()
-    {
-        if (!IsRedisAvailable())
-            return;
-
-        // Arrange - create an empty file (simulates truncated/corrupted metadata)
-        await File.WriteAllTextAsync(_testFilePath, "");
-
-        // Act
-        var result = await _lockManager!.ReadFileAsync(_testFilePath, content =>
-            Task.FromResult(content));
-
-        // Assert - should return default (null) instead of passing empty string to callback
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public async Task ReadFileAsync_WhitespaceOnlyFile_ReturnsDefault()
-    {
-        if (!IsRedisAvailable())
-            return;
-
-        // Arrange
-        await File.WriteAllTextAsync(_testFilePath, "   \n  ");
-
-        // Act
-        var result = await _lockManager!.ReadFileAsync(_testFilePath, content =>
-            Task.FromResult(content));
-
-        // Assert
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public async Task WriteFileAsync_IsAtomic_NeverExposesEmptyFile()
-    {
-        if (!IsRedisAvailable())
-            return;
-
-        // Arrange - write initial content
-        await _lockManager!.WriteFileAsync(_testFilePath, "initial content");
-
-        var sawEmptyContent = false;
-        var iterations = 100;
-        var cts = new CancellationTokenSource();
-
-        // Act - concurrent reads while writing (bypassing lock to simulate external reader)
-        var readerTask = Task.Run(async () =>
-        {
-            while (!cts.Token.IsCancellationRequested)
-            {
-                try
-                {
-                    if (File.Exists(_testFilePath))
-                    {
-                        var content = await File.ReadAllTextAsync(_testFilePath, cts.Token);
-                        if (content.Length == 0)
-                        {
-                            sawEmptyContent = true;
-                        }
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (IOException)
-                {
-                    // File might be locked, that's fine
-                }
-            }
-        });
-
-        for (int i = 0; i < iterations; i++)
-        {
-            await _lockManager!.WriteFileAsync(_testFilePath, $"content iteration {i}");
+            stop.Cancel();
+            await reader;
         }
+    }
 
-        cts.Cancel();
-        await readerTask;
-
-        // Assert
-        Assert.False(sawEmptyContent, "Reader observed empty file content during write - write is not atomic");
+    [RedisFact]
+    public async Task Update_HoldsLockUntilTransformCompletes()
+    {
+        var manager = Manager;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var update = manager.UpdateFileAsync(FilePath, async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+            return "updated";
+        });
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await Assert.ThrowsAsync<LockAcquisitionException>(() => manager.WriteFileAsync(FilePath, "competing"));
+        }
+        finally
+        {
+            release.TrySetResult();
+            await update;
+        }
+        Assert.Equal("updated", await File.ReadAllTextAsync(FilePath));
     }
 
     public void Dispose()
     {
-        try
-        {
-            _redis?.Dispose();
-
-            if (Directory.Exists(_testDirectory))
-            {
-                Directory.Delete(_testDirectory, true);
-            }
-        }
-        catch
-        {
-            // Ignore disposal errors in tests
-        }
+        _redis?.Dispose();
+        if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);
     }
 }

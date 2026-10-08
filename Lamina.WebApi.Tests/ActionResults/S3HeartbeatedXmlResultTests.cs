@@ -94,6 +94,26 @@ public class S3HeartbeatedXmlResultTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_FactoryThrowsBeforeHeartbeat_Returns500WithCorrelation()
+    {
+        var (context, body) = CreateContext();
+        context.HttpContext.Items["S3RequestId"] = "test-request";
+        context.HttpContext.TraceIdentifier = "test-host";
+        var sut = new S3HeartbeatedXmlResult(
+            _ => throw new InvalidOperationException("/private/storage/metadata.json"),
+            interval: TimeSpan.FromSeconds(10), enabled: true);
+
+        await sut.ExecuteResultAsync(context);
+
+        Assert.Equal(500, context.HttpContext.Response.StatusCode);
+        var text = ReadResponse(body);
+        Assert.Contains("<Code>InternalError</Code>", text);
+        Assert.Contains("<RequestId>test-request</RequestId>", text);
+        Assert.Contains("<HostId>test-host</HostId>", text);
+        Assert.DoesNotContain("/private/storage", text);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_FactoryThrows_AfterHeartbeatStart_WritesInternalErrorXml()
     {
         var (context, body) = CreateContext();

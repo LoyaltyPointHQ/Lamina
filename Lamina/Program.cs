@@ -1,5 +1,7 @@
 using System.Text;
 using System.Xml;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.Storage.Core;
@@ -40,7 +42,7 @@ catch (InvalidOperationException ex)
 
 // Configure logging
 builder.Logging.ClearProviders();
-builder.Logging.AddConsole();
+builder.Logging.AddSimpleConsole(options => options.IncludeScopes = true);
 builder.Logging.AddDebug();
 
 // Add services to the container.
@@ -103,13 +105,15 @@ var lockManagerType = builder.Configuration["LockManager"] ?? "InMemory";
 if (lockManagerType.Equals("Redis", StringComparison.OrdinalIgnoreCase))
 {
     // Configure Redis settings
-    builder.Services.Configure<RedisSettings>(
-        builder.Configuration.GetSection("Redis"));
+    builder.Services.AddOptions<RedisSettings>()
+        .Bind(builder.Configuration.GetSection("Redis"))
+        .Validate(settings => { settings.Validate(); return true; })
+        .ValidateOnStart();
 
     // Register Redis connection multiplexer
     builder.Services.AddSingleton<ConnectionMultiplexer>(provider =>
     {
-        var redisSettings = builder.Configuration.GetSection("Redis").Get<RedisSettings>() ?? new RedisSettings();
+        var redisSettings = provider.GetRequiredService<IOptions<RedisSettings>>().Value;
         var configuration = ConfigurationOptions.Parse(redisSettings.ConnectionString);
         return ConnectionMultiplexer.Connect(configuration);
     });
@@ -295,6 +299,12 @@ if (lifecycleExpirationEnabled)
 
 var app = builder.Build();
 
+var assembly = typeof(Program).Assembly;
+app.Logger.LogInformation("Starting Lamina {Version}, Git revision {GitRevision}, runtime {Runtime}",
+    assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown",
+    assembly.GetCustomAttributes<AssemblyMetadataAttribute>().FirstOrDefault(a => a.Key == "GitCommit")?.Value ?? "unknown",
+    RuntimeInformation.FrameworkDescription);
+
 // Run database migrations if SQL metadata storage is enabled
 if (metadataStorageType.Equals("Sql", StringComparison.OrdinalIgnoreCase))
 {
@@ -333,6 +343,7 @@ if (app.Environment.IsDevelopment())
 
 // Add S3 response headers middleware (must be early in pipeline)
 app.UseMiddleware<S3ResponseHeadersMiddleware>();
+app.UseMiddleware<S3ExceptionHandlingMiddleware>();
 
 // Add standard authentication and authorization middleware
 app.UseAuthentication();

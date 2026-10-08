@@ -47,6 +47,40 @@ public sealed class MultipartUploadKeyStreamingTests : IDisposable
     }
 
     [Fact]
+    public async Task InMemory_GlobalListing_IncludesAllBuckets()
+    {
+        var storage = new InMemoryMultipartUploadMetadataStorage();
+        await storage.InitiateUploadAsync("one", "key", new());
+        await storage.InitiateUploadAsync("two", "key", new());
+        Assert.Equal(new[] { "one", "two" }, (await storage.ListAllUploadsAsync()).Select(u => u.BucketName).Order());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => storage.ListAllUploadsAsync(new CancellationToken(true)));
+    }
+
+    [Fact]
+    public async Task Filesystem_GlobalListing_ReadsEachUploadOnce()
+    {
+        var storage = Create(MetadataStorageMode.Inline);
+        await storage.InitiateUploadAsync("one", "key", new());
+        await storage.InitiateUploadAsync("two", "key", new());
+        Assert.Equal(2, (await storage.ListAllUploadsAsync()).Count);
+        Assert.Equal(2, _locks.ReadCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Filesystem_ListingDoesNotReturnPartialSuccessOnReadFailure(bool global)
+    {
+        var storage = Create(MetadataStorageMode.Inline);
+        await storage.InitiateUploadAsync("bucket", "key", new());
+        _locks.ReadException = new IOException("unavailable");
+        var exception = await Record.ExceptionAsync(() => global
+            ? storage.ListAllUploadsAsync()
+            : storage.ListUploadsAsync("bucket"));
+        Assert.Same(_locks.ReadException, exception);
+    }
+
+    [Fact]
     public async Task Filesystem_MissingUploadDirectory_ReturnsEmpty()
     {
         var storage = Create(MetadataStorageMode.Inline);

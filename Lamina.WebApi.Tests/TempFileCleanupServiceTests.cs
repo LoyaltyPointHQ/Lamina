@@ -58,6 +58,41 @@ public class TempFileCleanupServiceTests : IDisposable
     }
 
     [Fact]
+    public void Enumeration_DirectoryDeletedBeforeMoveNext_IsSkipped()
+    {
+        var service = new TempFileCleanupService(_mockLogger.Object, _configuration, Options.Create(_filesystemSettings));
+        var method = typeof(TempFileCleanupService).GetMethod("EnumerateFilesRecursivelyAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var files = (IEnumerable<string>)method.Invoke(service,
+            new object[] { _testDataDirectory, ".lamina-tmp-*", CancellationToken.None })!;
+        Directory.Delete(_testDataDirectory, true);
+        Assert.Empty(files);
+    }
+
+    [Fact]
+    public void Enumeration_DeletedCurrentDirectory_ContinuesOtherSubdirectories()
+    {
+        var first = Path.Combine(_testDataDirectory, "one");
+        var second = Path.Combine(_testDataDirectory, "two");
+        Directory.CreateDirectory(first);
+        Directory.CreateDirectory(second);
+        File.WriteAllText(Path.Combine(first, ".lamina-tmp-one"), "");
+        File.WriteAllText(Path.Combine(second, ".lamina-tmp-two"), "");
+        var service = new TempFileCleanupService(_mockLogger.Object, _configuration, Options.Create(_filesystemSettings));
+        var method = typeof(TempFileCleanupService).GetMethod("EnumerateFilesRecursivelyAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var files = (IEnumerable<string>)method.Invoke(service,
+            new object[] { _testDataDirectory, ".lamina-tmp-*", CancellationToken.None })!;
+        var count = 0;
+        foreach (var file in files)
+        {
+            count++;
+            Directory.Delete(Path.GetDirectoryName(file)!, true);
+        }
+        Assert.Equal(2, count);
+    }
+
+    [Fact]
     public async Task CleanupStaleTempFilesAsync_RemovesOldTempFiles()
     {
         // Arrange
@@ -220,12 +255,12 @@ public class TempFileCleanupServiceTests : IDisposable
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             method!.Invoke(service, new object[] { CancellationToken.None });
 
-            // Assert - Should log warning about directory access error but not crash
+            // Assert - Should report an incomplete cleanup on access failure, not silently skip it
             _mockLogger.Verify(
                 x => x.Log(
-                    LogLevel.Warning,
+                    LogLevel.Error,
                     It.IsAny<EventId>(),
-                    It.Is<It.IsAnyType>((v, t) => v != null && (v.ToString() ?? string.Empty).Contains("Access denied to directory")),
+                    It.Is<It.IsAnyType>((v, t) => v != null && (v.ToString() ?? string.Empty).Contains("Failed to perform temp file cleanup")),
                     It.IsAny<Exception>(),
                     It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
                 Times.AtLeastOnce);

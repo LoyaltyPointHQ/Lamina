@@ -211,44 +211,42 @@ public class FilesystemMultipartUploadMetadataStorage : IMultipartUploadMetadata
         public string? Key { get; set; }
     }
 
-    public async Task<List<MultipartUpload>> ListUploadsAsync(string bucketName, CancellationToken cancellationToken = default)
+    public Task<List<MultipartUpload>> ListAllUploadsAsync(CancellationToken cancellationToken = default) =>
+        ReadUploadsAsync(null, cancellationToken);
+
+    public Task<List<MultipartUpload>> ListUploadsAsync(string bucketName, CancellationToken cancellationToken = default) =>
+        ReadUploadsAsync(bucketName, cancellationToken);
+
+    private async Task<List<MultipartUpload>> ReadUploadsAsync(string? bucketName, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var uploads = new List<MultipartUpload>();
         var multipartUploadsDir = _metadataMode == MetadataStorageMode.SeparateDirectory
             ? Path.Combine(_metadataDirectory!, "_multipart_uploads")
             : Path.Combine(_dataDirectory, _inlineMetadataDirectoryName, "_multipart_uploads");
 
-        if (!Directory.Exists(multipartUploadsDir))
-        {
-            return uploads;
-        }
-
-        var uploadDirs = Directory.GetDirectories(multipartUploadsDir);
+        var uploadDirs = DirectoryEnumeration.Directories(multipartUploadsDir);
 
         foreach (var uploadDir in uploadDirs)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var uploadId = Path.GetFileName(uploadDir);
             var uploadMetadataPath = GetUploadMetadataPath(uploadId);
 
-            if (File.Exists(uploadMetadataPath))
+            try
             {
-                try
-                {
-                    var upload = await _lockManager.ReadFileAsync(uploadMetadataPath, content =>
-                    {
-                        return Task.FromResult(JsonSerializer.Deserialize<MultipartUpload>(content));
-                    }, cancellationToken);
+                // Listing only needs a detached payload, not a content+mtime snapshot for caching.
+                // Keep generic ReadFileAsync callbacks protected; cache callers rely on that contract.
+                var content = await _lockManager.ReadFileAsync(uploadMetadataPath, Task.FromResult, cancellationToken);
+                var upload = content == null ? null : JsonSerializer.Deserialize<MultipartUpload>(content);
 
-                    if (upload != null && upload.BucketName == bucketName)
-                    {
-                        uploads.Add(upload);
-                    }
-                }
-                catch (Exception ex)
+                if (upload != null && (bucketName == null || upload.BucketName == bucketName))
                 {
-                    _logger.LogWarning(ex, "Failed to read upload metadata: {UploadMetadataPath}", uploadMetadataPath);
+                    uploads.Add(upload);
                 }
             }
+            catch (FileNotFoundException) { /* Concurrent complete/abort. */ }
+            catch (DirectoryNotFoundException) { /* Concurrent complete/abort. */ }
         }
 
         return uploads.OrderBy(u => u.Initiated).ToList();

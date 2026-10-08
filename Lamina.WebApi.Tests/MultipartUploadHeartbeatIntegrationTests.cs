@@ -193,6 +193,8 @@ public class MultipartUploadHeartbeatIntegrationTests
         public Task<StorageResult<List<UploadPart>>> ListPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken = default)
             => _inner.ListPartsAsync(bucketName, key, uploadId, cancellationToken);
 
+        public Task<List<MultipartUpload>> ListAllMultipartUploadsAsync(CancellationToken cancellationToken = default) => _inner.ListAllMultipartUploadsAsync(cancellationToken);
+
         public Task<List<MultipartUpload>> ListMultipartUploadsAsync(string bucketName, CancellationToken cancellationToken = default)
             => _inner.ListMultipartUploadsAsync(bucketName, cancellationToken);
 

@@ -265,20 +265,19 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
         return Task.FromResult(File.Exists(metadataPath));
     }
 
+    protected virtual bool IsMetadataBucketDirectory(string name) =>
+        !name.StartsWith('.') && !name.StartsWith('_');
+
     public async IAsyncEnumerable<(string bucketName, string key)> ListAllMetadataKeysAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var rootDirectory = GetStorageRootDirectory();
-        if (!Directory.Exists(rootDirectory))
-        {
-            yield break;
-        }
-
-        foreach (var bucketDir in Directory.GetDirectories(rootDirectory))
+        foreach (var bucketDir in DirectoryEnumeration.Directories(rootDirectory))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             var bucketName = Path.GetFileName(bucketDir);
+            if (!IsMetadataBucketDirectory(bucketName)) continue;
 
             await foreach (var key in EnumerateKeysForBucketAsync(bucketDir, cancellationToken))
             {

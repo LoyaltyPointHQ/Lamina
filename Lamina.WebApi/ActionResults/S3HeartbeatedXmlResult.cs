@@ -56,8 +56,8 @@ public class S3HeartbeatedXmlResult : IActionResult
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger?.LogError(ex, "Factory threw after heartbeat started; returning InternalError as 200+Error XML");
-                payload = new HeartbeatedXmlPayload(BuildInternalError());
+                _logger?.LogError(ex, "Multipart completion failed; returning InternalError (HTTP 200 only if heartbeat was sent)");
+                payload = new HeartbeatedXmlPayload(BuildInternalError(context.HttpContext), FallbackStatusCode: 500);
             }
             finally
             {
@@ -91,10 +91,13 @@ public class S3HeartbeatedXmlResult : IActionResult
         await SerializeXmlAsync(response.Body, payload.Body, omitXmlDeclaration: _xmlHeaderWritten, ct);
     }
 
-    private static S3Error BuildInternalError() => new()
+    private static S3Error BuildInternalError(HttpContext context) => new()
     {
         Code = "InternalError",
-        Message = "We encountered an internal error. Please try again."
+        Message = "We encountered an internal error. Please try again.",
+        Resource = context.Request.Path,
+        RequestId = context.Items["S3RequestId"] as string ?? context.TraceIdentifier,
+        HostId = context.TraceIdentifier
     };
 
     private async Task RunHeartbeatLoopAsync(Stream stream, TimeSpan interval, CancellationToken ct)

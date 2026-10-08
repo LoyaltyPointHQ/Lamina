@@ -231,7 +231,7 @@ public class S3MultipartController : S3ControllerBase
         {
             if (!await _bucketStorage.BucketExistsAsync(bucketName, cancellationToken))
             {
-                throw new InvalidOperationException($"Bucket '{bucketName}' does not exist");
+                return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
             }
 
             var upload = await _multipartStorage.InitiateMultipartUploadAsync(bucketName, key, request, cancellationToken);
@@ -246,9 +246,10 @@ public class S3MultipartController : S3ControllerBase
             Response.ContentType = "application/xml";
             return Ok(result);
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return S3Error("NoSuchBucket", "The specified bucket does not exist", bucketName, 404);
+            _logger.LogError(ex, "Failed to initiate multipart upload for {Bucket}/{Key}", bucketName, key);
+            return S3Error("InternalError", "We encountered an internal error. Please try again.", $"{bucketName}/{key}", 500);
         }
     }
 
@@ -391,7 +392,7 @@ public class S3MultipartController : S3ControllerBase
 
             var part = partResult.Value!;
             Response.Headers.Append("ETag", $"\"{part.ETag}\"");
-            
+
             // Add checksum headers if present
             if (!string.IsNullOrEmpty(part.ChecksumCRC32))
                 Response.Headers.Append("x-amz-checksum-crc32", part.ChecksumCRC32);
@@ -403,12 +404,13 @@ public class S3MultipartController : S3ControllerBase
                 Response.Headers.Append("x-amz-checksum-sha256", part.ChecksumSHA256);
             if (!string.IsNullOrEmpty(part.ChecksumCRC64NVME))
                 Response.Headers.Append("x-amz-checksum-crc64nvme", part.ChecksumCRC64NVME);
-            
+
             return Ok();
         }
         catch (InvalidOperationException ex)
         {
-            return S3Error("NoSuchUpload", ex.Message, $"{bucketName}/{key}", 404);
+            _logger.LogError(ex, "Failed to upload part {PartNumber} of upload {UploadId}", partNumber, uploadId);
+            return S3Error("InternalError", "We encountered an internal error. Please try again.", $"{bucketName}/{key}", 500);
         }
     }
 
@@ -429,13 +431,13 @@ public class S3MultipartController : S3ControllerBase
                 return StorageError(existingParts, $"/{bucketName}/{key}");
             }
             var existingPart = existingParts.Value!.FirstOrDefault(p => p.PartNumber == partNumber);
-            
+
             if (existingPart != null)
             {
                 _logger.LogInformation(
                     "UploadPartCopy part {PartNumber} already exists for upload {UploadId}, returning existing part (idempotent retry)",
                     partNumber, uploadId);
-                
+
                 // Return the existing part information
                 Response.Headers.Append("x-amz-copy-source-version-id", "null");
 
@@ -626,11 +628,7 @@ public class S3MultipartController : S3ControllerBase
             Response.ContentType = "application/xml";
             return Ok(copyPartResult);
         }
-        catch (InvalidOperationException ex)
-        {
-            return S3Error("NoSuchUpload", ex.Message, $"{bucketName}/{key}", 404);
-        }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Error in UploadPartCopy for {Bucket}/{Key} part {PartNumber}", bucketName, key, partNumber);
             return S3Error("InternalError", "We encountered an internal error. Please try again.", $"/{bucketName}/{key}", 500);
@@ -700,7 +698,7 @@ public class S3MultipartController : S3ControllerBase
                 enabled: _heartbeatOptions.Enabled,
                 logger: _logger);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Unexpected error completing multipart upload {UploadId} for key {Key} in bucket {BucketName}", uploadId, key, bucketName);
             return S3Error("InternalError", "We encountered an internal error. Please try again.", $"{bucketName}/{key}", 500);
@@ -890,9 +888,10 @@ public class S3MultipartController : S3ControllerBase
 
             return Ok();
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
-            Response.StatusCode = 404;
+            _logger.LogError(ex, "Failed to inspect multipart upload {UploadId}", uploadId);
+            Response.StatusCode = 500;
             Response.ContentType = "application/xml";
             return new EmptyResult();
         }
