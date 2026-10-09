@@ -5,6 +5,7 @@
     "registry.kolosowscy.pl/tomek/sandboxkit/codex:1": {},
     "registry.kolosowscy.pl/tomek/sandboxkit/dotnet:1": {},
     "registry.kolosowscy.pl/tomek/sandboxkit/podman:1": {},
+    "registry.kolosowscy.pl/tomek/sandboxkit/uv:1": {},
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/common-utils:2": {
       "username": "agent",

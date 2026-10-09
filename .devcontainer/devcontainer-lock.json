@@ -38,6 +38,11 @@
       "integrity": "sha256:54c4d9f174f94cbb273319df87c94bcff453645e35d355a104c6852f9c5af350",
       "resolved": "registry.kolosowscy.pl/tomek/sandboxkit/podman@sha256:33eefd581d15f0cf5a8f65e839464c88fe8b6878e00b4ed6bfa8487f4df6b5c0",
       "version": "1.0.3"
+    },
+    "registry.kolosowscy.pl/tomek/sandboxkit/uv:1": {
+      "integrity": "sha256:928312dc8150686a06302abd3c52feca33980d46387f76ba89a3120d835a6d4a",
+      "resolved": "registry.kolosowscy.pl/tomek/sandboxkit/uv@sha256:e2e4dedc42bd0f26c11618b91a0d747e08125747cc8f4734bb2b37e73b860421",
+      "version": "1.0.3"
     }
   }
 }
