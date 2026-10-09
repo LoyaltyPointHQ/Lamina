@@ -1,3 +1,4 @@
+using Lamina.Storage.Core.Integrity;
 using System.IO.Pipelines;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
@@ -15,6 +16,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
     private readonly IObjectMetadataStorage _objectMetadataStorage;
     private readonly ILogger<MultipartUploadStorageFacade> _logger;
     private readonly UploadContentProcessor _processor;
+    private readonly IObjectPublicationLock _publicationLock;
 
     private const long MinimumPartSizeBytes = 5 * 1024 * 1024; // 5 MiB per AWS S3 spec
 
@@ -41,7 +43,8 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         IObjectDataStorage objectDataStorage,
         IObjectMetadataStorage objectMetadataStorage,
         ILogger<MultipartUploadStorageFacade> logger,
-        IChunkedDataParser chunkedDataParser)
+        IChunkedDataParser chunkedDataParser,
+        IObjectPublicationLock? publicationLock = null)
     {
         _dataStorage = dataStorage;
         _metadataStorage = metadataStorage;
@@ -49,6 +52,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
         _objectMetadataStorage = objectMetadataStorage;
         _logger = logger;
         _processor = new UploadContentProcessor(chunkedDataParser);
+        _publicationLock = publicationLock ?? InMemoryObjectPublicationLock.Shared;
     }
 
     private static async Task<IDisposable> AcquireUploadLockAsync(string uploadId, CancellationToken cancellationToken)
@@ -312,6 +316,7 @@ public class MultipartUploadStorageFacade : IMultipartUploadStorageFacade
             var storeMetadataFirst = _objectMetadataStorage is not IRequiresDataFileForMetadata;
             var aggregatedChecksumsToStore = aggregatedChecksums.Count > 0 ? aggregatedChecksums : null;
 
+            await using var publication = await _publicationLock.AcquireAsync(bucketName, key, cancellationToken);
             if (storeMetadataFirst)
             {
                 var storedMetadata = await _objectMetadataStorage.StoreMetadataAsync(bucketName, key, multipartETag, size, putRequest, aggregatedChecksumsToStore, DateTime.UtcNow, cancellationToken);

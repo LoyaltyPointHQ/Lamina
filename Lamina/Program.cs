@@ -7,6 +7,7 @@ using Lamina.Core.Streaming;
 using Lamina.Storage.Core;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Configuration;
+using Lamina.Storage.Core.Integrity;
 using Lamina.Storage.Filesystem;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
@@ -120,12 +121,23 @@ if (lockManagerType.Equals("Redis", StringComparison.OrdinalIgnoreCase))
 
     // Register Redis-based lock manager
     builder.Services.AddSingleton<IFileSystemLockManager, RedisLockManager>();
+    builder.Services.AddSingleton<IObjectPublicationLock, RedisObjectPublicationLock>();
 }
 else
 {
     // Register in-memory lock manager (default)
     builder.Services.AddSingleton<IFileSystemLockManager, InMemoryLockManager>();
+    builder.Services.AddSingleton<IObjectPublicationLock, InMemoryObjectPublicationLock>();
 }
+
+builder.Services.AddOptions<IntegrityPersistenceSettings>()
+    .Bind(builder.Configuration.GetSection("IntegrityPersistence"))
+    .Validate(settings => settings.Capacity > 0 && settings.Workers > 0,
+        "IntegrityPersistence capacity and worker count must be positive.")
+    .ValidateOnStart();
+builder.Services.AddSingleton(provider => provider.GetRequiredService<IOptions<IntegrityPersistenceSettings>>().Value);
+builder.Services.AddSingleton<IntegrityPersistenceQueue>();
+builder.Services.AddHostedService<IntegrityPersistenceService>();
 
 // Configure metadata caching
 builder.Services.Configure<MetadataCacheSettings>(
@@ -202,11 +214,23 @@ if (usesFilesystemData || usesFilesystemMetadata)
     builder.Services.Configure<FilesystemStorageSettings>(
         builder.Configuration.GetSection("FilesystemStorage"));
     builder.Services.AddSingleton<NetworkFileSystemHelper>();
+    builder.Services.AddOptions<FilesystemListingReadSettings>()
+        .Bind(builder.Configuration.GetSection("FilesystemListingReads"))
+        .Validate(settings => settings.MaxConcurrency > 0, "FilesystemListingReads MaxConcurrency must be positive.")
+        .ValidateOnStart();
+    builder.Services.AddSingleton<FilesystemListingReadLimiter>();
 }
 
 // Register data storage services
 if (usesFilesystemData)
 {
+    builder.Services.AddOptions<FilesystemListingIndexSettings>()
+        .Bind(builder.Configuration.GetSection("ListingIndex"))
+        .Validate(settings => settings.AbsoluteExpirationSeconds > 0 && settings.SlidingExpirationSeconds > 0
+            && settings.SizeLimit > 0 && settings.MaxConcurrentBuilds > 0,
+            "ListingIndex expiration, size and concurrency limits must be positive.")
+        .ValidateOnStart();
+    builder.Services.AddSingleton<FilesystemListingIndex>();
     // LinuxZeroCopyHelper is only needed by the data side (copy_file_range multipart fast path)
     builder.Services.AddSingleton<LinuxZeroCopyHelper>();
 

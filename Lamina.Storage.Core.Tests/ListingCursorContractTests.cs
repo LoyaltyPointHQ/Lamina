@@ -96,8 +96,8 @@ public class ListingCursorContractTests
         var uploads = new Mock<IMultipartUploadStorageFacade>(MockBehavior.Strict);
         data.Setup(x => x.ListDataCandidatesAsync(BucketName, It.IsAny<ListingQuery>(), default))
             .ReturnsAsync(new ListingCandidates([new("a", false), new("b", false), new("c", false)], new()));
-        metadata.Setup(x => x.GetMetadataAsync(BucketName, "a", default)).ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo { Key = "a", ETag = "stored" }, DateTime.MaxValue));
-        metadata.Setup(x => x.GetMetadataAsync(BucketName, "b", default)).ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo { Key = "b", ETag = "stored" }, DateTime.MaxValue));
+        metadata.Setup(x => x.GetMetadataAsync(BucketName, "a", default)).ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo { Key = "a", ETag = "stored", Size = 1 }, DateTime.MaxValue));
+        metadata.Setup(x => x.GetMetadataAsync(BucketName, "b", default)).ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo { Key = "b", ETag = "stored", Size = 1 }, DateTime.MaxValue));
         var facade = CreateFacade(data.Object, metadata.Object, uploads.Object, BucketType.GeneralPurpose);
         var result = await facade.ListObjectsAsync(BucketName, new ListObjectsRequest { ListType = 2, MaxKeys = 2 });
         Assert.True(result.IsSuccess);
@@ -120,7 +120,7 @@ public class ListingCursorContractTests
             .ReturnsAsync(new ListingCandidates([new("a", false), new("b/", true), new("c", false)], new()));
         batch.Setup(x => x.GetMetadataBatchAsync(BucketName,
                 It.Is<IEnumerable<string>>(keys => keys.SequenceEqual(new[] { "a" })), default))
-            .ReturnsAsync(new Dictionary<string, ObjectMetadataSnapshot?> { ["a"] = new(new S3ObjectInfo { Key = "a", ETag = "stored" }, DateTime.MaxValue) });
+            .ReturnsAsync(new Dictionary<string, ObjectMetadataSnapshot?> { ["a"] = new(new S3ObjectInfo { Key = "a", ETag = "stored", Size = 1 }, DateTime.MaxValue) });
         var facade = CreateFacade(data.Object, metadata.Object, Mock.Of<IMultipartUploadStorageFacade>(), BucketType.GeneralPurpose);
         var result = await facade.ListObjectsAsync(BucketName, new ListObjectsRequest { ListType = 2, MaxKeys = 2, Delimiter = "/" });
         Assert.True(result.IsSuccess);
@@ -219,7 +219,7 @@ public class ListingCursorContractTests
         }
         var metadata = new Mock<IObjectMetadataStorage>(MockBehavior.Strict);
         metadata.Setup(x => x.GetMetadataAsync(BucketName, It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((string _, string key, CancellationToken _) => new ObjectMetadataSnapshot(new S3ObjectInfo { Key = key, ETag = "stored" }, DateTime.MaxValue));
+            .ReturnsAsync((string _, string key, CancellationToken _) => new ObjectMetadataSnapshot(new S3ObjectInfo { Key = key, ETag = "stored", Size = 1 }, DateTime.MaxValue));
         return CreateFacade(data, metadata.Object, Mock.Of<IMultipartUploadStorageFacade>());
     }
 

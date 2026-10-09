@@ -74,6 +74,32 @@ public sealed class MigrationPostgreSqlTests : IAsyncLifetime
     public Task DisposeAsync() => _container.DisposeAsync().AsTask();
 
     [Fact]
+    public async Task PostgreSql_ConditionalIntegrity_PersistsRoundedVersionAcrossContexts()
+    {
+        var time = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddTicks(7);
+        var write = new Lamina.Storage.Core.Integrity.ObjectIntegrityWrite("bucket", "key", 4, time, null,
+            "etag", new Dictionary<string, string> { ["SHA256"] = "checksum" }, "text/plain");
+        await using (var context = CreateContext())
+        {
+            await context.Database.MigrateAsync();
+            var storage = new SqlObjectMetadataStorage(context, Microsoft.Extensions.Logging.Abstractions.NullLogger<SqlObjectMetadataStorage>.Instance);
+            Assert.Equal(Lamina.Storage.Core.Integrity.IntegrityWriteResult.Created, await storage.TryWriteIntegrityAsync(write));
+        }
+        await using (var context = CreateContext())
+        {
+            var storage = new SqlObjectMetadataStorage(context, Microsoft.Extensions.Logging.Abstractions.NullLogger<SqlObjectMetadataStorage>.Instance);
+            var snapshot = (await storage.GetMetadataAsync("bucket", "key"))!;
+            Assert.Equal(time.AddTicks(3), snapshot.DataLastModified);
+            Assert.Equal("checksum", snapshot.Metadata.ChecksumSHA256);
+            Assert.Equal(Lamina.Storage.Core.Integrity.IntegrityWriteResult.Conflict, await storage.TryWriteIntegrityAsync(write));
+            await storage.SetObjectTagsAsync("bucket", "key", new() { ["keep"] = "tag" });
+            var refresh = write with { Expected = Lamina.Storage.Core.Integrity.ObjectIntegrityState.FromSnapshot(snapshot), ETag = "refreshed" };
+            Assert.Equal(Lamina.Storage.Core.Integrity.IntegrityWriteResult.Updated, await storage.TryWriteIntegrityAsync(refresh));
+            Assert.Equal("tag", (await storage.GetMetadataAsync("bucket", "key"))!.Metadata.Tags["keep"]);
+        }
+    }
+
+    [Fact]
     public async Task PostgreSql_AllMigrations_Apply()
     {
         await using var context = CreateContext();

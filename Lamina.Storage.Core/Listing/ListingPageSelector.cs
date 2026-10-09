@@ -1,18 +1,23 @@
 namespace Lamina.Storage.Core.Listing;
 
+/// <summary>Observes projected names before cursor filtering without allocating rejected names.</summary>
+public delegate void ListingEntryObserver(ReadOnlySpan<char> name, bool isCommonPrefix);
+
 /// <summary>Retains only the next page plus one distinct lookahead entry.</summary>
 public sealed class ListingPageSelector
 {
     private readonly ListingQuery _query;
+    private readonly ListingEntryObserver? _observer;
     private readonly PriorityQueue<ListingEntry, SortKey> _candidates;
     private readonly HashSet<string> _names = new(StringComparer.Ordinal);
     private readonly uint _afterHash;
 
     private readonly record struct SortKey(uint Hash, string Name);
 
-    public ListingPageSelector(ListingQuery query, ListingStatistics? statistics = null)
+    public ListingPageSelector(ListingQuery query, ListingStatistics? statistics = null, ListingEntryObserver? observer = null)
     {
         _query = query;
+        _observer = observer;
         Statistics = statistics ?? new ListingStatistics();
         _afterHash = query.Order == ListingOrder.DirectoryHashV1 && query.After != null
             ? ListingNameComparer.DirectoryHash(query.After.Name) : 0;
@@ -43,6 +48,7 @@ public sealed class ListingPageSelector
     // Entries passed here have already been grouped and filtered by their source.
     public void ConsiderEntry(ReadOnlySpan<char> name, bool isCommonPrefix)
     {
+        _observer?.Invoke(name, isCommonPrefix);
         if (_query.CandidateLimit == 0)
             return;
 

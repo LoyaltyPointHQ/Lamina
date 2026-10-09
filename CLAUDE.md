@@ -462,7 +462,8 @@ Lamina supports S3 UploadPartCopy for server-side copying of data:
 - Metadata storage returns detached `ObjectMetadataSnapshot` values, including a
   nullable persisted data timestamp. GET, HEAD and listing share facade refresh
   logic. Integrity-only updates preserve user metadata, tags, content type and
-  ownership; they do not create missing records.
+  ownership. Legacy synchronous updates do not create missing records; the opt-in
+  background persistence capability can conditionally create generated metadata.
 - Refresh recomputes only previously stored checksum algorithms. Existing
   multipart ETags are preserved; objects without metadata get generated defaults.
   A data-version change observed during hashing fails rather than persisting a
@@ -480,12 +481,89 @@ migration or configuration change is required.
 
 ### Performance Optimizations
 
-- **Bounded object listing**: Filesystem and InMemory retain at most `max-keys + 1` candidates; GeneralPurpose uses UTF-8 lexicographical order. Each page still rescans the matching range; no listing cache or index.
+- **Bounded object listing**: The uncached scanner retains at most `max-keys + 1` candidates; GeneralPurpose uses UTF-8 lexicographical order. Filesystem retains a query-specific name index by default in a separately bounded memory budget, with an opt-out (see below).
 - **Early listing filtering**: Metadata directories (`.lamina-meta` and configured inline name), temporary files and other internal entries are excluded before selection/sorting; metadata subtrees are not traversed.
 - **Directory pagination**: Stable FNV-1a ordering with full-key collision tie-breaking and stateless `d1:` tokens works across replicas. Old Directory listings must restart after upgrade; all serving replicas must understand the new token. Explicit `start-after` is rejected; Lamina's Directory V1 extension carries the token in `marker`/`NextMarker`.
 - **Delimiter-based listing**: Single directory scans for `delimiter="/"`; object and multipart common prefixes share the page limit.
 - **Streaming multipart assembly**: No memory overhead for large uploads
-- **Optimized metadata**: Only store non-default values
+- **Optimized metadata**: Uploads can omit default metadata; optional background persistence retains generated integrity after reads to avoid repeated full-content hashing.
+
+### Listing Index and Background Integrity Persistence
+
+The filesystem listing index is enabled by default; background integrity persistence
+is independently opt-in. Example settings with both enabled:
+
+```json
+{
+  "ListingIndex": {
+    "Enabled": true,
+    "AbsoluteExpirationSeconds": 300,
+    "SlidingExpirationSeconds": 10,
+    "SizeLimit": 134217728,
+    "MaxConcurrentBuilds": 2
+  },
+  "FilesystemListingReads": { "MaxConcurrency": 8 },
+  "IntegrityPersistence": { "Enabled": true, "Capacity": 4096, "Workers": 2 }
+}
+```
+
+- `ListingIndex.Enabled` defaults to `true`; `IntegrityPersistence.Enabled` defaults to `false`.
+  To disable the index, set `ListingIndex:Enabled` to `false` or the environment
+  variable `ListingIndex__Enabled=false`, then restart Lamina.
+  Other values shown are defaults; numeric limits must be positive and are validated at startup.
+- The filesystem name index is keyed by storage root/bucket, prefix, delimiter and
+  order, not token/page size. It stores projected objects and common prefixes,
+  including visible empty directories. Multipart prefixes remain freshly merged
+  by the facade. GeneralPurpose/Directory ordering and token formats are unchanged.
+- Absolute lifetime is measured from scan start; listing reads extend only the
+  10-second idle lifetime. Mutations do not extend either lifetime. Expired indexes
+  are rebuilt before serving; no stale-while-revalidate. A pause longer than 10 seconds
+  or a traversal longer than 300 seconds can cause additional scans.
+- Local publish/delete operations update cached names; unusual delimiters and
+  directory aliases use conservative invalidation/fallback. Other replicas and
+  direct filesystem changes are observed on rebuild, so the enabled index weakens
+  cross-replica listing freshness. It is not an AWS strong-consistency guarantee
+  or a frozen pagination snapshot.
+- The estimated 128 MiB budget includes names, build state and mutation journals.
+  Memory pressure evicts least-recently-used indexes. Oversized/unstable builds,
+  directory symlinks and build saturation fall back to the bounded scanner.
+  Page lookup is O(log N + page size); sorted-list insertion/removal can be O(N).
+  No mandatory stat is performed for every indexed file (important on Linux/SMB).
+- Filesystem batch stat and metadata reads share a singleton concurrency limiter;
+  only the final page is read, in response order after batching. SQL retains one
+  batch query and never uses a single DbContext concurrently. Cached names never
+  replace fresh data/metadata version checks.
+- After hashing, GET/HEAD/LIST enqueue detached integrity results. A full bounded
+  queue applies backpressure: the request waits for capacity, not the actual write.
+  Workers use fresh DI scopes and compare current data size/mtime plus expected
+  metadata integrity. Conditional create requires absent metadata; refresh preserves
+  current user fields and never recreates a deleted record. Xattr conditional reads
+  distinguish missing attributes from I/O errors; its watermark is written last.
+- Publication locks cover final PUT/Copy/Complete publication, deletes, tag writes,
+  metadata cleanup and worker validation/write. They do not cover payload upload,
+  hashing or queue admission. Default overwrites remove previous metadata after
+  successful data publication. Failed metadata removal is not reported as success.
+- Multi-replica writers must use Redis with a shared lock namespace; logical
+  object lock names do not depend on mount paths. Upgrade all writers before
+  enabling background persistence. InMemory locking protects only one instance;
+  external filesystem writers do not participate. Size/mtime checks cannot detect
+  replacements deliberately preserving those observations.
+- Transient persistence failures receive at most three attempts (1/2-second backoff).
+  Conflicts are discarded; failures are logged. Graceful shutdown drains within
+  the host timeout; crashes can lose queued work, which a later read regenerates.
+  Disabling background persistence restores legacy synchronous refresh behavior.
+- Custom providers may opt into `IBatchObjectDataInfoStorage` and
+  `IConditionalObjectIntegrityStorage`; providers without these capabilities retain
+  fallback behavior. No database migration or new dependency is needed.
+- Metrics use meters `Lamina.Storage.Listing`, `Lamina.Integrity`,
+  `Lamina.Integrity.Hashing` and `Lamina.Integrity.Persistence`: index hits/builds/fallbacks/estimated bytes,
+  scan count/duration, hash bytes/duration, queue wait/pending count and persistence
+  outcomes. Existing listing debug logs separate scan and metadata time.
+
+Validation includes 100,000 synthetic names traversed in 100 pages with one scan
+for both bucket orders, provided no expiry/eviction occurs. This validates scan
+elimination, not an SMB latency claim; measure cold/warm listing and p50/p95 on the
+actual mount before production rollout.
 
 ## Key Implementation Details
 

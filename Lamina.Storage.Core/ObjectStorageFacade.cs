@@ -1,5 +1,7 @@
+using Lamina.Storage.Core.Integrity;
 using System.IO.Pipelines;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using Lamina.Core.Models;
 using Lamina.Core.Streaming;
 using Lamina.Storage.Core.Abstract;
@@ -11,6 +13,9 @@ namespace Lamina.Storage.Core;
 
 public class ObjectStorageFacade : IObjectStorageFacade
 {
+    private static readonly Meter IntegrityMeter = new("Lamina.Integrity.Hashing");
+    private static readonly Counter<long> HashedBytes = IntegrityMeter.CreateCounter<long>("integrity.hash.bytes", "By");
+    private static readonly Histogram<double> HashDuration = IntegrityMeter.CreateHistogram<double>("integrity.hash.duration", "ms");
     private readonly IObjectDataStorage _dataStorage;
     private readonly IObjectMetadataStorage _metadataStorage;
     private readonly IBucketStorageFacade _bucketStorage;
@@ -18,6 +23,8 @@ public class ObjectStorageFacade : IObjectStorageFacade
     private readonly ILogger<ObjectStorageFacade> _logger;
     private readonly IContentTypeDetector _contentTypeDetector;
     private readonly UploadContentProcessor _processor;
+    private readonly IObjectPublicationLock _publicationLock;
+    private readonly IntegrityPersistenceQueue? _integrityQueue;
 
     public ObjectStorageFacade(
         IObjectDataStorage dataStorage,
@@ -26,7 +33,9 @@ public class ObjectStorageFacade : IObjectStorageFacade
         IMultipartUploadStorageFacade multipartUploadStorage,
         ILogger<ObjectStorageFacade> logger,
         IContentTypeDetector contentTypeDetector,
-        IChunkedDataParser? chunkedDataParser = null)
+        IChunkedDataParser? chunkedDataParser = null,
+        IObjectPublicationLock? publicationLock = null,
+        IntegrityPersistenceQueue? integrityQueue = null)
     {
         _dataStorage = dataStorage;
         _metadataStorage = metadataStorage;
@@ -35,6 +44,8 @@ public class ObjectStorageFacade : IObjectStorageFacade
         _logger = logger;
         _contentTypeDetector = contentTypeDetector;
         _processor = new UploadContentProcessor(chunkedDataParser);
+        _publicationLock = publicationLock ?? InMemoryObjectPublicationLock.Shared;
+        _integrityQueue = integrityQueue;
     }
 
     public async Task<StorageResult<S3Object>> PutObjectAsync(string bucketName, string key, PipeReader dataReader, PutObjectRequest? request = null, byte[]? expectedMd5 = null, CancellationToken cancellationToken = default)
@@ -88,6 +99,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
             if (size != processed.Value.Size)
                 throw new IOException("Prepared data size does not match the validated payload.");
 
+            await using var publication = await _publicationLock.AcquireAsync(bucketName, key, cancellationToken);
             if (ShouldStoreMetadata(key, request))
             {
                 // Xattr backends bind metadata to the data file, so commit must happen first.
@@ -133,8 +145,9 @@ public class ObjectStorageFacade : IObjectStorageFacade
             }
             else
             {
-                // No metadata to store — commit data directly
+                // Publishing defaults replaces any persisted metadata belonging to the prior version.
                 await _dataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
+                await RemovePreviousMetadataAsync(bucketName, key, cancellationToken);
 
                 var dataPath = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
                 if (dataPath == null)
@@ -186,6 +199,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
     public async Task<bool> DeleteObjectAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
+        await using var publication = await _publicationLock.AcquireAsync(bucketName, key, cancellationToken);
         var dataDeleted = await _dataStorage.DeleteDataAsync(bucketName, key, cancellationToken);
         var metadataDeleted = await _metadataStorage.DeleteMetadataAsync(bucketName, key, cancellationToken);
 
@@ -206,7 +220,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
         var metadata = snapshot == null ? null : ObjectMetadataSnapshot.CloneMetadata(snapshot.Metadata);
         if (metadata == null)
             return await GenerateMetadataOnTheFlyAsync(bucketName, key, data.size, data.lastModified, cancellationToken);
-        if (string.IsNullOrEmpty(metadata.ETag) || snapshot!.DataLastModified == null || data.lastModified > snapshot.DataLastModified)
+        if (string.IsNullOrEmpty(metadata.ETag) || metadata.Size != data.size || snapshot!.DataLastModified == null || data.lastModified > snapshot.DataLastModified)
         {
             var storedChecksums = new Dictionary<string, string?>
             {
@@ -216,15 +230,18 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 ["SHA1"] = metadata.ChecksumSHA1,
                 ["SHA256"] = metadata.ChecksumSHA256
             };
-            await using var stream = await _dataStorage.OpenReadAsync(bucketName, key, cancellationToken);
+            await using var stream = await OpenIntegrityReadAsync(bucketName, key, data, cancellationToken);
             if (stream == null) return null;
-            var (etag, checksums) = await ChecksumHelper.ComputeETagAndChecksumsFromStreamAsync(stream,
+            var (etag, checksums) = await HashIntegrityAsync(stream, data.size,
                 storedChecksums.Where(x => !string.IsNullOrEmpty(x.Value)).Select(x => x.Key), cancellationToken);
             var current = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
             if (current == null) return null;
             if (current.Value != data) throw new IOException("Object changed while refreshing integrity metadata.");
             if (ETagHelper.IsMultipartETag(metadata.ETag)) etag = metadata.ETag;
-            if (!await _metadataStorage.UpdateIntegrityAsync(bucketName, key, etag, data.size, data.lastModified, checksums, cancellationToken))
+            if (CanQueueIntegrity)
+                await _integrityQueue!.EnqueueAsync(new(bucketName, key, data.size, data.lastModified,
+                    ObjectIntegrityState.FromSnapshot(snapshot!), etag, checksums, metadata.ContentType), cancellationToken);
+            else if (!await _metadataStorage.UpdateIntegrityAsync(bucketName, key, etag, data.size, data.lastModified, checksums, cancellationToken))
                 throw new IOException("Unable to persist refreshed integrity metadata.");
             metadata.ETag = etag;
             metadata.ChecksumCRC32 = checksums.GetValueOrDefault("CRC32");
@@ -331,6 +348,9 @@ public class ObjectStorageFacade : IObjectStorageFacade
             Dictionary<string, ObjectMetadataSnapshot?>? batch = null;
             if (keys.Length > 0 && _metadataStorage is IBatchObjectMetadataStorage batchStorage)
                 batch = await batchStorage.GetMetadataBatchAsync(bucketName, keys, cancellationToken);
+            IReadOnlyDictionary<string, (long size, DateTime lastModified)?>? dataBatch = null;
+            if (keys.Length > 0 && _dataStorage is IBatchObjectDataInfoStorage batchDataStorage)
+                dataBatch = await batchDataStorage.GetDataInfoBatchAsync(bucketName, keys, cancellationToken);
             foreach (var key in keys)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -338,7 +358,8 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 {
                     var snapshot = batch != null ? batch.GetValueOrDefault(key)
                         : await _metadataStorage.GetMetadataAsync(bucketName, key, cancellationToken);
-                    var info = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+                    var info = dataBatch != null ? dataBatch.GetValueOrDefault(key)
+                        : await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
                     var meta = info == null ? null : await ResolveMetadataAsync(bucketName, key, snapshot, info.Value, cancellationToken);
                     if (meta != null)
                         response.Contents.Add(meta);
@@ -383,9 +404,9 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
     private async Task<S3ObjectInfo?> GenerateMetadataOnTheFlyAsync(string bucketName, string key, long size, DateTime lastModified, CancellationToken cancellationToken)
     {
-        await using var stream = await _dataStorage.OpenReadAsync(bucketName, key, cancellationToken);
+        await using var stream = await OpenIntegrityReadAsync(bucketName, key, (size, lastModified), cancellationToken);
         if (stream == null) return null;
-        var (etag, _) = await ChecksumHelper.ComputeETagAndChecksumsFromStreamAsync(stream, [], cancellationToken);
+        var (etag, _) = await HashIntegrityAsync(stream, size, [], cancellationToken);
         var after = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
         if (after == null) return null;
         if (after.Value.size != size || after.Value.lastModified != lastModified)
@@ -393,6 +414,9 @@ public class ObjectStorageFacade : IObjectStorageFacade
 
         // Determine content type based on file extension
         var contentType = GetContentTypeFromKey(key);
+        if (CanQueueIntegrity)
+            await _integrityQueue!.EnqueueAsync(new(bucketName, key, size, lastModified, null, etag,
+                new Dictionary<string, string>(), contentType), cancellationToken);
 
         return new S3ObjectInfo
         {
@@ -404,6 +428,35 @@ public class ObjectStorageFacade : IObjectStorageFacade
             Metadata = new Dictionary<string, string>()
         };
     }
+
+    private static async Task<(string ETag, Dictionary<string, string> Checksums)> HashIntegrityAsync(
+        Stream stream, long size, IEnumerable<string> algorithms, CancellationToken cancellationToken)
+    {
+        var started = Stopwatch.GetTimestamp();
+        try
+        {
+            var result = await ChecksumHelper.ComputeETagAndChecksumsFromStreamAsync(stream, algorithms, cancellationToken);
+            HashedBytes.Add(size);
+            return result;
+        }
+        finally { HashDuration.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds); }
+    }
+
+    private async Task<Stream?> OpenIntegrityReadAsync(string bucketName, string key,
+        (long size, DateTime lastModified) observed, CancellationToken cancellationToken)
+    {
+        if (!CanQueueIntegrity)
+            return await _dataStorage.OpenReadAsync(bucketName, key, cancellationToken);
+        await using var publication = await _publicationLock.AcquireAsync(bucketName, key, cancellationToken);
+        var current = await _dataStorage.GetDataInfoAsync(bucketName, key, cancellationToken);
+        if (current == null) return null;
+        if (current.Value != observed)
+            throw new IOException("Object changed before opening its integrity stream.");
+        // Acquire a stable handle while local publications are excluded; hashing happens outside the lock.
+        return await _dataStorage.OpenReadAsync(bucketName, key, cancellationToken);
+    }
+
+    private bool CanQueueIntegrity => _integrityQueue?.Enabled == true && _metadataStorage is IConditionalObjectIntegrityStorage;
 
     private string GetContentTypeFromKey(string key)
     {
@@ -428,6 +481,13 @@ public class ObjectStorageFacade : IObjectStorageFacade
             ".conf" or ".config" => "text/plain",
             _ => "application/octet-stream" // Default fallback
         };
+    }
+
+    private async Task RemovePreviousMetadataAsync(string bucketName, string key, CancellationToken cancellationToken)
+    {
+        if (!await _metadataStorage.DeleteMetadataAsync(bucketName, key, cancellationToken)
+            && await _metadataStorage.MetadataExistsAsync(bucketName, key, cancellationToken))
+            throw new IOException("Unable to remove metadata belonging to the previous object version.");
     }
 
     private bool ShouldStoreMetadata(string key, PutObjectRequest? request)
@@ -622,6 +682,7 @@ public class ObjectStorageFacade : IObjectStorageFacade
                 effectiveRequest.Tags = new Dictionary<string, string>(sourceInfo.Tags);
             }
 
+            await using var publication = await _publicationLock.AcquireAsync(destBucketName, destKey, cancellationToken);
             if (ShouldStoreMetadata(destKey, effectiveRequest))
             {
                 if (_metadataStorage is IRequiresDataFileForMetadata)
@@ -666,8 +727,9 @@ public class ObjectStorageFacade : IObjectStorageFacade
             }
             else
             {
-                // No metadata — commit data directly
+                // Publishing defaults replaces any persisted metadata belonging to the prior version.
                 await _dataStorage.CommitPreparedDataAsync(preparedData, cancellationToken);
+                await RemovePreviousMetadataAsync(destBucketName, destKey, cancellationToken);
 
                 var dataInfo = await _dataStorage.GetDataInfoAsync(destBucketName, destKey, cancellationToken);
                 if (dataInfo == null)
@@ -800,13 +862,15 @@ public class ObjectStorageFacade : IObjectStorageFacade
         return _metadataStorage.GetObjectTagsAsync(bucketName, key, cancellationToken);
     }
 
-    public Task<bool> SetObjectTagsAsync(string bucketName, string key, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
+    public async Task<bool> SetObjectTagsAsync(string bucketName, string key, Dictionary<string, string> tags, CancellationToken cancellationToken = default)
     {
-        return _metadataStorage.SetObjectTagsAsync(bucketName, key, tags, cancellationToken);
+        await using var publication = await _publicationLock.AcquireAsync(bucketName, key, cancellationToken);
+        return await _metadataStorage.SetObjectTagsAsync(bucketName, key, tags, cancellationToken);
     }
 
-    public Task<bool> DeleteObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteObjectTagsAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
-        return _metadataStorage.DeleteObjectTagsAsync(bucketName, key, cancellationToken);
+        await using var publication = await _publicationLock.AcquireAsync(bucketName, key, cancellationToken);
+        return await _metadataStorage.DeleteObjectTagsAsync(bucketName, key, cancellationToken);
     }
 }

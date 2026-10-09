@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.IO.Pipelines;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
@@ -12,9 +13,11 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Lamina.Storage.Filesystem;
 
-public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObjectDataStorage, IObjectListingFilter
+public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObjectDataStorage, IObjectListingFilter, IBatchObjectDataInfoStorage
 {
     private readonly string _dataDirectory;
+    private readonly FilesystemListingIndex? _listingIndex;
+    private readonly FilesystemListingReadLimiter _listingReads;
     private readonly MetadataStorageMode _metadataMode;
     private readonly string _inlineMetadataDirectoryName;
     private readonly string _tempFilePrefix;
@@ -27,10 +30,14 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
         IOptions<FilesystemStorageSettings> settingsOptions,
         NetworkFileSystemHelper networkHelper,
         LinuxZeroCopyHelper zeroCopyHelper,
-        ILogger<FilesystemObjectDataStorage> logger
+        ILogger<FilesystemObjectDataStorage> logger,
+        FilesystemListingIndex? listingIndex = null,
+        FilesystemListingReadLimiter? listingReads = null
     )
     {
         var settings = settingsOptions.Value;
+        _listingIndex = listingIndex;
+        _listingReads = listingReads ?? FilesystemListingReadLimiter.Shared;
         _dataDirectory = settings.DataDirectory;
         _metadataMode = settings.MetadataMode;
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
@@ -84,7 +91,9 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
             ?? throw new InvalidOperationException($"PreparedData for {preparedData.BucketName}/{preparedData.Key} has no temp path");
 
         var dataPath = GetDataPath(preparedData.BucketName, preparedData.Key);
+        var aliasesDirectory = HasIndexedDirectoryAlias(dataPath);
         await _networkHelper.AtomicMoveAsync(tempPath, dataPath, overwrite: true);
+        NotifyListingChange(preparedData.BucketName, preparedData.Key, aliasesDirectory);
     }
 
     public Task AbortPreparedDataAsync(PreparedData preparedData, CancellationToken cancellationToken = default)
@@ -452,6 +461,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
             return false;
         }
 
+        var aliasesDirectory = HasIndexedDirectoryAlias(dataPath);
         await _networkHelper.ExecuteWithRetryAsync(() =>
             {
                 File.Delete(dataPath);
@@ -477,6 +487,7 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
             _logger.LogWarning(ex, "Failed to clean up empty directories for path: {DataPath}", dataPath);
         }
 
+        NotifyListingChange(bucketName, key, aliasesDirectory);
         return true;
     }
 
@@ -507,27 +518,22 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
 
     public Task<(long size, DateTime lastModified)?> GetDataInfoAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (FilesystemStorageHelper.IsKeyForbidden(key, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
         {
             return Task.FromResult<(long size, DateTime lastModified)?>(null);
         }
 
-        var dataPath = GetDataPath(bucketName, key);
-        if (!File.Exists(dataPath))
-        {
+        var fileInfo = new FileInfo(GetDataPath(bucketName, key));
+        if (!fileInfo.Exists)
             return Task.FromResult<(long size, DateTime lastModified)?>(null);
-        }
-
-        var fileName = Path.GetFileName(dataPath);
-        if (FilesystemStorageHelper.IsTemporaryFile(fileName, _tempFilePrefix))
-        {
-            return Task.FromResult<(long size, DateTime lastModified)?>(null);
-        }
-
-        var fileInfo = new FileInfo(dataPath);
         return Task.FromResult<(long size, DateTime lastModified)?>((fileInfo.Length, fileInfo.LastWriteTimeUtc));
     }
 
+
+    public async Task<IReadOnlyDictionary<string, (long size, DateTime lastModified)?>> GetDataInfoBatchAsync(
+        string bucketName, IReadOnlyList<string> keys, CancellationToken cancellationToken = default) =>
+        await _listingReads.ReadBatchAsync(keys, (key, ct) => GetDataInfoAsync(bucketName, key, ct), cancellationToken);
 
     public bool IsVisibleInListing(string key) =>
         !FilesystemStorageHelper.HasInternalListingSegment(key, _inlineMetadataDirectoryName, _tempFilePrefix);
@@ -547,14 +553,45 @@ public class FilesystemObjectDataStorage : IObjectDataStorage, IFileBackedObject
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var selector = new ListingPageSelector(query);
-        if (!FilesystemStorageHelper.IsKeyForbidden(bucketName, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
+        (ListingCandidates Page, bool HasSymlinks) Scan(ListingEntryObserver? observer, CancellationToken token)
         {
-            using var walker = new FilesystemListingWalker(Path.Combine(_dataDirectory, bucketName),
-                _inlineMetadataDirectoryName, _tempFilePrefix, query, selector, cancellationToken);
-            walker.Walk();
+            var started = Stopwatch.GetTimestamp();
+            var selector = new ListingPageSelector(query, observer: observer);
+            var symlinks = false;
+            if (!FilesystemStorageHelper.IsKeyForbidden(bucketName, _tempFilePrefix, _metadataMode, _inlineMetadataDirectoryName))
+            {
+                using var walker = new FilesystemListingWalker(Path.Combine(_dataDirectory, bucketName),
+                    _inlineMetadataDirectoryName, _tempFilePrefix, query, selector, token, detectSymlinks: observer != null);
+                walker.Walk();
+                symlinks = walker.HasSymlinks;
+            }
+            FilesystemListingIndex.RecordScan(selector.Statistics, started);
+            return (selector.Finish(), symlinks);
         }
-        return Task.FromResult(selector.Finish());
+        if (_listingIndex is not { Enabled: true })
+            return Task.FromResult(Scan(null, cancellationToken).Page);
+        return _listingIndex.GetAsync(Path.Combine(_dataDirectory, bucketName), query, Scan,
+            entry => entry.IsCommonPrefix ? Directory.Exists(GetDataPath(bucketName, entry.Name))
+                : File.Exists(GetDataPath(bucketName, entry.Name)), cancellationToken);
+    }
+
+    private bool HasIndexedDirectoryAlias(string dataPath)
+    {
+        if (_listingIndex is not { Enabled: true }) return false;
+        // Check before deleting: empty-directory cleanup may remove the alias itself.
+        // Links can target another bucket, so their mutations invalidate the shared index.
+        for (var directory = new DirectoryInfo(Path.GetDirectoryName(dataPath)!); directory != null; directory = directory.Parent)
+            if (directory.LinkTarget != null) return true;
+        return false;
+    }
+
+    private void NotifyListingChange(string bucketName, string key, bool aliasesDirectory)
+    {
+        if (aliasesDirectory) _listingIndex?.InvalidateAll();
+        // Hidden writes can still create visible parent directories/CommonPrefixes.
+        // Rebuild instead of either publishing a hidden name or ignoring the mutation.
+        else if (!IsVisibleInListing(key)) _listingIndex?.InvalidateBucket(Path.Combine(_dataDirectory, bucketName));
+        else _listingIndex?.Changed(Path.Combine(_dataDirectory, bucketName), key);
     }
 
     private string GetDataPath(string bucketName, string key)

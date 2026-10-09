@@ -9,6 +9,7 @@ namespace Lamina.Storage.Filesystem;
 public class FilesystemBucketDataStorage : IBucketDataStorage
 {
     private readonly string _dataDirectory;
+    private readonly FilesystemListingIndex? _listingIndex;
     private readonly string _inlineMetadataDirectoryName;
     private readonly MetadataStorageMode _metadataMode;
     private readonly NetworkFileSystemHelper _networkHelper;
@@ -17,9 +18,10 @@ public class FilesystemBucketDataStorage : IBucketDataStorage
     public FilesystemBucketDataStorage(
         IOptions<FilesystemStorageSettings> settingsOptions,
         NetworkFileSystemHelper networkHelper,
-        ILogger<FilesystemBucketDataStorage> logger)
+        ILogger<FilesystemBucketDataStorage> logger, FilesystemListingIndex? listingIndex = null)
     {
         var settings = settingsOptions.Value;
+        _listingIndex = listingIndex;
         _dataDirectory = settings.DataDirectory;
         _inlineMetadataDirectoryName = settings.InlineMetadataDirectoryName;
         _metadataMode = settings.MetadataMode;
@@ -47,6 +49,7 @@ public class FilesystemBucketDataStorage : IBucketDataStorage
             }
 
             await _networkHelper.EnsureDirectoryExistsAsync(bucketPath, $"CreateBucket-{bucketName}");
+            _listingIndex?.InvalidateBucket(bucketPath);
             return true;
         }
         catch (Exception ex)
@@ -76,6 +79,7 @@ public class FilesystemBucketDataStorage : IBucketDataStorage
                 return DeleteBucketResult.NotEmpty;
             }
 
+            _listingIndex?.InvalidateBucket(bucketPath);
             return DeleteBucketResult.Success;
         }
         catch (OperationCanceledException)

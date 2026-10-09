@@ -39,6 +39,7 @@ public class ObjectIntegrityRefreshTests
                 Assert.Equal(Convert.ToBase64String(SHA256.HashData(body)), sums["SHA256"]);
                 var updated = ObjectMetadataSnapshot.CloneMetadata(snapshot.Metadata);
                 updated.ETag = etag;
+                updated.Size = size;
                 updated.ChecksumSHA256 = sums["SHA256"];
                 snapshot = new(updated, modified);
                 return true;
@@ -87,7 +88,7 @@ public class ObjectIntegrityRefreshTests
         prepared.SetDisposeAction(() => cleaned = true);
         metadata.Setup(x => x.IsValidObjectKey(It.IsAny<string>())).Returns(true);
         metadata.Setup(x => x.GetMetadataAsync("b", "source", default)).ReturnsAsync(new ObjectMetadataSnapshot(
-            new S3ObjectInfo { ETag = "etag", ContentType = "application/custom", ChecksumSHA256 = "source-checksum" }, timestamp));
+            new S3ObjectInfo { ETag = "etag", Size = 4, ContentType = "application/custom", ChecksumSHA256 = "source-checksum" }, timestamp));
         metadata.Setup(x => x.StoreMetadataAsync("b", "copy", It.IsAny<string>(), 4, It.IsAny<PutObjectRequest>(),
             It.IsAny<Dictionary<string, string>?>(), It.IsAny<DateTime?>(), default)).ReturnsAsync(new S3Object());
         data.SetupSequence(x => x.GetDataInfoAsync("b", "source", default))
@@ -112,7 +113,7 @@ public class ObjectIntegrityRefreshTests
         using var cancellation = new CancellationTokenSource();
         metadata.Setup(x => x.IsValidObjectKey(It.IsAny<string>())).Returns(true);
         metadata.Setup(x => x.GetMetadataAsync("b", "source", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo { ETag = "etag" }, timestamp));
+            .ReturnsAsync(new ObjectMetadataSnapshot(new S3ObjectInfo { ETag = "etag", Size = 4 }, timestamp));
         data.Setup(x => x.GetDataInfoAsync("b", "source", It.IsAny<CancellationToken>())).ReturnsAsync((4L, timestamp));
         data.Setup(x => x.WriteDataToPipeAsync("b", "source", It.IsAny<PipeWriter>(), null, null, It.IsAny<CancellationToken>()))
             .Returns(async (string b, string k, PipeWriter writer, long? start, long? end, CancellationToken ct) =>

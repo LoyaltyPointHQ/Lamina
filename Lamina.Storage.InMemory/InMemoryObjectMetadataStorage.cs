@@ -2,12 +2,43 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Integrity;
 
 namespace Lamina.Storage.InMemory;
 
-public class InMemoryObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMetadataStorage
+public class InMemoryObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMetadataStorage, IConditionalObjectIntegrityStorage
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, S3Object>> _metadata = new();
+
+    public Task<IntegrityWriteResult> TryWriteIntegrityAsync(ObjectIntegrityWrite write, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var bucket = _metadata.GetOrAdd(write.BucketName, _ => new());
+        bucket.TryGetValue(write.Key, out var current);
+        var snapshot = current == null ? null : Snapshot(current);
+        if ((snapshot == null ? null : ObjectIntegrityState.FromSnapshot(snapshot)) != write.Expected)
+            return Task.FromResult(IntegrityWriteResult.Conflict);
+        var next = new S3Object
+        {
+            BucketName = write.BucketName,
+            Key = write.Key,
+            ETag = write.ETag,
+            Size = write.Size,
+            LastModified = write.DataLastModified,
+            ContentType = snapshot?.Metadata.ContentType ?? write.ContentType,
+            Metadata = snapshot?.Metadata.Metadata ?? new(),
+            Tags = snapshot?.Metadata.Tags ?? new(),
+            OwnerId = snapshot?.Metadata.OwnerId,
+            OwnerDisplayName = snapshot?.Metadata.OwnerDisplayName,
+            ChecksumCRC32 = write.Checksums.GetValueOrDefault("CRC32"),
+            ChecksumCRC32C = write.Checksums.GetValueOrDefault("CRC32C"),
+            ChecksumCRC64NVME = write.Checksums.GetValueOrDefault("CRC64NVME"),
+            ChecksumSHA1 = write.Checksums.GetValueOrDefault("SHA1"),
+            ChecksumSHA256 = write.Checksums.GetValueOrDefault("SHA256")
+        };
+        var stored = current == null ? bucket.TryAdd(write.Key, next) : bucket.TryUpdate(write.Key, next, current);
+        return Task.FromResult(!stored ? IntegrityWriteResult.Conflict : current == null ? IntegrityWriteResult.Created : IntegrityWriteResult.Updated);
+    }
     public Task<S3Object?> StoreMetadataAsync(string bucketName, string key, string etag, long size, PutObjectRequest? request = null, Dictionary<string, string>? calculatedChecksums = null, DateTime? lastModified = null, CancellationToken cancellationToken = default)
     {
         // Bucket existence validation is handled by the facade layer

@@ -1,3 +1,4 @@
+using Lamina.Storage.Core.Integrity;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -55,6 +56,29 @@ public class MetadataCleanupServiceTests
         _configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(configValues!)
             .Build();
+    }
+
+    [Fact]
+    public async Task CleanupUsesPublicationLockAcrossExistenceCheckAndDelete()
+    {
+        var locks = new Mock<IObjectPublicationLock>();
+        var lease = new Mock<IAsyncDisposable>();
+        var held = false;
+        locks.Setup(x => x.AcquireAsync("bucket", "key", It.IsAny<CancellationToken>()))
+            .Returns(() => { held = true; return ValueTask.FromResult(lease.Object); });
+        lease.Setup(x => x.DisposeAsync()).Returns(() => { held = false; return ValueTask.CompletedTask; });
+        _mockMetadataStorage.Setup(x => x.ListAllMetadataKeysAsync(It.IsAny<CancellationToken>()))
+            .Returns(ToAsyncEnumerable(new List<(string, string)> { ("bucket", "key") }));
+        _mockDataStorage.Setup(x => x.DataExistsAsync("bucket", "key", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => { Assert.True(held); return false; });
+        _mockMetadataStorage.Setup(x => x.DeleteMetadataAsync("bucket", "key", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => { Assert.True(held); return true; });
+        using var service = new MetadataCleanupService(_mockServiceScopeFactory.Object, _mockLogger.Object, _configuration, locks.Object);
+        var method = typeof(MetadataCleanupService).GetMethod("CleanupStaleMetadataAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        await (Task)method!.Invoke(service, new object[] { CancellationToken.None })!;
+        _mockMetadataStorage.Verify(x => x.DeleteMetadataAsync("bucket", "key", It.IsAny<CancellationToken>()), Times.Once);
+        locks.Verify(x => x.AcquireAsync("bucket", "key", It.IsAny<CancellationToken>()), Times.Once);
+        Assert.False(held);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using Lamina.Storage.Core.Integrity;
 using Lamina.Storage.Core.Abstract;
 
 namespace Lamina.WebApi.Services;
@@ -8,14 +9,17 @@ public class MetadataCleanupService : BackgroundService
     private readonly ILogger<MetadataCleanupService> _logger;
     private readonly TimeSpan _cleanupInterval;
     private readonly int _batchSize;
+    private readonly IObjectPublicationLock _publicationLock;
 
     public MetadataCleanupService(
         IServiceScopeFactory serviceScopeFactory,
         ILogger<MetadataCleanupService> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IObjectPublicationLock? publicationLock = null)
     {
         _serviceScopeFactory = serviceScopeFactory;
         _logger = logger;
+        _publicationLock = publicationLock ?? InMemoryObjectPublicationLock.Shared;
 
         // Load configuration with defaults
         _cleanupInterval = TimeSpan.FromMinutes(configuration.GetValue("MetadataCleanup:CleanupIntervalMinutes", 120));
@@ -126,6 +130,7 @@ public class MetadataCleanupService : BackgroundService
 
             try
             {
+                await using var publication = await _publicationLock.AcquireAsync(bucketName, key, cancellationToken);
                 // Check if data exists for this metadata entry
                 var dataExists = await dataStorage.DataExistsAsync(bucketName, key, cancellationToken);
 

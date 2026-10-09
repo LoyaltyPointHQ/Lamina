@@ -29,8 +29,9 @@ public class InlineObjectMetadataStorage : FilesystemJsonObjectMetadataStorageBa
         IFileSystemLockManager lockManager,
         NetworkFileSystemHelper networkHelper,
         ILogger<InlineObjectMetadataStorage> logger,
-        IMemoryCache? cache = null)
-        : base(bucketStorage, dataStorage, lockManager, networkHelper, cacheSettingsOptions.Value, logger, cache)
+        IMemoryCache? cache = null,
+        FilesystemListingReadLimiter? listingReads = null)
+        : base(bucketStorage, dataStorage, lockManager, networkHelper, cacheSettingsOptions.Value, logger, cache, listingReads)
     {
         var settings = settingsOptions.Value;
 

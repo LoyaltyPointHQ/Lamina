@@ -14,10 +14,11 @@ internal sealed class FilesystemListingWalker : IDisposable
     private readonly ListingPageSelector _selector;
     private readonly CancellationToken _cancellationToken;
     private readonly ArrayPool<char> _pool;
+    private readonly bool _detectSymlinks;
     private char[] _keyBuffer;
 
     public FilesystemListingWalker(string bucketPath, string metadataDirectoryName, string tempPrefix,
-        ListingQuery query, ListingPageSelector selector, CancellationToken cancellationToken, ArrayPool<char>? pool = null)
+        ListingQuery query, ListingPageSelector selector, CancellationToken cancellationToken, ArrayPool<char>? pool = null, bool detectSymlinks = false)
     {
         _bucketPath = Path.GetFullPath(bucketPath);
         _metadataDirectoryName = metadataDirectoryName;
@@ -26,8 +27,11 @@ internal sealed class FilesystemListingWalker : IDisposable
         _selector = selector;
         _cancellationToken = cancellationToken;
         _pool = pool ?? ArrayPool<char>.Shared;
+        _detectSymlinks = detectSymlinks;
         _keyBuffer = _pool.Rent(256);
     }
+
+    public bool HasSymlinks { get; private set; }
 
     public void Walk()
     {
@@ -46,6 +50,15 @@ internal sealed class FilesystemListingWalker : IDisposable
         if (!start.Equals(_bucketPath, pathComparison)
             && !start.StartsWith(Path.TrimEndingDirectorySeparator(_bucketPath) + Path.DirectorySeparatorChar, pathComparison))
             throw new InvalidOperationException("Invalid prefix to bucket");
+
+        // ResolveLinkTarget on the final directory does not reveal links in its
+        // ancestors. A prefix may start below an aliased subtree.
+        var ancestorPath = _bucketPath;
+        foreach (var component in _detectSymlinks ? relativeStart.Split('/', StringSplitOptions.RemoveEmptyEntries) : [])
+        {
+            ancestorPath = Path.Combine(ancestorPath, component);
+            HasSymlinks |= new DirectoryInfo(ancestorPath).LinkTarget != null;
+        }
 
         var stack = new Stack<(EntryEnumerator Enumerator, string PhysicalPath)>();
         var ancestors = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
@@ -87,7 +100,9 @@ internal sealed class FilesystemListingWalker : IDisposable
             try
             {
                 var info = new DirectoryInfo(physicalPath);
-                var resolved = Path.TrimEndingDirectorySeparator(info.ResolveLinkTarget(true)?.FullName ?? info.FullName);
+                var target = info.ResolveLinkTarget(true);
+                HasSymlinks |= target != null;
+                var resolved = Path.TrimEndingDirectorySeparator(target?.FullName ?? info.FullName);
                 if (!ancestors.Add(resolved))
                     throw new IOException("A directory symlink cycle was encountered while listing objects.");
                 try
@@ -150,6 +165,9 @@ internal sealed class FilesystemListingWalker : IDisposable
         {
             _owner._cancellationToken.ThrowIfCancellationRequested();
             _owner._selector.Statistics.ScannedEntries++;
+            // Attributes stat the entry on Unix. File symlinks do not alias listing
+            // subtrees, so only inspect directories (already resolved when traversed).
+            _owner.HasSymlinks |= _owner._detectSymlinks && entry.IsDirectory && (entry.Attributes & FileAttributes.ReparsePoint) != 0;
             if (!FilesystemStorageHelper.IsInternalListingSegment(entry.FileName, _owner._metadataDirectoryName, _owner._tempPrefix))
                 return true;
             _owner._selector.Statistics.ExcludedEntries++;

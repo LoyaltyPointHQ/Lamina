@@ -3,6 +3,7 @@ using System.Text.Json;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
 using Lamina.Storage.Core.Configuration;
+using Lamina.Storage.Core.Integrity;
 using Lamina.Storage.Filesystem.Helpers;
 using Lamina.Storage.Filesystem.Locking;
 using Microsoft.Extensions.Caching.Memory;
@@ -17,7 +18,7 @@ namespace Lamina.Storage.Filesystem;
 /// otherwise need to read the data backend go through <see cref="IObjectDataStorage"/>, so the
 /// data backend is free to be filesystem, in-memory, or anything else.
 /// </summary>
-public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataStorage
+public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataStorage, IConditionalObjectIntegrityStorage, IBatchObjectMetadataStorage
 {
     protected readonly IBucketStorageFacade _bucketStorage;
     protected readonly IObjectDataStorage _dataStorage;
@@ -26,6 +27,7 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
     protected readonly IMemoryCache? _cache;
     protected readonly MetadataCacheSettings _cacheSettings;
     protected readonly ILogger _logger;
+    private readonly FilesystemListingReadLimiter _listingReads;
 
     protected FilesystemJsonObjectMetadataStorageBase(
         IBucketStorageFacade bucketStorage,
@@ -34,7 +36,8 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
         NetworkFileSystemHelper networkHelper,
         MetadataCacheSettings cacheSettings,
         ILogger logger,
-        IMemoryCache? cache)
+        IMemoryCache? cache,
+        FilesystemListingReadLimiter? listingReads = null)
     {
         _bucketStorage = bucketStorage;
         _dataStorage = dataStorage;
@@ -43,6 +46,7 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
         _cacheSettings = cacheSettings;
         _cache = cacheSettings.Enabled ? cache : null;
         _logger = logger;
+        _listingReads = listingReads ?? FilesystemListingReadLimiter.Shared;
     }
 
     // ----- abstract members: each mode decides its own physical layout -----
@@ -176,9 +180,10 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
     {
         cancellationToken.ThrowIfCancellationRequested();
         var path = GetMetadataPath(bucketName, key);
-        if (!File.Exists(path)) { InvalidateCache(bucketName, key); return null; }
+        var file = new FileInfo(path);
+        if (!file.Exists) { InvalidateCache(bucketName, key); return null; }
         if (_cache?.TryGetValue<CachedObjectInfo>(GetCacheKey(bucketName, key), out var cached) == true && cached != null
-            && File.GetLastWriteTimeUtc(path) == cached.MetadataFileLastModified)
+            && file.LastWriteTimeUtc == cached.MetadataFileLastModified)
             return new ObjectMetadataSnapshot(ObjectMetadataSnapshot.CloneMetadata(cached.ObjectInfo),
                 cached.ObjectInfo.LastModified == default ? null : cached.ObjectInfo.LastModified);
         DateTime metadataFileLastModified = default;
@@ -208,6 +213,36 @@ public abstract class FilesystemJsonObjectMetadataStorageBase : IObjectMetadataS
         };
         CacheObjectInfo(bucketName, key, info, metadataFileLastModified);
         return new ObjectMetadataSnapshot(info, metadata.LastModified == default ? null : metadata.LastModified);
+    }
+
+    public Task<Dictionary<string, ObjectMetadataSnapshot?>> GetMetadataBatchAsync(string bucketName,
+        IEnumerable<string> keys, CancellationToken cancellationToken = default) =>
+        _listingReads.ReadBatchAsync(keys, (key, ct) => GetMetadataAsync(bucketName, key, ct), cancellationToken);
+
+    public async Task<IntegrityWriteResult> TryWriteIntegrityAsync(ObjectIntegrityWrite write, CancellationToken cancellationToken = default)
+    {
+        var result = IntegrityWriteResult.Conflict;
+        await _lockManager.UpdateFileAsync(GetMetadataPath(write.BucketName, write.Key), content =>
+        {
+            var metadata = string.IsNullOrEmpty(content) ? null : JsonSerializer.Deserialize<S3ObjectMetadata>(content);
+            var state = metadata == null ? null : new ObjectIntegrityState(metadata.ETag, metadata.Size,
+                metadata.LastModified == default ? null : metadata.LastModified, metadata.ChecksumCRC32,
+                metadata.ChecksumCRC32C, metadata.ChecksumCRC64NVME, metadata.ChecksumSHA1, metadata.ChecksumSHA256);
+            if (state != write.Expected) return Task.FromResult<string?>(null);
+            result = metadata == null ? IntegrityWriteResult.Created : IntegrityWriteResult.Updated;
+            metadata ??= new S3ObjectMetadata { BucketName = write.BucketName, ContentType = write.ContentType, ETag = write.ETag };
+            metadata.ETag = write.ETag;
+            metadata.Size = write.Size;
+            metadata.LastModified = write.DataLastModified;
+            metadata.ChecksumCRC32 = write.Checksums.GetValueOrDefault("CRC32");
+            metadata.ChecksumCRC32C = write.Checksums.GetValueOrDefault("CRC32C");
+            metadata.ChecksumCRC64NVME = write.Checksums.GetValueOrDefault("CRC64NVME");
+            metadata.ChecksumSHA1 = write.Checksums.GetValueOrDefault("SHA1");
+            metadata.ChecksumSHA256 = write.Checksums.GetValueOrDefault("SHA256");
+            return Task.FromResult<string?>(JsonSerializer.Serialize(metadata));
+        }, cancellationToken);
+        if (result != IntegrityWriteResult.Conflict) InvalidateCache(write.BucketName, write.Key);
+        return result;
     }
 
     public async Task<bool> UpdateIntegrityAsync(string bucketName, string key, string etag, long size, DateTime lastModified, Dictionary<string, string> checksums, CancellationToken cancellationToken = default)

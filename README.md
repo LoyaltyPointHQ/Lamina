@@ -214,6 +214,18 @@ Configure storage backend in `appsettings.json`:
 }
 ```
 
+#### Listing Performance
+
+For filesystem listing acceleration (enabled by default), see
+[Listing Index and Background Integrity Persistence](CLAUDE.md#listing-index-and-background-integrity-persistence).
+The name index uses a 300-second absolute / 10-second sliding lifetime and a bounded
+memory budget; external and other-replica changes can remain invisible until rebuild.
+Generated ETags can also be persisted through an independently enabled background
+queue, which remains disabled by default. Set `ListingIndex:Enabled` to `false`
+(environment variable `ListingIndex__Enabled=false`) to opt out of the name index;
+bounded filesystem page reads work without it. Multi-replica background persistence
+requires shared Redis publication locks.
+
 #### SQL Metadata Storage
 
 For SQLite metadata storage (recommended for single-instance deployments):

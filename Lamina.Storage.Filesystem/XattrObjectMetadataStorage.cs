@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Integrity;
 using Lamina.Storage.Filesystem.Configuration;
 using Lamina.Storage.Filesystem.Helpers;
 using Microsoft.Extensions.Logging;
@@ -9,13 +10,14 @@ using Microsoft.Extensions.Options;
 
 namespace Lamina.Storage.Filesystem;
 
-public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataFileForMetadata
+public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataFileForMetadata, IConditionalObjectIntegrityStorage, IBatchObjectMetadataStorage
 {
     private readonly string _dataDirectory;
     private readonly IBucketStorageFacade _bucketStorage;
     private readonly IObjectDataStorage _dataStorage;
     private readonly XattrHelper _xattrHelper;
     private readonly ILogger<XattrObjectMetadataStorage> _logger;
+    private readonly FilesystemListingReadLimiter _listingReads;
 
     private const string ETagAttributeName = "etag";
     private const string ContentTypeAttributeName = "content-type";
@@ -32,13 +34,15 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
         IBucketStorageFacade bucketStorage,
         IObjectDataStorage dataStorage,
         ILogger<XattrObjectMetadataStorage> logger,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        FilesystemListingReadLimiter? listingReads = null)
     {
         var settings = settingsOptions.Value;
         _dataDirectory = settings.DataDirectory;
         _bucketStorage = bucketStorage;
         _dataStorage = dataStorage;
         _logger = logger;
+        _listingReads = listingReads ?? FilesystemListingReadLimiter.Shared;
 
         _xattrHelper = new XattrHelper(settings.XattrPrefix, loggerFactory.CreateLogger<XattrHelper>());
 
@@ -199,10 +203,41 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
             && WriteIntegrity(path, etag, size, lastModified, checksums));
     }
 
-    private bool WriteIntegrity(string path, string etag, long size, DateTime lastModified, Dictionary<string, string> checksums)
+    public Task<Dictionary<string, ObjectMetadataSnapshot?>> GetMetadataBatchAsync(string bucketName,
+        IEnumerable<string> keys, CancellationToken cancellationToken = default) =>
+        _listingReads.ReadBatchAsync(keys, (key, ct) => GetMetadataAsync(bucketName, key, ct), cancellationToken);
+
+    public Task<IntegrityWriteResult> TryWriteIntegrityAsync(ObjectIntegrityWrite write, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = GetDataPath(write.BucketName, write.Key);
+        var current = ReadIntegrityStateStrict(path);
+        if (current != write.Expected) return Task.FromResult(IntegrityWriteResult.Conflict);
+        if (!File.Exists(path)) return Task.FromResult(IntegrityWriteResult.Conflict);
+        if (current == null && _xattrHelper.GetAttribute(path, ContentTypeAttributeName, throwOnError: true) == null
+            && !_xattrHelper.SetAttribute(path, ContentTypeAttributeName, write.ContentType))
+            throw new IOException("Unable to persist generated content type.");
+        if (!WriteIntegrity(path, write.ETag, write.Size, write.DataLastModified, new Dictionary<string, string>(write.Checksums), strict: true))
+            throw new IOException("Unable to persist generated integrity metadata.");
+        return Task.FromResult(current == null ? IntegrityWriteResult.Created : IntegrityWriteResult.Updated);
+    }
+
+    private ObjectIntegrityState? ReadIntegrityStateStrict(string path)
+    {
+        string? Read(string name) => _xattrHelper.GetAttribute(path, name, throwOnError: true);
+        var etag = Read(ETagAttributeName);
+        if (etag == null) return null;
+        DateTime? timestamp = DateTime.TryParse(Read(MetadataTimestampAttributeName), System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var parsed) ? parsed : null;
+        long.TryParse(Read("size"), System.Globalization.CultureInfo.InvariantCulture, out var size);
+        return new ObjectIntegrityState(etag, size, timestamp, Read("checksum-crc32"), Read("checksum-crc32c"),
+            Read("checksum-crc64nvme"), Read("checksum-sha1"), Read("checksum-sha256"));
+    }
+
+    private bool WriteIntegrity(string path, string etag, long size, DateTime lastModified, Dictionary<string, string> checksums, bool strict = false)
     {
         // Invalidate the watermark before touching multiple independent attributes.
-        if (_xattrHelper.GetAttribute(path, MetadataTimestampAttributeName) != null
+        if (_xattrHelper.GetAttribute(path, MetadataTimestampAttributeName, strict) != null
             && !_xattrHelper.RemoveAttribute(path, MetadataTimestampAttributeName)) return false;
         if (!_xattrHelper.SetAttribute(path, ETagAttributeName, etag)
             || !_xattrHelper.SetAttribute(path, "size", size.ToString(System.Globalization.CultureInfo.InvariantCulture))) return false;
@@ -213,7 +248,7 @@ public class XattrObjectMetadataStorage : IObjectMetadataStorage, IRequiresDataF
             {
                 if (!_xattrHelper.SetAttribute(path, name, value)) return false;
             }
-            else if (_xattrHelper.GetAttribute(path, name) != null && !_xattrHelper.RemoveAttribute(path, name)) return false;
+            else if (_xattrHelper.GetAttribute(path, name, strict) != null && !_xattrHelper.RemoveAttribute(path, name)) return false;
         }
         return _xattrHelper.SetAttribute(path, MetadataTimestampAttributeName,
             lastModified.ToString("O", System.Globalization.CultureInfo.InvariantCulture));

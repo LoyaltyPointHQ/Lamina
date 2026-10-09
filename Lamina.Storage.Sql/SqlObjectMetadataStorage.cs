@@ -1,5 +1,6 @@
 using Lamina.Core.Models;
 using Lamina.Storage.Core.Abstract;
+using Lamina.Storage.Core.Integrity;
 using Lamina.Storage.Sql.Context;
 using Lamina.Storage.Sql.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -7,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Lamina.Storage.Sql;
 
-public class SqlObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMetadataStorage
+public class SqlObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMetadataStorage, IConditionalObjectIntegrityStorage
 {
     private readonly LaminaDbContext _context;
 
@@ -126,6 +127,32 @@ public class SqlObjectMetadataStorage : IObjectMetadataStorage, IBatchObjectMeta
 
     private DateTime NormalizeTimestamp(DateTime value) => _context.Database.IsNpgsql() && value.Ticks % 10 != 0
         ? new DateTime(Math.Min(DateTime.MaxValue.Ticks, value.Ticks + 10 - value.Ticks % 10), value.Kind) : value;
+
+    // Caller holds the logical object publication lock, also used by API mutations.
+    public async Task<IntegrityWriteResult> TryWriteIntegrityAsync(ObjectIntegrityWrite write, CancellationToken cancellationToken = default)
+    {
+        var entity = await _context.Objects.FirstOrDefaultAsync(
+            x => x.BucketName == write.BucketName && x.Key == write.Key, cancellationToken);
+        if (entity != null) await _context.Entry(entity).ReloadAsync(cancellationToken);
+        var current = entity == null ? null : ObjectIntegrityState.FromSnapshot(new ObjectMetadataSnapshot(entity.ToS3ObjectInfo(), entity.LastModified));
+        if (current != write.Expected) return IntegrityWriteResult.Conflict;
+        var result = entity == null ? IntegrityWriteResult.Created : IntegrityWriteResult.Updated;
+        if (entity == null)
+        {
+            entity = new ObjectEntity { BucketName = write.BucketName, Key = write.Key, ContentType = write.ContentType };
+            _context.Objects.Add(entity);
+        }
+        entity.ETag = write.ETag;
+        entity.Size = write.Size;
+        entity.LastModified = NormalizeTimestamp(write.DataLastModified);
+        entity.ChecksumCRC32 = write.Checksums.GetValueOrDefault("CRC32");
+        entity.ChecksumCRC32C = write.Checksums.GetValueOrDefault("CRC32C");
+        entity.ChecksumCRC64NVME = write.Checksums.GetValueOrDefault("CRC64NVME");
+        entity.ChecksumSHA1 = write.Checksums.GetValueOrDefault("SHA1");
+        entity.ChecksumSHA256 = write.Checksums.GetValueOrDefault("SHA256");
+        await _context.SaveChangesAsync(cancellationToken);
+        return result;
+    }
 
     public async Task<bool> DeleteMetadataAsync(string bucketName, string key, CancellationToken cancellationToken = default)
     {

@@ -72,10 +72,11 @@ public class XattrHelper
         }
     }
 
-    public string? GetAttribute(string filePath, string name)
+    public string? GetAttribute(string filePath, string name, bool throwOnError = false)
     {
         if (!IsSupported)
         {
+            if (throwOnError) throw new PlatformNotSupportedException("Extended attributes are not supported.");
             return null;
         }
 
@@ -87,7 +88,9 @@ public class XattrHelper
             var size = getxattr(filePath, attrName, null, 0);
             if (size < 0)
             {
-                // Attribute doesn't exist or error occurred
+                var error = Marshal.GetLastPInvokeError();
+                if (throwOnError && !IsMissingAttribute(error))
+                    throw new IOException($"Unable to read extended attribute {attrName}: errno {error}.");
                 return null;
             }
 
@@ -102,6 +105,8 @@ public class XattrHelper
             if (actualSize < 0)
             {
                 var error = Marshal.GetLastPInvokeError();
+                if (throwOnError && !IsMissingAttribute(error))
+                    throw new IOException($"Unable to read extended attribute {attrName}: errno {error}.");
                 _logger.LogError("Failed to get extended attribute {AttributeName} from {FilePath}: errno {Error}",
                     attrName, filePath, error);
                 return null;
@@ -109,12 +114,15 @@ public class XattrHelper
 
             return Encoding.UTF8.GetString(buffer, 0, actualSize);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!throwOnError)
         {
             _logger.LogError(ex, "Exception getting extended attribute {AttributeName} from {FilePath}", name, filePath);
             return null;
         }
     }
+
+    private static bool IsMissingAttribute(int error) => error is 2 or 20
+        || error == (OperatingSystem.IsMacOS() ? 93 : 61); // ENOENT, ENOTDIR, ENOATTR/ENODATA
 
     public bool RemoveAttribute(string filePath, string name)
     {
